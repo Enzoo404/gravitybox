@@ -1,0 +1,75 @@
+{
+  "observedAt": "2026-10-25T00:56:42Z",
+  "catalogue": {
+    "models": {
+      "claude-sonnet-4-6": {
+        "displayName": "Claude Sonnet 4.6 (Thinking)",
+        "quotaInfo": {
+          "remainingFraction": 1,
+          "resetTime": "2026-11-01T00:56:42Z"
+        },
+        "model": "MODEL_PLACEHOLDER_M35"
+      },
+      "gpt-oss-120b-medium": {
+        "displayName": "GPT-OSS 120B (Medium)",
+        "quotaInfo": {
+          "remainingFraction": 1,
+          "resetTime": "2026-11-01T00:56:42Z"
+        },
+        "model": "MODEL_OPENAI_GPT_OSS_120B_MEDIUM"
+      },
+      "gemini-3-flash": {
+        "displayName": "Gemini 3 Flash",
+        "quotaInfo": {
+          "remainingFraction": 1,
+          "resetTime": "2026-10-25T05:56:42Z"
+        },
+        "model": "MODEL_PLACEHOLDER_M18"
+      },
+      "gemini-3.8-flash-medium": {
+        "displayName": "Gemini 3.8 Flash (Medium)",
+        "quotaInfo": {
+          "remainingFraction": 1,
+          "resetTime": "2026-11-01T00:56:42Z"
+        },
+        "model": "MODEL_PLACEHOLDER_M319"
+      },
+      "gemini-4-argon-disabled": {
+        "displayName": "Gemini 4 Argon",
+        "disabled": true,
+        "model": "MODEL_PLACEHOLDER_M421"
+      }
+    }
+  },
+  "summary": {
+    "groups": [
+      {
+        "buckets": [
+          {
+            "bucketId": "gemini-weekly",
+            "displayName": "Weekly Limit Remaining",
+            "window": "weekly",
+            "resetTime": "2026-11-01T00:56:44Z",
+            "remainingFraction": 1
+          }
+        ],
+        "displayName": "Gemini Models",
+        "description": "Models within this group: Gemini Flash, Gemini Pro"
+      },
+      {
+        "buckets": [
+          {
+            "bucketId": "3p-weekly",
+            "displayName": "Weekly Limit Remaining",
+            "window": "weekly",
+            "resetTime": "2026-11-01T00:56:44Z",
+            "remainingFraction": 1
+          }
+        ],
+        "displayName": "Claude and GPT models",
+        "description": "Models within this group: Claude Opus, Claude Sonnet, GPT-OSS"
+      }
+    ]
+  },
+  "source": "Sanitized official quota-only response; no account identity, project or credentials"
+}

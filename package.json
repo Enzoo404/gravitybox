@@ -1,0 +1,53 @@
+{
+  "name": "gravitybox",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "GravityBox: 原生 macOS Antigravity 工具箱",
+  "license": "MIT",
+  "author": "Enzoo404 <enzoo404@users.noreply.github.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Enzoo404/gravitybox.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Enzoo404/gravitybox/issues"
+  },
+  "homepage": "https://github.com/Enzoo404/gravitybox#readme",
+  "scripts": {
+    "build": "node tools/clean-dist.mjs && tsc && node tools/copy-runtime.mjs",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "test:browser": "npm run build && node test/browser.mjs",
+    "start": "node dist/main.js",
+    "package:mac": "npm run verify && node tools/package-mac.mjs",
+    "package:mac:full": "npm run verify && node tools/package-mac.mjs",
+    "verify:2.24.0": "node tools/verify.mjs --target-app-version 2.24.0",
+    "package:mac:2.24.0": "npm run verify:2.24.0 && node tools/package-mac.mjs --target-app-version 2.24.0",
+    "verify:2.26.0": "node tools/verify.mjs --target-app-version 2.26.0",
+    "package:mac:2.26.0": "npm run verify:2.26.0 && node tools/package-mac.mjs --target-app-version 2.26.0",
+    "verify:2.27.0": "node tools/verify.mjs --target-app-version 2.27.0",
+    "package:mac:2.27.0": "npm run verify:2.27.0 && node tools/package-mac.mjs --target-app-version 2.27.0",
+    "verify:2.28.0": "node tools/verify.mjs --target-app-version 2.28.0",
+    "package:mac:2.28.0": "npm run verify:2.28.0 && node tools/package-mac.mjs --target-app-version 2.28.0",
+    "i18n:extract": "node tools/extract-ui-strings.mjs",
+    "i18n:coverage": "node tools/coverage-report.mjs",
+    "i18n:gate": "npm run build && node tools/coverage-report.mjs --gate",
+    "i18n:merge": "node tools/merge-translations.mjs",
+    "i18n:pipeline": "npm run i18n:extract && npm run i18n:coverage",
+    "i18n:pending": "node tools/coverage-report.mjs --pending-out reports/pending.json",
+    "verify": "node tools/verify.mjs",
+    "i18n:scan": "npm run build && node tools/scan-ui.mjs --resources-only",
+    "doctor": "node tools/doctor.mjs",
+    "setup:dev": "node tools/doctor.mjs --setup",
+    "prestart": "npm run build",
+    "prebuild": "node tools/doctor.mjs --install",
+    "preverify": "node tools/doctor.mjs --install"
+  },
+  "engines": {
+    "node": ">=22.15.0 <23"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "@types/node": "22.20.5"
+  }
+}

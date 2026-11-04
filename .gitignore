@@ -1,0 +1,26 @@
+# macOS metadata and editor leftovers
+.DS_Store
+*.log
+*.tmp
+*.bak
+*~
+.env
+.env.*.local
+
+# Regenerable dependencies, builds and verification output
+/node_modules/
+/dist/
+/build/
+/.cache/
+/reports/
+/质检报告/
+/成品/
+/dict/.backups/
+/文档/当前版本验收摘要.json
+/vendor/
+
+# Intermediate icon exports; the packaged icon remains an input
+/assets/AppIcon.iconset/
+/assets/master-1024.svg
+/assets/icons/*
+!/assets/icons/menu-connected.png

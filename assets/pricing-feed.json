@@ -1,0 +1,84 @@
+{
+  "version": "2026-11-02",
+  "schema": 1,
+  "updatedAt": "2026-11-02T17:59:00Z",
+  "source": "https://raw.githubusercontent.com/Enzoo404/gravitybox/main/assets/pricing-feed.json",
+  "prices": {
+    "gemini-3.8-flash": [
+      {
+        "validFrom": null,
+        "validUntil": "2026-12-31T23:59:59Z",
+        "input": 0.75,
+        "output": 3.75,
+        "cached": 0.075,
+        "provenance": { "conditions": "限时首发特惠", "verification": "confirmed" }
+      },
+      {
+        "validFrom": "2027-01-01T00:00:00Z",
+        "validUntil": null,
+        "input": 1.50,
+        "output": 7.50,
+        "cached": 0.15,
+        "provenance": { "conditions": "标准正式定价", "verification": "confirmed" }
+      }
+    ],
+    "gemini-4-argon": [
+      {
+        "validFrom": null,
+        "validUntil": "2026-11-30T23:59:59Z",
+        "input": 2.0,
+        "output": 10.0,
+        "cached": 0.1,
+        "provenance": { "conditions": "推广期特惠", "verification": "confirmed" }
+      },
+      {
+        "validFrom": "2026-12-01T00:00:00Z",
+        "validUntil": null,
+        "input": 4.0,
+        "output": 20.0,
+        "cached": 0.2,
+        "provenance": { "conditions": "标准正式定价", "verification": "confirmed" }
+      }
+    ],
+    "claude-opus-5-5": [
+      {
+        "validFrom": null,
+        "validUntil": "2026-10-31T23:59:59Z",
+        "input": 5.0,
+        "output": 25.0,
+        "cached": 0.5,
+        "cacheWrite": 6.25,
+        "provenance": { "conditions": "前期参考定价", "verification": "historical" }
+      },
+      {
+        "validFrom": "2026-11-01T00:00:00Z",
+        "validUntil": null,
+        "input": 4.0,
+        "output": 20.0,
+        "cached": 0.2,
+        "cacheWrite": 5.0,
+        "provenance": { "conditions": "官方最新降价", "verification": "confirmed" }
+      }
+    ],
+    "claude-sonnet-5-5": [
+      {
+        "validFrom": null,
+        "validUntil": "2026-10-31T23:59:59Z",
+        "input": 3.0,
+        "output": 15.0,
+        "cached": 0.3,
+        "cacheWrite": 3.75,
+        "provenance": { "conditions": "前期参考定价", "verification": "historical" }
+      },
+      {
+        "validFrom": "2026-11-01T00:00:00Z",
+        "validUntil": null,
+        "input": 2.0,
+        "output": 10.0,
+        "cached": 0.1,
+        "cacheWrite": 2.5,
+        "provenance": { "conditions": "官方最新降价", "verification": "confirmed" }
+      }
+    ]
+  }
+}

@@ -1,0 +1,1200 @@
+import Cocoa
+import UniformTypeIdentifiers
+
+final class AccountsPage: NSObject {
+    unowned let app: Assistant
+    let view: NSView
+
+    let autoSwitchToggle = NSSwitch()
+    let autoSwitchBadgeBox = NSBox()
+    let autoSwitchBadgeIcon = symbol("arrow.triangle.2.circlepath", size: 13.5, color: Design.blue)
+    let autoSwitchStatusBadge = pillBadge("已停用", color: Design.secondary)
+    let configButton = button("配置…", target: nil, action: #selector(showPolicySettings))
+    let policyBox: NSBox
+    let cardsStack = NSStackView()
+    // B01: 页面顶部提示“N 个账号的分组沿用上次记录”（仅在没有挂载底部页脚的前提下提供轻量汇总）。
+    private let staleGroupsSummary = text("", size: 11, color: .secondaryLabelColor, wrap: true)
+
+    var accounts: [[String: Any]] = []
+    var activeId = ""
+    var recommendedAccountId: String? = nil
+    var autoSwitchConfig: [String: Any] = [:]
+    private var renderedFingerprint = ""
+    private var recommendationFingerprint = ""
+    private var accountReadError: String?
+    private var policyInFlight = false
+    // A05: per-account refresh feedback lives on the page (data source), not on a button instance:
+    // cards are updated in place by id, and page-level state is applied to each mounted button.
+    private var accountRefreshErrors: [String: String] = [:]
+    // 失败时的配额时间戳：后续任一成功刷新（含“刷新全部”）更新了该账号配额后自动清掉旧错误。
+    private var accountRefreshErrorStamps: [String: Int] = [:]
+    // 当前挂载的卡片刷新按钮，用于把页面级状态贴到对应按钮上。
+    private var refreshControlsById: [String: QuotaRefreshButton] = [:]
+
+    private final class AccountCardViews {
+        let id: String
+        let cardBox: NSBox
+        let titleLbl: NSTextField
+        let tierPill: PillBadge
+        let statusBadge: PillBadge
+        let emailLbl: NSTextField
+        let switchButton: NSButton
+        let singleRefreshBtn: QuotaRefreshButton
+        let actionsButton: NSButton
+        let actionStack: NSStackView
+        var actionStackWidthConstraint: NSLayoutConstraint?
+        let bar1: QuotaBarView
+        let bar2: QuotaBarView
+        let barClaude5h: QuotaBarView
+        let barClaudeWeek: QuotaBarView
+        let barArgon: QuotaBarView
+        let authWarningLabel: NSTextField
+        let quotaWarningLabel: NSTextField
+        let refreshErrorLabel: NSTextField
+        let staleLabel: NSTextField
+        let updateLabel: NSTextField
+
+        init(
+            id: String,
+            cardBox: NSBox,
+            titleLbl: NSTextField,
+            tierPill: PillBadge,
+            statusBadge: PillBadge,
+            emailLbl: NSTextField,
+            switchButton: NSButton,
+            singleRefreshBtn: QuotaRefreshButton,
+            actionsButton: NSButton,
+            actionStack: NSStackView,
+            actionStackWidthConstraint: NSLayoutConstraint?,
+            bar1: QuotaBarView,
+            bar2: QuotaBarView,
+            barClaude5h: QuotaBarView,
+            barClaudeWeek: QuotaBarView,
+            barArgon: QuotaBarView,
+            authWarningLabel: NSTextField,
+            quotaWarningLabel: NSTextField,
+            refreshErrorLabel: NSTextField,
+            staleLabel: NSTextField,
+            updateLabel: NSTextField
+        ) {
+            self.id = id
+            self.cardBox = cardBox
+            self.titleLbl = titleLbl
+            self.tierPill = tierPill
+            self.statusBadge = statusBadge
+            self.emailLbl = emailLbl
+            self.switchButton = switchButton
+            self.singleRefreshBtn = singleRefreshBtn
+            self.actionsButton = actionsButton
+            self.actionStack = actionStack
+            self.actionStackWidthConstraint = actionStackWidthConstraint
+            self.bar1 = bar1
+            self.bar2 = bar2
+            self.barClaude5h = barClaude5h
+            self.barClaudeWeek = barClaudeWeek
+            self.barArgon = barArgon
+            self.authWarningLabel = authWarningLabel
+            self.quotaWarningLabel = quotaWarningLabel
+            self.refreshErrorLabel = refreshErrorLabel
+            self.staleLabel = staleLabel
+            self.updateLabel = updateLabel
+        }
+    }
+    private var cardViewsById: [String: AccountCardViews] = [:]
+
+
+    // B12: 待生效与回滚横幅
+    let pendingRecoveryBox: NSBox
+    let pendingTextLabel = text("上次切换尚未完成，请先核对并恢复登录记录。", size: 12, color: .labelColor)
+    let rollbackButton = button("撤销并恢复原账号", target: nil, action: #selector(rollbackSwitch))
+    var hasPendingSwitch: Bool = false
+
+    // B10 & U15: 推荐候选提示条
+    let recommendationRow = horizontal([], spacing: 10)
+    let recommendationLabel = text("", size: 12, color: .secondaryLabelColor, wrap: true)
+    let switchRecommendedBtn = button("切换至此账号", target: nil, action: #selector(switchRecommendedAccount))
+
+    private static let dateFormatter: DateFormatter = InterfaceText.shortDateTimeFormatter
+
+    init(app: Assistant) {
+        self.app = app
+        let saveCurrentBtn = button("添加账号…", target: nil, action: #selector(addAccount))
+        saveCurrentBtn.bezelColor = .controlAccentColor
+        let refreshQuotaBtn = QuotaRefreshButton(target: nil, action: #selector(refreshAllQuotas))
+
+        let headerActions = horizontal([refreshQuotaBtn, saveCurrentBtn], spacing: 8)
+        let root = pageStack(title: "账号", actions: headerActions)
+        root.spacing = 10
+
+        // B12: 待生效横幅
+        let pendingIcon = symbol("arrow.uturn.backward.circle.fill", size: 16, color: Design.blue)
+        rollbackButton.controlSize = .small
+        rollbackButton.bezelColor = .controlAccentColor
+        rollbackButton.action = #selector(rollbackSwitch)
+        let pendingContent = horizontal([pendingIcon, pendingTextLabel, flexibleSpace(), rollbackButton], spacing: 10)
+        pendingContent.alignment = .centerY
+        let pendingBox = group([pendingContent], inset: 10)
+        pendingBox.cornerRadius = 10
+        pendingBox.borderWidth = 1
+        pendingBox.borderColor = Design.blue.withAlphaComponent(0.3)
+        pendingBox.isHidden = true
+        pendingRecoveryBox = pendingBox
+        root.addArrangedSubview(pendingBox)
+
+        // 1. 紧凑智能切换设置卡片
+        autoSwitchBadgeBox.boxType = .custom
+        autoSwitchBadgeBox.cornerRadius = 7
+        autoSwitchBadgeBox.borderWidth = 0.5
+        autoSwitchBadgeBox.contentViewMargins = .zero
+        autoSwitchBadgeBox.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            autoSwitchBadgeBox.widthAnchor.constraint(equalToConstant: 28),
+            autoSwitchBadgeBox.heightAnchor.constraint(equalToConstant: 28)
+        ])
+        autoSwitchBadgeBox.setAccessibilityElement(false)
+        autoSwitchBadgeIcon.translatesAutoresizingMaskIntoConstraints = false
+        autoSwitchBadgeIcon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 13.5, weight: .medium)
+        autoSwitchBadgeBox.addSubview(autoSwitchBadgeIcon)
+        NSLayoutConstraint.activate([
+            autoSwitchBadgeIcon.centerXAnchor.constraint(equalTo: autoSwitchBadgeBox.centerXAnchor),
+            autoSwitchBadgeIcon.centerYAnchor.constraint(equalTo: autoSwitchBadgeBox.centerYAnchor)
+        ])
+
+        let policyTitle = text("智能切换", size: 13, weight: .semibold)
+        policyTitle.setContentCompressionResistancePriority(.required, for: .horizontal)
+        policyTitle.setContentHuggingPriority(.required, for: .horizontal)
+        autoSwitchStatusBadge.setContentCompressionResistancePriority(.required, for: .horizontal)
+        autoSwitchStatusBadge.setContentHuggingPriority(.required, for: .horizontal)
+        let titleRow = horizontal([policyTitle, autoSwitchStatusBadge], spacing: 6)
+        titleRow.alignment = .centerY
+
+        let policySub = text("当前账号配额耗尽或偏低时，自动无缝轮换至充裕备用账号", size: 11, color: Design.secondary)
+        policySub.lineBreakMode = .byTruncatingTail
+        policySub.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        policySub.toolTip = policySub.stringValue
+
+        let typographyColumn = vertical([titleRow, policySub], spacing: 2)
+        typographyColumn.alignment = .leading
+        typographyColumn.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        configButton.image = NSImage(systemSymbolName: "slider.horizontal.3", accessibilityDescription: nil)?.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 11, weight: .medium))
+        configButton.image?.isTemplate = true
+        configButton.imagePosition = .imageLeading
+        configButton.controlSize = .small
+        configButton.font = .systemFont(ofSize: 11.5, weight: .medium)
+        configButton.translatesAutoresizingMaskIntoConstraints = false
+        configButton.heightAnchor.constraint(equalToConstant: 22).isActive = true
+        configButton.setContentCompressionResistancePriority(.required, for: .horizontal)
+        configButton.setContentHuggingPriority(.required, for: .horizontal)
+
+        autoSwitchToggle.controlSize = .small
+        autoSwitchToggle.setContentCompressionResistancePriority(.required, for: .horizontal)
+        autoSwitchToggle.setContentHuggingPriority(.required, for: .horizontal)
+
+        let rightControlGroup = horizontal([configButton, autoSwitchToggle], spacing: 8)
+        rightControlGroup.alignment = .centerY
+        rightControlGroup.setContentHuggingPriority(.required, for: .horizontal)
+        rightControlGroup.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        let policyRow = horizontal([autoSwitchBadgeBox, typographyColumn, flexibleSpace(), rightControlGroup], spacing: 10)
+        policyRow.alignment = .centerY
+        policyRow.heightAnchor.constraint(greaterThanOrEqualToConstant: 32).isActive = true
+
+        // B10 / U15 推荐候选行
+        recommendationRow.alignment = .centerY
+        recommendationLabel.maximumNumberOfLines = 1
+        recommendationLabel.lineBreakMode = .byTruncatingTail
+        recommendationLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        switchRecommendedBtn.controlSize = .small
+        switchRecommendedBtn.bezelColor = .controlAccentColor
+        switchRecommendedBtn.action = #selector(switchRecommendedAccount)
+        switchRecommendedBtn.setContentCompressionResistancePriority(.required, for: .horizontal)
+        let recIcon = symbol("gauge.with.needle", size: 14, color: Design.blue)
+        recommendationRow.setViews([recIcon, recommendationLabel, flexibleSpace(), switchRecommendedBtn], in: .leading)
+        recommendationRow.isHidden = true
+
+        let policyContent = vertical([policyRow, recommendationRow], spacing: 6)
+        fillWidth(policyRow, in: policyContent)
+        fillWidth(recommendationRow, in: policyContent)
+        let box = group([policyContent], inset: 14)
+        box.cornerRadius = 14
+        box.fillColor = Design.card
+        (box as? DesignCardBox)?.enablesHoverHighlight = true
+        policyBox = box
+        root.addArrangedSubview(policyBox)
+        staleGroupsSummary.isHidden = true
+        staleGroupsSummary.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        root.addArrangedSubview(staleGroupsSummary)
+
+        // 2. 卡片式多账号列表 (取代生硬的 NSTableView)
+        cardsStack.orientation = .vertical
+        cardsStack.alignment = .leading
+        cardsStack.spacing = 16
+        root.addArrangedSubview(cardsStack)
+
+        view = scrollPage(root)
+        super.init()
+
+        saveCurrentBtn.target = self
+        refreshQuotaBtn.target = self
+        rollbackButton.target = self
+        switchRecommendedBtn.target = self
+        configButton.target = self
+        autoSwitchToggle.target = self
+        autoSwitchToggle.action = #selector(savePolicy)
+        autoSwitchToggle.setAccessibilityLabel("智能切换，切换前仍需手动确认")
+
+        updateAutoSwitchState()
+        fetch()
+        fetchPolicy()
+    }
+
+    private func makeAccountCardViews(id: String, item: [String: Any]) -> AccountCardViews {
+        let email = item["email"] as? String ?? "未命名账号"
+        let name = item["name"] as? String ?? ""
+        let tier = AccountIdentity.normalizeTier(item["subscription_tier"] as? String)
+        let isUltra = tier == "ULTRA"
+        let isPro = tier == "PRO"
+
+        let displayName = AccountIdentity.displayName(name: name, email: email)
+        let titleLbl = text(displayName, size: 15, weight: .semibold, color: .labelColor)
+        titleLbl.lineBreakMode = .byTruncatingTail
+        titleLbl.setContentCompressionResistancePriority(NSLayoutConstraint.Priority(240), for: .horizontal)
+
+        let tierPill = pillBadge(tier, color: isUltra ? .systemPurple : isPro ? .systemBlue : .secondaryLabelColor)
+        tierPill.isHidden = tier.isEmpty
+
+        let statusBadge = pillBadge("当前账号", color: Design.blue)
+        statusBadge.isHidden = true
+
+        let statusBadges: [NSView] = [titleLbl, tierPill, statusBadge]
+        let titleRow = horizontal(statusBadges, spacing: 6)
+        titleRow.alignment = .centerY
+        titleRow.detachesHiddenViews = true
+
+        let emailLbl = text(email, size: 11, color: .secondaryLabelColor)
+        emailLbl.font = .systemFont(ofSize: 11.5, weight: .regular)
+        emailLbl.lineBreakMode = .byTruncatingMiddle
+        emailLbl.setContentCompressionResistancePriority(NSLayoutConstraint.Priority(230), for: .horizontal)
+        let subRowViews: [NSView] = [emailLbl]
+        let subRow = horizontal(subRowViews, spacing: 6)
+        subRow.alignment = .centerY
+
+        let nameAndEmail = vertical([titleRow, subRow], spacing: 3)
+        nameAndEmail.alignment = .leading
+        nameAndEmail.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        fillWidth(titleRow, in: nameAndEmail); fillWidth(subRow, in: nameAndEmail)
+
+        let accountTitle = name.isEmpty ? email : "\(name) · \(email)"
+
+        let swBtn = button("切换账号", target: self, action: #selector(switchCardAccountById(_:)))
+        swBtn.identifier = NSUserInterfaceItemIdentifier(id)
+        swBtn.controlSize = .small
+        swBtn.bezelColor = nil
+        swBtn.toolTip = "切换至账号 \(accountTitle)"
+        swBtn.setAccessibilityLabel("切换至账号 \(accountTitle)")
+        swBtn.setContentHuggingPriority(.required, for: .horizontal)
+        swBtn.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
+
+        let singleRefreshBtn = QuotaRefreshButton(target: self, action: #selector(refreshSingleAccountById(_:)))
+        singleRefreshBtn.identifier = NSUserInterfaceItemIdentifier(id)
+        singleRefreshBtn.controlSize = .small
+        singleRefreshBtn.toolTip = "仅刷新此账号配额"
+        singleRefreshBtn.setAccessibilityLabel("刷新账号 \(accountTitle) 配额")
+        singleRefreshBtn.setContentHuggingPriority(.required, for: .horizontal)
+        singleRefreshBtn.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
+
+        let actionsButton = button("…", target: self, action: #selector(showAccountActions(_:)))
+        actionsButton.identifier = NSUserInterfaceItemIdentifier(id); actionsButton.setAccessibilityLabel("账号操作 · " + accountTitle)
+
+        let actionViews: [NSView] = [swBtn, singleRefreshBtn, actionsButton]
+        let actionStack = horizontal(actionViews, spacing: 6)
+        actionStack.alignment = .centerY
+        actionStack.detachesHiddenViews = true
+
+        let headerRow = identityHeader(identity: nameAndEmail, actions: actionStack)
+        let widthConstraint = actionStack.constraints.first { $0.firstAttribute == .width && $0.secondItem == nil }
+
+        let bar1 = quotaBar(title: "Gemini · 5 小时", percentage: nil, resetText: "", icon: "bolt.fill")
+        let bar2 = quotaBar(title: "Gemini · 每周", percentage: nil, resetText: "", icon: "calendar")
+        let qRow1 = horizontal([bar1, bar2], spacing: 18)
+        qRow1.distribution = .fillEqually
+        qRow1.alignment = .top
+
+        let barClaude5h = quotaBar(title: "Claude/GPT · 5 小时", percentage: nil, resetText: "", icon: "cpu")
+        let barClaudeWeek = quotaBar(title: "Claude/GPT · 每周", percentage: nil, resetText: "", icon: "calendar")
+        let qRow2 = horizontal([barClaude5h, barClaudeWeek], spacing: 18)
+        qRow2.distribution = .fillEqually
+        qRow2.alignment = .top
+
+        let barArgon = quotaBar(title: "Gemini 4 Argon", percentage: nil, resetText: "", icon: "sparkles", unknownPlaceholder: "未知")
+
+        let authWarningLabel = text("登录授权已失效，请重新授权", size: 11, color: accessibleWarningColor())
+        authWarningLabel.isHidden = true
+        let quotaWarningLabel = text("配额未更新", size: 11, color: accessibleWarningColor(), wrap: true)
+        quotaWarningLabel.isHidden = true
+        let refreshErrorLabel = text("", size: 11.5, color: accessibleWarningColor(), wrap: true)
+        refreshErrorLabel.isHidden = true
+        let staleLabel = text("", size: 11, color: accessibleWarningColor(), wrap: true)
+        staleLabel.isHidden = true
+        let updateLabel = text("", size: 11, color: .secondaryLabelColor)
+        updateLabel.isHidden = true
+
+        let cardRows: [NSView] = [
+            headerRow, divider(), qRow1, qRow2, barArgon,
+            authWarningLabel, quotaWarningLabel, refreshErrorLabel, staleLabel, updateLabel
+        ]
+        let cardBox = group(cardRows, inset: 16, spacing: 12)
+        (cardBox as? DesignCardBox)?.enablesHoverHighlight = true
+        cardBox.setAccessibilityElement(true)
+        cardBox.setAccessibilityRole(.group)
+        let cardInnerStack = groupStack(cardBox)
+        cardInnerStack?.spacing = 12
+        cardInnerStack?.detachesHiddenViews = true
+        for bar in [bar1, bar2, barClaude5h, barClaudeWeek] { bar.useComfortableLayout() }
+        barArgon.useCompactLayout()
+        barArgon.heightAnchor.constraint(greaterThanOrEqualToConstant: 34).isActive = true
+        cardBox.cornerRadius = 14
+
+        return AccountCardViews(
+            id: id,
+            cardBox: cardBox,
+            titleLbl: titleLbl,
+            tierPill: tierPill,
+            statusBadge: statusBadge,
+            emailLbl: emailLbl,
+            switchButton: swBtn,
+            singleRefreshBtn: singleRefreshBtn,
+            actionsButton: actionsButton,
+            actionStack: actionStack,
+            actionStackWidthConstraint: widthConstraint,
+            bar1: bar1,
+            bar2: bar2,
+            barClaude5h: barClaude5h,
+            barClaudeWeek: barClaudeWeek,
+            barArgon: barArgon,
+            authWarningLabel: authWarningLabel,
+            quotaWarningLabel: quotaWarningLabel,
+            refreshErrorLabel: refreshErrorLabel,
+            staleLabel: staleLabel,
+            updateLabel: updateLabel
+        )
+    }
+
+    private func updateAccountCardViews(_ card: AccountCardViews, item: [String: Any]) {
+        let id = item["id"] as? String ?? card.id
+        let email = item["email"] as? String ?? "未命名账号"
+        let name = item["name"] as? String ?? ""
+        let tier = AccountIdentity.normalizeTier(item["subscription_tier"] as? String)
+        let isUltra = tier == "ULTRA"
+        let isPro = tier == "PRO"
+        let isActive = id == activeId
+
+        let displayName = AccountIdentity.displayName(name: name, email: email)
+        if card.titleLbl.stringValue != displayName { card.titleLbl.stringValue = displayName }
+        if card.emailLbl.stringValue != email { card.emailLbl.stringValue = email }
+
+        card.tierPill.title = tier
+        card.tierPill.tint = isUltra ? .systemPurple : isPro ? .systemBlue : .secondaryLabelColor
+        card.tierPill.isHidden = tier.isEmpty
+
+        if isActive {
+            card.statusBadge.title = app.statusValue.liveAccountEmail.isEmpty ? "已选记录" : "当前账号"
+            card.statusBadge.tint = Design.blue
+            card.statusBadge.isHidden = false
+        } else if id == recommendedAccountId {
+            card.statusBadge.title = "推荐备用"
+            card.statusBadge.tint = .systemGreen
+            card.statusBadge.isHidden = false
+        } else {
+            card.statusBadge.isHidden = true
+        }
+
+        let accountTitle = name.isEmpty ? email : "\(name) · \(email)"
+        let canSwitch = !isActive && item["disabled"] as? Bool != true && item["validation_blocked"] as? Bool != true
+        card.switchButton.identifier = NSUserInterfaceItemIdentifier(id)
+        card.switchButton.toolTip = "切换至账号 \(accountTitle)"
+        card.switchButton.setAccessibilityLabel("切换至账号 \(accountTitle)")
+        if card.switchButton.isHidden != !canSwitch {
+            card.switchButton.isHidden = !canSwitch
+            let visibleActions = card.actionStack.arrangedSubviews.filter { !$0.isHidden }
+            let width = visibleActions.reduce(CGFloat(0)) { $0 + max(0, $1.intrinsicContentSize.width) } + CGFloat(max(0, visibleActions.count - 1)) * card.actionStack.spacing
+            card.actionStackWidthConstraint?.constant = width
+        }
+
+        card.singleRefreshBtn.identifier = NSUserInterfaceItemIdentifier(id)
+        card.singleRefreshBtn.setAccessibilityLabel("刷新账号 \(accountTitle) 配额")
+        card.actionsButton.identifier = NSUserInterfaceItemIdentifier(id)
+        card.actionsButton.setAccessibilityLabel("账号操作 · " + accountTitle)
+
+        let quotaContract = QuotaPresentation.contract(item)
+        let g5h = quotaContract.geminiPrimary.window?.percentage
+        let gWeek = quotaContract.geminiWeekly?.percentage
+        let cWeek = quotaContract.claudeWeekly?.percentage
+        let g5Cd = quotaContract.geminiPrimary.window?.resetText ?? ""
+        let gWCd = quotaContract.geminiWeekly?.resetText ?? ""
+        let cWCd = quotaContract.claudeWeekly?.resetText ?? ""
+
+        card.bar1.update(
+            title: "Gemini · \(quotaContract.geminiPrimary.label)",
+            percentage: g5h,
+            resetText: g5Cd,
+            icon: "bolt.fill",
+            unknownPlaceholder: quotaContract.geminiPrimary.window?.placeholder ?? QuotaPresentation.missingWindowPlaceholder(otherPercentage: gWeek),
+            stale: quotaContract.geminiPrimary.window?.stale == true
+        )
+        card.bar2.update(
+            title: "Gemini · 每周",
+            percentage: gWeek,
+            resetText: gWCd,
+            icon: "calendar",
+            unknownPlaceholder: quotaContract.geminiWeekly?.placeholder ?? QuotaPresentation.missingWindowPlaceholder(otherPercentage: g5h),
+            stale: quotaContract.geminiWeekly?.stale == true
+        )
+
+        let c5Window = quotaContract.claudePrimary.window
+        card.barClaude5h.update(
+            title: "Claude/GPT · \(quotaContract.claudePrimary.label)",
+            percentage: c5Window?.percentage,
+            resetText: c5Window?.resetText ?? "",
+            icon: "cpu",
+            unknownPlaceholder: c5Window?.placeholder ?? QuotaPresentation.missingWindowPlaceholder(otherPercentage: cWeek),
+            stale: c5Window?.stale == true
+        )
+        card.barClaudeWeek.update(
+            title: "Claude/GPT · 每周",
+            percentage: cWeek,
+            resetText: cWCd,
+            icon: "calendar",
+            unknownPlaceholder: quotaContract.claudeWeekly?.placeholder ?? QuotaPresentation.missingWindowPlaceholder(otherPercentage: c5Window?.percentage),
+            stale: quotaContract.claudeWeekly?.stale == true
+        )
+
+        let argon = quotaContract.argon
+        let argonPlaceholder = argon?.availability == "disabled" ? "不可用" : (argon?.placeholder ?? "未知")
+        card.barArgon.update(
+            title: argon?.title ?? "Gemini 4 Argon",
+            percentage: argon?.percentage,
+            resetText: argon?.percentage == nil ? "" : (argon?.resetText ?? ""),
+            icon: "sparkles",
+            unknownPlaceholder: argonPlaceholder,
+            stale: argon?.stale == true
+        )
+
+        if let readiness = item["credentialReadiness"] as? [String: Any], readiness["state"] as? String == "needs_authorization" {
+            card.authWarningLabel.toolTip = readiness["message"] as? String ?? ""
+            card.authWarningLabel.isHidden = false
+        } else {
+            card.authWarningLabel.toolTip = nil
+            card.authWarningLabel.isHidden = true
+        }
+
+        let refreshError = (item["quota_refresh_error"] as? String).flatMap { value -> String? in
+            let value = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            return value.isEmpty || value.contains("双周期") ? nil : value
+        }
+        let quotaWarning = QuotaPresentation.warningSummary(quotaContract, excluding: [refreshError].compactMap { $0 })
+        if !quotaWarning.isEmpty {
+            card.quotaWarningLabel.toolTip = quotaContract.quotaWarnings.joined(separator: "；")
+            card.quotaWarningLabel.isHidden = false
+        } else {
+            card.quotaWarningLabel.toolTip = nil
+            card.quotaWarningLabel.isHidden = true
+        }
+
+        if let error = refreshError {
+            card.refreshErrorLabel.stringValue = InterfaceText.quotaMessage(error)
+            card.refreshErrorLabel.toolTip = error
+            card.refreshErrorLabel.isHidden = false
+        } else {
+            card.refreshErrorLabel.stringValue = ""
+            card.refreshErrorLabel.toolTip = nil
+            card.refreshErrorLabel.isHidden = true
+        }
+
+        if let quota = item["quota"] as? [String: Any],
+           let staleGroups = quota["stale_groups"] as? [[String: Any]], !staleGroups.isEmpty {
+            let names = staleGroups.compactMap { $0["name"] as? String }.filter { !$0.isEmpty }
+            let stamps = staleGroups.compactMap { group -> Double? in
+                if let value = group["observed_at"] as? Double { return value }
+                if let value = group["observed_at"] as? Int { return Double(value) }
+                if let value = group["observed_at"] as? NSNumber { return value.doubleValue }
+                return nil
+            }
+            let latest = stamps.max().map { Self.dateFormatter.string(from: Date(timeIntervalSince1970: $0)) }
+            let groupText = names.isEmpty ? "部分分组" : names.joined(separator: "、")
+            let staleText = "部分分组沿用上次记录：\(groupText)" + (latest.map { " · 最后采样 \($0)" } ?? "")
+            card.staleLabel.stringValue = staleText
+            card.staleLabel.toolTip = "这些分组本轮未返回，沿用上次真实采样；点击右上或卡片内“刷新配额”重试。"
+            card.staleLabel.isHidden = false
+        } else {
+            card.staleLabel.stringValue = ""
+            card.staleLabel.toolTip = nil
+            card.staleLabel.isHidden = true
+        }
+
+        if let quota = item["quota"] as? [String: Any], let stamp = quota["last_updated"] as? Double, stamp > 0 {
+            let source = quota["source"] as? String == "external" ? "Switch 记录" : quota["source"] as? String == "live" ? "本机实时读取" : "Google 配额记录"
+            let dateStr = Self.dateFormatter.string(from: Date(timeIntervalSince1970: stamp))
+            let isStale = (Date().timeIntervalSince1970 - stamp) > 15 * 60
+            let updateText = isStale ? "更新于 \(dateStr) · 待刷新" : "更新于 \(dateStr)"
+            card.updateLabel.stringValue = updateText
+            card.updateLabel.textColor = isStale ? accessibleWarningColor() : .secondaryLabelColor
+            card.updateLabel.toolTip = "数据来源：\(source)"
+            card.updateLabel.isHidden = false
+        } else {
+            card.updateLabel.stringValue = ""
+            card.updateLabel.toolTip = nil
+            card.updateLabel.isHidden = true
+        }
+
+        let tierSegment = tier.isEmpty ? "" : "，\(tier)"
+        card.cardBox.setAccessibilityLabel("\(accountTitle)\(tierSegment)，\(isActive ? "当前账号" : "备用账号")")
+        if isActive {
+            card.cardBox.borderWidth = 1.25
+            card.cardBox.borderColor = Design.blue.withAlphaComponent(0.40)
+        } else {
+            card.cardBox.borderWidth = 0.5
+            card.cardBox.borderColor = Design.border
+        }
+    }
+
+    private func rebuildAccountCards() {
+        let state = PerformanceSignpost.begin("AccountsCardsUpdate")
+        defer { PerformanceSignpost.end("AccountsCardsUpdate", state) }
+        refreshControlsById.removeAll()
+        updateStaleGroupsSummary()
+
+        if accountReadError != nil || accounts.isEmpty {
+            cardViewsById.removeAll()
+            cardsStack.arrangedSubviews.forEach {
+                cardsStack.removeArrangedSubview($0)
+                $0.removeFromSuperview()
+            }
+            if let message = accountReadError {
+                let failure = text(message, size: 12, color: accessibleDangerColor(), wrap: true)
+                failure.setAccessibilityLabel(message)
+                let row = group([failure], inset: 14)
+                cardsStack.addArrangedSubview(row); fillWidth(row, in: cardsStack)
+            }
+            if accounts.isEmpty, accountReadError != nil { return }
+            if accounts.isEmpty {
+                let emptyCard = group([
+                    EmptyStateView(
+                        icon: "person.crop.circle.badge.plus",
+                        title: "尚未保存任何 Google 账号",
+                        subtitle: "保存 Antigravity 当前账号，或通过 Google 授权登录。",
+                        buttonTitle: "添加账号…",
+                        target: self,
+                        action: #selector(addAccount)
+                    )
+                ], inset: 16)
+                cardsStack.addArrangedSubview(emptyCard)
+                fillWidth(emptyCard, in: cardsStack)
+                return
+            }
+        }
+
+        let validIds = Set(accounts.compactMap { $0["id"] as? String })
+        cardViewsById = cardViewsById.filter { validIds.contains($0.key) }
+
+        var orderedBoxes: [NSView] = []
+        for item in accounts {
+            let id = item["id"] as? String ?? ""
+            let card: AccountCardViews
+            if let existing = cardViewsById[id] {
+                card = existing
+            } else {
+                let created = makeAccountCardViews(id: id, item: item)
+                cardViewsById[id] = created
+                card = created
+            }
+            updateAccountCardViews(card, item: item)
+            orderedBoxes.append(card.cardBox)
+            refreshControlsById[id] = card.singleRefreshBtn
+        }
+
+        let currentViews = cardsStack.arrangedSubviews
+        let structureSame = currentViews.count == orderedBoxes.count && zip(currentViews, orderedBoxes).allSatisfy { $0 === $1 }
+        if !structureSame {
+            for view in currentViews {
+                cardsStack.removeArrangedSubview(view)
+                if !orderedBoxes.contains(where: { $0 === view }) { view.removeFromSuperview() }
+            }
+            for sub in cardsStack.subviews where !orderedBoxes.contains(where: { $0 === sub }) {
+                sub.removeFromSuperview()
+            }
+            for cardBox in orderedBoxes {
+                cardsStack.addArrangedSubview(cardBox)
+                fillWidth(cardBox, in: cardsStack)
+            }
+        }
+
+        // A05: 先应用全局/批量状态，再由页面级 per-account 状态覆盖（含失败 tooltip）。
+        app.updateQuotaRefreshControls()
+        applyCardRefreshState()
+    }
+
+    /// A05: 把页面级 per-account busy/error 状态贴到当前挂载的刷新按钮上。
+    /// 轮询里的 app.updateQuotaRefreshControls() 会清掉按钮 tooltip，因此每次 fetch 完成后再贴一次。
+    private func applyCardRefreshState() {
+        for (id, control) in refreshControlsById {
+            let error = accountRefreshErrors[id]
+            let available = app.reachable && (app.pendingAccountTaskId == nil || app.quotaRefreshing)
+            control.setRefreshState(busy: app.quotaRefreshing || app.refreshingAccountIds.contains(id), available: available, error: error)
+            control.toolTip = error.map { "刷新未完成：\($0)" } ?? "仅刷新此账号配额"
+        }
+    }
+
+    /// B01: 页面顶部汇总；只统计真正带 stale_groups 的账号，避免把普通联网失败混为“沿用记录”。
+    private func updateStaleGroupsSummary() {
+        let staleAccounts = accounts.filter { item in
+            guard let quota = item["quota"] as? [String: Any] else { return false }
+            return (quota["stale_groups"] as? [[String: Any]])?.isEmpty == false
+        }.count
+        guard staleAccounts > 0 else {
+            staleGroupsSummary.stringValue = ""
+            staleGroupsSummary.isHidden = true
+            return
+        }
+        staleGroupsSummary.stringValue = "\(staleAccounts) 个账号的部分配额分组沿用上次记录；刷新配额后会更新。"
+        staleGroupsSummary.toolTip = "本轮刷新未返回这些分组，界面展示的是上次真实采样；可点击卡片内的刷新配额重试。"
+        staleGroupsSummary.isHidden = false
+    }
+
+    private func quotaStamp(for id: String) -> Int {
+        guard let item = accounts.first(where: { ($0["id"] as? String) == id }) else { return 0 }
+        return item["quota_last_updated"] as? Int
+            ?? item["quotaLastUpdated"] as? Int
+            ?? ((item["quota"] as? [String: Any])?["last_updated"] as? Int ?? 0)
+    }
+
+    func fetch(_ snapshot: [String:Any]? = nil) {
+        let receive: (Result<[String:Any],Error>) -> Void = { [weak self] response in
+            guard let self else { return }
+            switch response {
+            case .failure(let error):
+                self.accountReadError = "读取账号失败：\(error.localizedDescription)"
+                self.rebuildAccountCards()
+            case .success(let value):
+                let recovered = self.accountReadError != nil; self.accountReadError = nil
+                if recovered { self.renderedFingerprint = "" }
+                self.accounts = value["accounts"] as? [[String: Any]] ?? []
+                self.activeId = value["activeId"] as? String ?? (value["currentAccountId"] as? String ?? "")
+                if !self.app.statusValue.liveAccountEmail.isEmpty { self.activeId = "" }
+                if !self.app.statusValue.liveAccountEmail.isEmpty,
+                   let live = self.accounts.first(where: { ($0["email"] as? String ?? "").caseInsensitiveCompare(self.app.statusValue.liveAccountEmail) == .orderedSame }),
+                   let liveID = live["id"] as? String { self.activeId = liveID }
+                self.accounts = self.accounts.enumerated().sorted { left, right in
+                    let l = left.element["id"] as? String == self.activeId, r = right.element["id"] as? String == self.activeId
+                    return l == r ? left.offset < right.offset : l
+                }.map(\.element)
+                let newFingerprint = "\(self.activeId):" + self.accounts.map { item in
+                    let id = item["id"] as? String ?? ""
+                    let rev = item["revision"] as? String ?? ""
+                    let g5Cd = item["geminiFiveHourResetCountdown"] as? String ?? ""
+                    let gWCd = item["geminiWeeklyResetCountdown"] as? String ?? ""
+                    let cWCd = item["claudeWeeklyResetCountdown"] as? String ?? ""
+                    let aWCd = item["argonWeeklyResetCountdown"] as? String ?? ""
+                    let models = item["models"] as? [[String: Any]] ?? []
+                    let modelsCd = models.map { ($0["reset_countdown"] as? String) ?? "" }.joined(separator: ",")
+                    if !rev.isEmpty {
+                        return "\(id):\(item["name"] as? String ?? ""):\(rev):\(g5Cd):\(gWCd):\(cWCd):\(aWCd):\(modelsCd):\(QuotaPresentation.fingerprint(item))"
+                    }
+                    let g5h = item["geminiFiveHourRemaining"] as? Int ?? -1
+                    let gWk = item["geminiWeeklyRemaining"] as? Int ?? -1
+                    let c5h = item["claudeFiveHourRemaining"] as? Int ?? -1
+                    let cWk = item["claudeWeeklyRemaining"] as? Int ?? -1
+                    let aWk = item["argonWeeklyRemaining"] as? Int ?? -1
+                    let label = item["custom_label"] as? String ?? ""
+                    
+                    let tier = item["subscription_tier"] as? String ?? ""
+                    let dis = (item["disabled"] as? Bool == true) ? "1" : "0"
+                    let err = item["quota_refresh_error"] as? String ?? ""
+                    let lastUp = item["quota_last_updated"] as? Int ?? (item["quotaLastUpdated"] as? Int ?? ((item["quota"] as? [String: Any])?["last_updated"] as? Int ?? 0))
+                    let modelsKey = models.map { m in
+                        let mName = m["name"] as? String ?? ""
+                        let mPct = m["percentage"] as? Int ?? -1
+                        let mCd = m["reset_countdown"] as? String ?? (m["resetCountdown"] as? String ?? "")
+                        return "\(mName)=\(mPct)=\(mCd)"
+                    }.joined(separator: ",")
+                    return "\(id):\(g5h):\(gWk):\(c5h):\(cWk):\(aWk):\(label):\(tier):\(dis):\(err):\(lastUp):\(modelsKey)"
+                }.joined(separator: "|")
+                if newFingerprint != self.renderedFingerprint {
+                    self.renderedFingerprint = newFingerprint
+                    self.rebuildAccountCards()
+                }
+                let recommendationKey = newFingerprint + ":" + String(Int(Date().timeIntervalSince1970 / 60))
+                if self.autoSwitchToggle.state == .on && recommendationKey != self.recommendationFingerprint {
+                    self.recommendationFingerprint = recommendationKey; self.evaluateRecommendationPreview()
+                }
+                if let pending = value["pendingSwitch"] as? Bool {
+                    self.hasPendingSwitch = pending
+                } else if let pendingObj = value["pendingSwitch"] as? [String: Any], let p = pendingObj["isPending"] as? Bool {
+                    self.hasPendingSwitch = p
+                } else {
+                    self.hasPendingSwitch = false
+                }
+                self.pendingRecoveryBox.isHidden = !self.hasPendingSwitch
+                // A05: 清理已删除账号 / 已被其他刷新路径更新的旧失败态，再把页面级状态贴回当前按钮。
+                let currentIds = Set(self.accounts.compactMap { $0["id"] as? String })
+                self.accountRefreshErrors = self.accountRefreshErrors.filter { currentIds.contains($0.key) }
+                self.accountRefreshErrorStamps = self.accountRefreshErrorStamps.filter { currentIds.contains($0.key) }
+                for id in Array(self.accountRefreshErrorStamps.keys) where self.quotaStamp(for: id) != self.accountRefreshErrorStamps[id] {
+                    self.accountRefreshErrors[id] = nil
+                    self.accountRefreshErrorStamps[id] = nil
+                }
+                self.applyCardRefreshState()
+            }
+        }
+        if let snapshot { receive(.success(snapshot)) } else { app.fetchAccountList(notifyPage: false, completion: receive) }
+    }
+
+
+    func updateAutoSwitchState() {
+        autoSwitchToggle.isEnabled = true
+        let isEnabled = autoSwitchToggle.state == .on
+        let threshold = max(1, intVal(autoSwitchConfig, "reserve_percentage", fallback: intVal(autoSwitchConfig, "reservePercentage", fallback: 10)))
+
+        policyBox.fillColor = Design.card
+        if isEnabled {
+            policyBox.borderWidth = 1.0
+            policyBox.borderColor = Design.blue.withAlphaComponent(0.35)
+            autoSwitchBadgeBox.fillColor = Design.blue.withAlphaComponent(0.12)
+            autoSwitchBadgeBox.borderColor = Design.blue.withAlphaComponent(0.24)
+            autoSwitchBadgeIcon.contentTintColor = Design.blue
+            autoSwitchStatusBadge.title = "活跃中 · 阈值 ≤ \(threshold)%"
+            autoSwitchStatusBadge.tint = Design.blue
+        } else {
+            policyBox.borderWidth = 0.5
+            policyBox.borderColor = Design.border
+            autoSwitchBadgeBox.fillColor = Design.subcard
+            autoSwitchBadgeBox.borderColor = Design.border
+            autoSwitchBadgeIcon.contentTintColor = Design.secondary
+            autoSwitchStatusBadge.title = "已停用"
+            autoSwitchStatusBadge.tint = Design.secondary
+        }
+        configButton.isEnabled = true
+        configButton.alphaValue = 1.0
+    }
+
+    func fetchPolicy() {
+        guard !policyInFlight else { return }
+        policyInFlight = true
+        app.bridge.send(["command": "auto_switch_get"]) { [weak self] response in
+            guard let self else { return }
+            self.policyInFlight = false
+            if case .success(let value) = response, let cfg = value["config"] as? [String: Any] {
+                self.autoSwitchConfig = cfg
+                let isEnabled = cfg["enabled"] as? Bool == true
+                self.autoSwitchToggle.state = isEnabled ? .on : .off
+                self.updateAutoSwitchState()
+                if isEnabled {
+                    self.evaluateRecommendationPreview()
+                } else {
+                    // A04: 关闭后统一复位推荐条、推荐账号与按钮标识，避免残留“切换至此账号”。
+                    self.clearRecommendation()
+                }
+            } else {
+                self.updateAutoSwitchState()
+            }
+        }
+    }
+
+    /// A04: 唯一的推荐状态复位入口（fetchPolicy / savePolicy / 预览失败 / 开关关闭共用）。
+    func clearRecommendation() {
+        recommendationFingerprint = ""
+        recommendedAccountId = nil
+        recommendationLabel.stringValue = ""
+        switchRecommendedBtn.identifier = nil
+        switchRecommendedBtn.isHidden = true
+        recommendationRow.isHidden = true
+        rebuildAccountCards()
+    }
+
+    func evaluateRecommendationPreview() {
+        guard autoSwitchToggle.state == .on else {
+            clearRecommendation()
+            return
+        }
+        app.bridge.send(["command": "auto_switch_best", "preview": true]) { [weak self] response in
+            guard let self else { return }
+            // 开关在请求期间被关闭：不要用旧响应把推荐条重新显示出来。
+            guard self.autoSwitchToggle.state == .on else {
+                self.clearRecommendation()
+                return
+            }
+            if case .success(let value) = response {
+                let candidate = value["account"] as? [String: Any]
+                let candidateId = candidate?["id"] as? String
+                let shouldSwitch = value["shouldSwitch"] as? Bool ?? false
+                let reason = value["reason"] as? String ?? ""
+                self.recommendedAccountId = shouldSwitch ? candidateId : nil
+                self.updateRecommendationBanner(shouldSwitch: shouldSwitch, candidate: candidate, reason: reason)
+            } else {
+                self.clearRecommendation()
+                return
+            }
+            self.rebuildAccountCards()
+        }
+    }
+
+    func updateRecommendationBanner(shouldSwitch: Bool, candidate: [String: Any]?, reason: String) {
+        guard autoSwitchToggle.state == .on else {
+            clearRecommendation()
+            return
+        }
+        if shouldSwitch, let candidate, let cId = candidate["id"] as? String, cId != activeId {
+            let email = candidate["email"] as? String ?? ""
+            let name = candidate["name"] as? String ?? ""
+            let displayName = name.isEmpty ? email : "\(name) · \(email)"
+            recommendationLabel.stringValue = "当前配额偏低 · 推荐 \(displayName)"
+            recommendationLabel.toolTip = reason
+            switchRecommendedBtn.identifier = NSUserInterfaceItemIdentifier(cId)
+            switchRecommendedBtn.isHidden = false
+            recommendationRow.isHidden = false
+        } else if let candidate, let cId = candidate["id"] as? String, cId != activeId {
+            let email = candidate["email"] as? String ?? ""
+            let name = candidate["name"] as? String ?? ""
+            let displayName = name.isEmpty ? email : "\(name) · \(email)"
+            
+            recommendationLabel.stringValue = reason.isEmpty ? "备用账号 · \(displayName)" : reason
+            switchRecommendedBtn.isHidden = true
+            recommendationRow.isHidden = false
+        } else if let candidate, let cId = candidate["id"] as? String, cId == activeId {
+            recommendationLabel.stringValue = "当前账号配额最充裕，暂无需切换。"
+            switchRecommendedBtn.isHidden = true
+            recommendationRow.isHidden = false
+        } else {
+            recommendationLabel.stringValue = reason.isEmpty ? "暂无可用候选" : reason
+            switchRecommendedBtn.isHidden = true
+            recommendationRow.isHidden = false
+        }
+    }
+
+    @objc func switchRecommendedAccount(_ sender: NSButton) {
+        guard let id = recommendedAccountId, !id.isEmpty, id != activeId else { return }
+        let btn = NSButton()
+        btn.identifier = NSUserInterfaceItemIdentifier(id)
+        switchCardAccountById(btn)
+    }
+
+    @objc func refreshSingleAccountById(_ sender: NSButton) {
+        let id = sender.identifier?.rawValue ?? ""
+        guard !id.isEmpty, app.reachable, !app.refreshingAccountIds.contains(id) else { return }
+        // A05: busy/error 存在页面数据源，重建卡片后仍能落到当前按钮。
+        // 强引用 app：即使页面在请求期间被切走销毁，也要把 app.refreshingAccountIds 清干净。
+        let app = self.app
+        accountRefreshErrors[id] = nil
+        accountRefreshErrorStamps[id] = nil
+        app.refreshingAccountIds.insert(id)
+        let targetAccount = accounts.first(where: { ($0["id"] as? String) == id })
+        let email = targetAccount?["email"] as? String ?? "账号"
+        app.updateQuotaRefreshControls()
+        applyCardRefreshState()
+        app.bridge.send(["command": "quota_refresh", "id": id]) { [weak self] response in
+            app.refreshingAccountIds.remove(id)
+            guard let self else { return }
+            switch response {
+            case .failure(let error):
+                self.accountRefreshErrors[id] = error.localizedDescription
+                self.accountRefreshErrorStamps[id] = self.quotaStamp(for: id)
+                self.app.showMessage("刷新 \(email) 配额失败：\(error.localizedDescription)", error: true)
+            case .success(let value):
+                self.accountRefreshErrors[id] = nil
+                self.accountRefreshErrorStamps[id] = nil
+                self.app.showMessage(value["message"] as? String ?? "已读取 \(email) 的配额，未返回的数据会单独标明。")
+                self.fetch()
+                self.app.refresh()
+            }
+            // 立即把状态贴到当前挂载的按钮（不依赖点击时捕获的旧按钮）。
+            self.app.updateQuotaRefreshControls()
+            self.applyCardRefreshState()
+        }
+    }
+
+    var policySheet: AccountPolicySheet?
+    @objc func showPolicySettings() {
+        guard let window = app.window, window.activeSheetWindow == nil else { return }
+        let sheet = AccountPolicySheet(app: app, config: autoSwitchConfig) { [weak self] in self?.fetchPolicy() }
+        policySheet = sheet; sheet.show(in: window) { [weak self] in self?.policySheet = nil }
+    }
+
+    @objc func savePolicy() {
+        let enabled = autoSwitchToggle.state == .on
+        let oldEnabled = autoSwitchConfig["enabled"] as? Bool == true
+        autoSwitchToggle.isEnabled = false
+        updateAutoSwitchState()
+        let payload: [String: Any] = [
+            "command": "auto_switch_set",
+            "config": [
+                "enabled": enabled
+            ]
+        ]
+        app.bridge.send(payload) { [weak self] response in
+            guard let self else { return }
+            self.autoSwitchToggle.isEnabled = true
+            switch response {
+            case .failure(let error):
+                self.autoSwitchToggle.state = oldEnabled ? .on : .off
+                self.updateAutoSwitchState()
+                self.app.showMessage("设置失败：\(error.localizedDescription)", error: true)
+            case .success(let value):
+                self.autoSwitchConfig = value["config"] as? [String:Any] ?? self.autoSwitchConfig.merging(["enabled": enabled]) { _, new in new }
+                self.updateAutoSwitchState()
+                if enabled {
+                    self.evaluateRecommendationPreview()
+                } else {
+                    // A04: 与 fetchPolicy 共用同一复位路径。
+                    self.clearRecommendation()
+                }
+                self.app.showMessage(enabled ? "已开启智能切换。" : "已关闭智能切换。")
+                self.app.refresh()
+            }
+        }
+    }
+
+
+
+    @objc func refreshAllQuotas() { app.refreshAccountQuotas() }
+
+    var addAccountSheet: AddAccountSheet?
+    @objc func addAccount() {
+        guard let window = app.window, window.activeSheetWindow == nil else { return }
+        let sheet = AddAccountSheet(app: app) { [weak self] in self?.fetch(); self?.app.refresh() }
+        addAccountSheet = sheet
+        sheet.show(in: window) { [weak self] in self?.addAccountSheet = nil }
+    }
+
+    @objc func rollbackSwitch() {
+        guard let window = app.window else { return }
+        let alert = NSAlert(); alert.messageText = "撤销上次账号切换？"
+        alert.informativeText = "请先手动退出 Antigravity。将恢复上次切换前的登录记录；若其他程序已更新记录，会停止恢复以保留新状态。"
+        alert.addButton(withTitle: "恢复原账号"); alert.addButton(withTitle: "取消")
+        alert.beginSheetModal(for: window) { [weak self] result in
+            guard let self, result == .alertFirstButtonReturn else { return }
+            self.app.perform(["command": "account_switch_rollback"]) { [weak self] value in guard let self else { return }; self.app.showMessage(value["message"] as? String ?? "已恢复原账号记录"); self.fetch(); self.app.refresh() }
+        }
+    }
+
+    @objc func switchCardAccountById(_ sender: NSButton) {
+        let id = sender.identifier?.rawValue ?? (accounts.indices.contains(sender.tag) ? accounts[sender.tag]["id"] as? String ?? "" : "")
+        guard !id.isEmpty, id != activeId else { return }
+        let targetAccount = accounts.first(where: { ($0["id"] as? String) == id })
+        let email = targetAccount?["email"] as? String ?? ""
+        let name = targetAccount?["name"] as? String ?? ""
+        app.requestInteractiveAccountSwitch(id: id, email: email, name: name) {
+            [weak self] in self?.fetch()
+        }
+    }
+
+    @objc func showAccountActions(_ sender: NSButton) {
+        guard let id = sender.identifier?.rawValue, let row = accounts.firstIndex(where: { $0["id"] as? String == id }) else { return }
+        let menu = NSMenu(); menu.autoenablesItems = false
+        func add(_ title: String, _ action: Selector, enabled: Bool = true, tag: Int = 0) { let item = NSMenuItem(title: title, action: action, keyEquivalent: ""); item.target = self; item.representedObject = id; item.isEnabled = enabled; item.tag = tag; menu.addItem(item) }
+        add("重命名…", #selector(renameAccount(_:)))
+        add("上移", #selector(moveAccount(_:)), enabled: id != activeId && row > (accounts.contains { $0["id"] as? String == activeId } ? 1 : 0), tag: -1)
+        add("下移", #selector(moveAccount(_:)), enabled: id != activeId && row + 1 < accounts.count, tag: 1)
+        menu.addItem(.separator()); add("移除账号…", #selector(deleteCardAccountByIdItem(_:)), enabled: id != activeId)
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.maxY), in: sender)
+    }
+    @objc func moveAccount(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String, let old = accounts.firstIndex(where: { $0["id"] as? String == id }) else { return }
+        let next = old + sender.tag; guard accounts.indices.contains(next), id != activeId, accounts[next]["id"] as? String != activeId else { return }
+        var ids = accounts.compactMap { $0["id"] as? String }; ids.swapAt(old, next)
+        app.perform(["command": "account_reorder", "ids": ids]) { [weak self] _ in self?.fetch() }
+    }
+    @objc func renameAccount(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String,
+              let row = accounts.first(where: { $0["id"] as? String == id }),
+              let window = app.window,
+              window.activeSheetWindow == nil else { return }
+        let email = row["email"] as? String ?? ""
+        let oldName = row["name"] as? String ?? ""
+
+        let sheet = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 380, height: 184), styleMask: [.titled], backing: .buffered, defer: false)
+        sheet.isReleasedWhenClosed = false
+        sheet.backgroundColor = .clear
+        sheet.isOpaque = false
+        let surface = SheetVisualEffectView()
+        sheet.contentView = surface
+
+        let titleLabel = text("重命名账号", size: 15, weight: .semibold, color: .labelColor)
+        let subLabel = text(email, size: 11.5, color: Design.secondary)
+        subLabel.lineBreakMode = .byTruncatingMiddle
+
+        let field = NSTextField(string: oldName)
+        field.placeholderString = "输入自定义账号显示名称（最多 80 字符）"
+        field.font = .systemFont(ofSize: 12.5)
+        field.setAccessibilityLabel("账号名称")
+        Design.applyControls(field)
+
+        final class RenameSheetHandler: NSObject {
+            let sheet: NSWindow
+            let parent: NSWindow
+            let field: NSTextField
+            let oldName: String
+            var observer: NSObjectProtocol?
+            init(sheet: NSWindow, parent: NSWindow, field: NSTextField, oldName: String) {
+                self.sheet = sheet; self.parent = parent; self.field = field; self.oldName = oldName
+            }
+            @objc func savePressed() {
+                let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !name.isEmpty && name.count <= 80 && name != oldName else { return }
+                parent.endSheet(sheet, returnCode: .OK)
+            }
+            @objc func cancelPressed() {
+                parent.endSheet(sheet, returnCode: .cancel)
+            }
+        }
+        let handler = RenameSheetHandler(sheet: sheet, parent: window, field: field, oldName: oldName)
+        let cancelBtn = button("取消", target: handler, action: #selector(RenameSheetHandler.cancelPressed))
+        let saveBtn = button("保存", target: handler, action: #selector(RenameSheetHandler.savePressed))
+        saveBtn.bezelColor = .controlAccentColor
+        saveBtn.keyEquivalent = "\r"
+        cancelBtn.keyEquivalent = "\u{1b}"
+        saveBtn.isEnabled = false
+        field.target = handler; field.action = #selector(RenameSheetHandler.savePressed)
+
+        handler.observer = NotificationCenter.default.addObserver(forName: NSControl.textDidChangeNotification, object: field, queue: .main) { _ in
+            let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            saveBtn.isEnabled = !name.isEmpty && name.count <= 80 && name != oldName
+        }
+
+        let actionsRow = horizontal([flexibleSpace(), cancelBtn, saveBtn], spacing: 8)
+        let stack = vertical([titleLabel, subLabel, field, divider(), actionsRow], spacing: 12)
+        for v in [subLabel, field, actionsRow] { fillWidth(v, in: stack) }
+        surface.addSubview(stack)
+        pin(stack, to: surface, inset: 20)
+
+        window.beginSheet(sheet) { [weak self] resp in
+            if let obs = handler.observer { NotificationCenter.default.removeObserver(obs) }
+            withExtendedLifetime(handler) {}
+            guard resp == .OK else { return }
+            self?.app.perform(["command": "account_rename", "id": id, "name": field.stringValue]) { [weak self] _ in self?.fetch() }
+        }
+        sheet.makeFirstResponder(field)
+    }
+    @objc func deleteCardAccountByIdItem(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String,
+              let item = accounts.first(where: { ($0["id"] as? String) == id }),
+              let window = app.window else { return }
+        guard id != activeId else {
+            self.app.showMessage("不能删除正在使用的账号。", error: true)
+            return
+        }
+        let email = item["email"] as? String ?? ""
+
+        let alert = NSAlert()
+        alert.messageText = "移除此账号记录？"
+        alert.informativeText = "账号：\(email)\n仅从 GravityBox 账号列表中移除，不会注销您的 Google 账号。"
+        alert.addButton(withTitle: "移除")
+        alert.addButton(withTitle: "取消")
+
+        alert.beginSheetModal(for: window) { [weak self] resp in
+            guard let self, resp == .alertFirstButtonReturn else { return }
+            self.app.bridge.send(["command": "account_delete", "id": id]) { [weak self] res in
+                guard let self else { return }
+                switch res {
+                case .success:
+                    self.app.showMessage("已移除该账号记录。")
+                    self.fetch()
+                    self.app.refresh()
+                case .failure(let error):
+                    // A06: 失败必须可见，并从后端数据源恢复列表/按钮状态（不做乐观删除）。
+                    self.app.showMessage("移除账号失败：\(error.localizedDescription)", error: true)
+                    self.fetch()
+                    self.app.updateQuotaRefreshControls()
+                }
+            }
+        }
+    }
+
+    func update() {
+        fetch()
+        fetchPolicy()
+    }
+
+    @objc func exportAccounts() {
+        guard let window = app.window else { return }
+        // C03：导出前明确说明是否包含长期凭据；默认不静默导出 refresh_token。
+        let alert = NSAlert()
+        alert.messageText = "导出账号备份？"
+        alert.informativeText = "包含凭据的备份可用于在新机器恢复账号，但文件内含长期 refresh token，请仅保存在本机并妥善保管。"
+        alert.addButton(withTitle: "包含凭据导出")
+        alert.addButton(withTitle: "仅导出脱敏摘要")
+        alert.addButton(withTitle: "取消")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response != .alertThirdButtonReturn else { return }
+            self.performExport(includeCredentials: response == .alertFirstButtonReturn)
+        }
+    }
+
+    private func performExport(includeCredentials: Bool) {
+        app.bridge.send(["command": "account_export", "confirm": includeCredentials]) { [weak self] response in
+            guard let self, case .success(let value) = response, let dataJson = value["data"], let window = self.app.window else { return }
+            let panel = NSSavePanel()
+            panel.allowedContentTypes = [.json]
+            panel.nameFieldStringValue = includeCredentials ? "GravityBox-账号备份.json" : "GravityBox-账号摘要.json"
+            panel.beginSheetModal(for: window) { [weak self] res in
+                guard let self, res == .OK, let url = panel.url else { return }
+                DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                    let state = PerformanceSignpost.begin("AccountExportWrite")
+                    let result = Result {
+                        let d = try JSONSerialization.data(withJSONObject: dataJson, options: [.prettyPrinted, .sortedKeys])
+                        try d.write(to: url, options: .atomic)
+                        if includeCredentials {
+                            // 备份里含 refresh token：写后立即收紧权限，避免同机其他用户或同步盘外泄。
+                            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+                        }
+                    }
+                    PerformanceSignpost.end("AccountExportWrite", state)
+                    DispatchQueue.main.async {
+                        guard let self else { return }
+                        switch result {
+                        case .success:
+                            if includeCredentials {
+                                self.app.showMessage("账号备份已导出 · 含登录凭据，请妥善保管。")
+                            } else {
+                                self.app.showMessage("已导出脱敏账号摘要；该文件不含凭据，不能用于恢复账号。")
+                            }
+                        case .failure(let error):
+                            self.app.showMessage("导出失败：\(error.localizedDescription)", error: true)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @objc func importAccounts() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.json]
+        panel.canChooseDirectories = false
+        guard let window = app.window else { return }
+        panel.beginSheetModal(for: window) { [weak self] res in
+            guard let self, res == .OK, let url = panel.url else { return }
+            do {
+                let d = try Data(contentsOf: url)
+                guard let json = try JSONSerialization.jsonObject(with: d) as? [String: Any] else {
+                    throw BackendFailure(message: "请选择有效的账号备份 JSON 文件")
+                }
+                self.app.bridge.send(["command": "account_import", "data": json]) { [weak self] r in
+                    guard let self else { return }
+                    switch r {
+                    case .failure(let err):
+                        self.app.showMessage("导入失败：\(err.localizedDescription)", error: true)
+                    case .success(let val):
+                        let imported = val["imported"] as? Int ?? 0
+                        let updated = val["updated"] as? Int ?? 0
+                        self.app.showMessage("已导入 \(imported) 个新账号，更新 \(updated) 个已有账号。")
+                        self.fetch()
+                        self.app.refresh()
+                    }
+                }
+            } catch {
+                self.app.showMessage("读取文件失败：\(error.localizedDescription)", error: true)
+            }
+        }
+    }
+}
