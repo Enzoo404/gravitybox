@@ -1,149 +1,126 @@
-# GravityBox
-
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Enzoo404/gravitybox/main/assets/master-1024.png" width="128" height="128" alt="GravityBox Logo" style="border-radius: 24px;" />
+  <img src="assets/master-1024.png" width="112" height="112" alt="GravityBox" />
 </p>
 
+<h1 align="center">GravityBox</h1>
+
 <p align="center">
-  <strong>专为 Google Antigravity 打造的原生 macOS 应用</strong>
+  为 Google Antigravity 打造的 macOS 原生伴侣应用
   <br>
-  <span>界面汉化 · 配额监控与重置倒计时 · 多账号一键切换 · Token 消耗统计</span>
+  界面汉化 · 配额监控 · 多账号管理 · Token 用量统计
 </p>
 
 <p align="center">
-  <a href="https://github.com/Enzoo404/gravitybox/releases/latest"><img src="https://img.shields.io/github/v/release/Enzoo404/gravitybox?color=blue&style=flat-square" alt="Latest Release"></a>
-  <a href="https://github.com/Enzoo404/gravitybox/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Enzoo404/gravitybox/ci.yml?branch=main&style=flat-square&logo=github" alt="CI Status"></a>
-  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg?style=flat-square" alt="License"></a>
-  <img src="https://img.shields.io/badge/platform-macOS%2014%2B-lightgrey.svg?style=flat-square&logo=apple" alt="Platform">
-  <img src="https://img.shields.io/badge/arch-Apple%20Silicon-orange.svg?style=flat-square" alt="Arch">
+  <a href="https://github.com/Enzoo404/gravitybox/releases/latest"><img src="https://img.shields.io/github/v/release/Enzoo404/gravitybox?style=flat-square" alt="Release"></a>
+  <a href="https://github.com/Enzoo404/gravitybox/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Enzoo404/gravitybox/ci.yml?branch=main&style=flat-square&logo=github" alt="CI"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License"></a>
+  <img src="https://img.shields.io/badge/macOS-14%2B-lightgrey?style=flat-square&logo=apple" alt="macOS 14+">
+  <img src="https://img.shields.io/badge/Apple%20Silicon-arm64-orange?style=flat-square" alt="Apple Silicon">
 </p>
 
 ---
 
-## 项目背景
+## 简介
 
-在日常重度使用 **Google Antigravity** 进行开发时，常会遇到一些体验上的局限：
+GravityBox 是我为自己日常使用 [Google Antigravity](https://antigravity.google) 而开发的 macOS 应用。它由两部分组成：
 
-- **全英文界面**：官方未提供中文支持，对于习惯母语界面的开发者存在一定阅读负担；
-- **配额周期不透明**：Gemini 模型的 5 小时滑动窗口与每周限额容易混淆，难以准确预估恢复时间；
-- **多账号切换繁琐**：单账号配额耗尽后，需频繁在客户端登出并重新走网页 OAuth 授权流程；
-- **缺乏成本与用量统计**：各个会话与项目消耗了多少 Token、折合多少 API 费用，缺乏直观的统计视图。
+- **桌面主窗口**：总览、账号、用量、设置四个页面，集中管理账号、查看配额与 Token 用量；
+- **菜单栏卡片**：常驻菜单栏，无需切换窗口即可查看当前配额、切换账号、开关界面汉化。
 
-**GravityBox** 是一款采用 Swift / AppKit 开发的原生 macOS 应用，包含**独立桌面控制中心（主窗口）**与**常驻菜单栏快捷卡片**两种形态，旨在系统化解决上述问题，提供更专注、顺畅的开发体验。
+应用使用 Swift / AppKit 编写原生界面，后台由 TypeScript 服务提供账号、配额、用量分析与界面汉化能力，二者通过本地 Unix Domain Socket 通信。
 
----
+## 功能
 
-## 双形态交互设计
+### 界面汉化
+- 通过本地 Chrome DevTools Protocol 在运行时翻译 Antigravity 界面，**不修改、不解包、不重签名** Antigravity 应用本身；
+- 仅翻译菜单、按钮、设置项等界面文案；代码块、终端、聊天正文、未发送草稿、项目名与品牌名称均不处理；
+- 可随时在中文与官方原版英文之间切换，无需重启。
 
-- 🖥️ **原生桌面主窗口（控制中心）**：遵循 macOS 现代 Bento Grid 视觉规范，提供完整的账号资产看板、配额健康度透视、智能轮转阈值配置、Token 消耗统计及全局偏好设置；
-- 🎛️ **常驻菜单栏快捷卡片**：常驻于屏幕右上角菜单栏，在开发过程中无需离开代码编辑器，点击即可即时查看剩余配额与倒计时、快速切换账号或开关界面汉化。
+### 配额监控
+- 分别展示 Gemini 的 5 小时与每周额度，以及 Claude / GPT、Gemini 4 Argon 的额度，并显示距离重置的剩余时间；
+- 在主窗口与菜单栏卡片中同步呈现，可手动刷新。
 
----
+### 多账号管理
+- 保存多个 Google 账号，一键切换 Antigravity 当前登录的账号；
+- **智能切换**：当前账号剩余额度低于设定阈值时，自动切换到额度更充足的备用账号；
+- 登录凭据保存在 macOS 钥匙串中；切换过程可回滚，不会对原有数据做物理删除。
 
-## 核心特性
+### Token 用量统计
+- 读取本地会话数据，按会话与项目统计 Input / Output Token；
+- 内置各模型价格表，折算 API 费用；历史记录按事件发生时的价格计算。价格表可通过 `pricing-feed.json` 自定义。
 
-### 🇨🇳 界面汉化
-- **运行时无损汉化**：通过本地 CDP 调试通道在前端动态加载翻译，不解包、不修改客户端二进制或 ASAR 资源文件，官方客户端升级后依然兼容；
-- **严格的内容隔离**：仅汉化界面交互文案，**严格排除**代码编辑器、终端输出、聊天正文及专有名词，避免代码被误翻译干扰；
-- **随时无缝切换**：主窗口与菜单栏均支持一键即时切换中文与官方英文原版，无需重启应用。
+## 安装
 
-### ⏱️ 配额监控与重置倒计时
-- **双周期拆分呈现**：将 Gemini 模型的 5 小时短期限额与每周总额度独立展示，避免混淆；
-- **精准倒计时**：直观显示额度重置剩余时间（如「2 小时 15 分钟后重置」）；
-- **全模型覆盖**：额外支持 Gemini 4 Argon、Claude / GPT 限额独立查看，低配额状态智能提醒。
+**系统要求**：macOS 14 (Sonoma) 及以上，Apple Silicon；已安装 Google Antigravity（正式版或 Insiders）。
 
-### 🔄 多账号一键切换
-- **免密快速轮转**：支持预先配置多个 Google 账号，当前账号额度偏低时，在主窗口或菜单栏均可一键秒级切换至备用账号；
-- **系统钥匙串加密**：所有 OAuth 凭证均安全存储于 macOS Keychain，保证凭据安全；
-- **剩余配额对比**：清晰展示各账号额度状态与健康度，辅助决策最佳切换目标。
+1. 前往 [Releases](https://github.com/Enzoo404/gravitybox/releases/latest) 下载 `GravityBox-<version>-arm64.dmg`；
+2. 打开 DMG，将 `GravityBox.app` 拖入「应用程序」；
+3. 应用使用 ad-hoc 签名，未经 Apple 公证。如首次启动被系统拦截，请在终端执行：
 
-### 💰 Token 消耗与费用统计
-- **本地会话透视**：自动读取本地 SQLite 事务，按会话与项目分类统计 Input / Output Token；
-- **官方阶梯价格核算**：内置 2026 最新官方模型定价，核算实际 API 折合费用，历史事件按发生时的价格冻结对账。
-
-### ⚡️ 原生轻量与隐私安全
-- **Swift / AppKit 原生开发**：界面轻巧高效，内存占用极小，性能损耗近乎为零；
-- **100% 离线隐私**：所有数据均在本地处理，**无任何后台遥测、无数据埋点、不与任何外部第三方服务器通信**。
-
----
-
-## 架构概览
-
-GravityBox 采用松耦合的分层架构，Native GUI（主窗口与菜单栏）与本地核心服务通过 Unix Domain Socket 进行 IPC 通信：
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                  Native macOS GUI (AppKit)                  │
-│       MenuBar Card / Bento Dashboard / Preferences          │
-└──────────────────────────────┬──────────────────────────────┘
-                               │ IPC (Unix Domain Socket)
-┌──────────────────────────────▼──────────────────────────────┐
-│             GravityBox Core Backend (TypeScript)             │
-│  Account Manager · Quota Engine · SQLite Analyzer · CDP Hub │
-└──────────────┬───────────────────────────────┬──────────────┘
-               │ Local CDP                     │ macOS Keychain
-┌──────────────▼──────────────┐ ┌──────────────▼──────────────┐
-│     Antigravity Client      │ │       System Security       │
-│  (Target: Release/Insiders) │ │   Encrypted Token Storage   │
-└─────────────────────────────┘ └─────────────────────────────┘
-```
-
----
-
-## 下载与安装
-
-### 方式一：下载 DMG 安装包（推荐）
-
-1. 前往 [Releases 页面](https://github.com/Enzoo404/gravitybox/releases) 下载最新的 `GravityBox-1.0.0-arm64.dmg`。
-2. 双击打开，将 `GravityBox.app` 拖入「应用程序 (Applications)」文件夹。
-3. **首次启动说明**：
-   由于个人开源构建采用本地 Ad-hoc 签名（未购买 Apple 商业开发者证书公证），macOS Gatekeeper 安全机制可能会拦截并提示“无法打开”或“已损坏”。在终端中执行以下命令移除隔离属性即可正常启动：
    ```bash
    sudo xattr -rd com.apple.quarantine /Applications/GravityBox.app
    ```
 
-### 方式二：从源码编译构建
+## 配置
 
-**环境要求**：
-- macOS 14 (Sonoma) 或更高版本 (Apple Silicon `arm64`)
-- Node.js `>=22.15.0 <23`
-- Xcode Command Line Tools (`swiftc`)
+通过 Google 账号在线登录、刷新云端配额需要提供 OAuth 客户端凭据。复制 [`.env.example`](./.env.example) 为 `.env`，放置于项目根目录，或 `~/Library/Application Support/GravityBox/.env`（安装版读取此路径）：
 
 ```bash
-# 1. 克隆代码仓库
+GRAVITYBOX_GOOGLE_CLIENT_ID=your_client_id.apps.googleusercontent.com
+GRAVITYBOX_GOOGLE_CLIENT_SECRET=your_client_secret
+
+# 可选：自定义模型价格源
+# GRAVITYBOX_PRICING_FEED_URL=https://example.com/pricing-feed.json
+```
+
+## 架构
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                  Native macOS GUI (AppKit)                  │
+│          Main Window  ·  Menu Bar Card  ·  Settings         │
+└──────────────────────────────┬──────────────────────────────┘
+                               │ Unix Domain Socket
+┌──────────────────────────────▼──────────────────────────────┐
+│               Core Backend (TypeScript / Node)              │
+│   Accounts · Quota · Usage Analyzer · Localization (CDP)    │
+└──────────────┬───────────────────────────────┬──────────────┘
+               │ Local CDP                     │ Keychain
+┌──────────────▼──────────────┐ ┌──────────────▼──────────────┐
+│    Google Antigravity       │ │   macOS Keychain (tokens)   │
+└─────────────────────────────┘ └─────────────────────────────┘
+```
+
+## 隐私与网络
+
+- 不包含任何遥测、统计或数据上报；
+- 账号、用量等数据均在本机处理和存储；
+- 仅在以下场景访问网络：Google 官方接口（账号登录与配额查询）、GitHub（检查应用更新、获取默认价格表）。
+
+## 从源码构建
+
+需要 Node.js `>=22.15.0 <23` 与 Xcode Command Line Tools。
+
+```bash
 git clone https://github.com/Enzoo404/gravitybox.git
 cd gravitybox
 
-# 2. 安装依赖并检查环境
 npm ci
-npm run doctor
-
-# 3. 编译 TypeScript 与运行时文件
-npm run build
-
-# 4. 运行全量测试套件
-npm test
-
-# 5. 打包生成 DMG 安装镜像
-npm run package:mac
+npm run doctor      # 检查开发环境
+npm run build       # 编译
+npm test            # 单元与集成测试
+npm run verify      # 完整发布检查
+npm run package:mac # 生成 DMG
 ```
 
----
+## 参与贡献
 
-## 常见问题 (FAQ)
+欢迎提交 Issue 与 Pull Request，开始之前请阅读 [CONTRIBUTING.md](./CONTRIBUTING.md)。安全问题请按 [SECURITY.md](./SECURITY.md) 私下报告。
 
-**Q：使用多账号切换功能会有账号安全风险吗？**  
-A：不会。所有账号切换与登录均通过本机合法的官方 OAuth 流程进行，OAuth 凭据存储于 macOS 系统钥匙串（Keychain）中，工具不包含任何自动化刷量或异常请求行为。
+## 声明
 
-**Q：界面汉化是否会影响代码编写或补全？**  
-A：不会。汉化引擎针对 DOM 树进行了严格的内容隔离，代码编辑器、终端会话、模型回复正文及草稿输入框均处于保护名单内，仅对界面按钮与系统设置文案生效。
+GravityBox 是独立的第三方项目，与 Google、Anthropic、OpenAI、Apple 无隶属或合作关系。相关名称与商标归各自所有者所有，详见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)。
 
-**Q：GravityBox 会上传用户数据吗？**  
-A：不会。本项目完全开源，代码中不包含任何外部网络上传、埋点统计或分析 SDK，全部数据均在本地存储与处理。
+## 许可证
 
----
-
-## 开源许可与声明
-
-- 本项目采用 [MIT License](./LICENSE) 开源。
-- 详细第三方许可致谢与商标合理使用声明请参阅 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)。
+[MIT](./LICENSE) © Enzoo404

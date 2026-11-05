@@ -4,9 +4,9 @@ GravityBox 的应用逻辑、原生 macOS AppKit 界面与扩展引擎均为本�
 
 ## 1. 上游词典致谢 (Upstream Acknowledgments)
 
-本项目早期基础词典数据受到开源项目 [qqxpee/antigravity2-cn](https://github.com/qqxpee/antigravity2-cn) 的启发与帮助。在此向原作者及开源社区贡献者表达诚挚的感谢！
+本项目的基础词典参考了开源项目 [qqxpee/antigravity2-cn](https://github.com/qqxpee/antigravity2-cn)，感谢原作者及社区贡献者。
 
-在后续演进中，GravityBox 对词典进行了完整的体系化重构：建立按功能与版本分层的词典加载架构（`dict/`）、自研 AST 静态提取与动态插值模板引擎、以及基于官方发布包 SHA256 指纹严格校验的覆盖率门禁系统。
+GravityBox 的词典加载架构（`dict/`，按功能与版本分层）、文案提取与动态插值模板引擎，以及基于官方发布包 SHA256 指纹的覆盖率校验均为本项目独立实现。
 
 ## 2. 官方界面包与版权隔离 (Vendor Isolation)
 
