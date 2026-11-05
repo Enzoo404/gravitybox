@@ -108,7 +108,7 @@ export function allowedTarget(target: { type: string; url: string }, fixtureOrig
     const blockedPaths = /^\/(?:api|oauth|login|browser|preview)(?:\/|$)/i;
     const pathAllowed = !blockedPaths.test(url.pathname) && (
       url.pathname === '/' ||
-      /^\/(?:history|sidecars|customizations|settings|settings-standalone|terminal-standalone|new-project|onboarding|multi|artifact|s)(?:\/.*)?$/i.test(url.pathname) ||
+      /^\/(?:history|sidecars|customizations|automations|settings|settings-standalone|terminal-standalone|new-project|onboarding|multi|artifact|s)(?:\/.*)?$/i.test(url.pathname) ||
       /^\/c\/[0-9a-f-]{36}$/i.test(url.pathname) ||
       /^\/(?:forked|view|battle)\/.*$/i.test(url.pathname)
     );

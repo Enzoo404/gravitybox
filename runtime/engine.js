@@ -4,7 +4,7 @@
   const options = globalThis.__AGZH_BOOT__;
   if (!options || location.origin !== options.origin) return;
   if (options.path === '/fixture' && location.pathname !== '/fixture') return;
-  const allowedPath=location.pathname==='/'||/^\/(?:history|sidecars|customizations|settings|settings-standalone|terminal-standalone|new-project|onboarding|multi|artifact|s)(?:\/.*)?$/i.test(location.pathname)||/^\/c\/[0-9a-f-]{36}$/i.test(location.pathname)||/^\/(?:forked|view|battle)\/.*$/i.test(location.pathname)||(options.path==='/fixture'&&location.pathname==='/fixture');
+  const allowedPath=location.pathname==='/'||/^\/(?:history|sidecars|customizations|automations|settings|settings-standalone|terminal-standalone|new-project|onboarding|multi|artifact|s)(?:\/.*)?$/i.test(location.pathname)||/^\/c\/[0-9a-f-]{36}$/i.test(location.pathname)||/^\/(?:forked|view|battle)\/.*$/i.test(location.pathname)||(options.path==='/fixture'&&location.pathname==='/fixture');
   if(!allowedPath)return;
   if(options.conservative&&/^\/(?:onboarding|oauth|auth|login|sign-in)(?:\/|$)/i.test(location.pathname))return;
   // Recognize the actual system-settings shell, then admit only its content pane.
@@ -97,7 +97,7 @@
       /* A list row is data (user name); an option row is only a name inside an entity picker or a
          plain listbox. Options of a command menu (model picker, slash commands) are interface
          labels and stay translatable, which is what keeps real menus from being frozen. */
-      if (leaf.matches('[role="option"]')) return Boolean(leaf.closest(ENTITY_CONTAINER)) || Boolean(leaf.closest('[role="listbox"]') && !leaf.closest('[role="menu"],[role="dialog"]'));
+      if (leaf.matches('[role="option"]')) return Boolean(leaf.closest(ENTITY_CONTAINER));
       return true;
     }
     return false;
@@ -218,7 +218,7 @@
      (the controller calls it after navigatedWithinDocument) and by a light poll. Outside the list
      the engine suspends, restores every translation it owns to English and drops its queue; when
      the route comes back the document is rescanned and Chinese is re-applied. */
-  const ALLOWED_ROUTE = /^(?:\/|\/(?:history|sidecars|customizations|settings|settings-standalone|terminal-standalone|new-project|onboarding|multi|artifact|s)(?:\/.*)?|\/c\/[0-9a-f-]{36}|\/(?:forked|view|battle)\/.*)$/i;
+  const ALLOWED_ROUTE = /^(?:\/|\/(?:history|sidecars|customizations|automations|settings|settings-standalone|terminal-standalone|new-project|onboarding|multi|artifact|s)(?:\/.*)?|\/c\/[0-9a-f-]{36}|\/(?:forked|view|battle)\/.*)$/i;
   const RESTRICTED_ROUTE = /^\/(?:onboarding|oauth|auth|login|sign-in)(?:\/|$)/i;
   let routeExcluded = false;
   let routeTimer = null;
@@ -416,11 +416,12 @@
   const MODEL_GROUP_LABEL = /^Models within this group:\s*((?:(?:Gemini|Claude|GPT)[\w .,+()/-]{0,399})?)$/i;
   const MODEL_LIMIT_LABEL = /^\d+[smhd]\s+limit$/i;
   const MODEL_PERCENT_LEFT = /^(?:\d+%\s+)?left$/i;
+  const MODEL_RESET_LABEL = /^(?:(?:Weekly|Daily|\d+[smhd])\s+limit,\s*)?resets in (?:<1m|\d+[dhms](?:\s+\d+[dhms])*)$/i;
   function modelUiLabel(element) {
     if (!element || element.childElementCount || !element.closest('[role="menu"],[role="tooltip"],[data-testid="model-selector-panel"],[data-select-popup]')) return false;
     const original = nodeSlots.get(element.firstChild)?.get('')?.original ?? element.textContent ?? '';
     const value = normalize(original);
-    if (!MODEL_LABELS.has(value) && !MODEL_LIMIT_LABEL.test(value) && !MODEL_PERCENT_LEFT.test(value) && !MODEL_GROUP_LABEL.test(value) && !/^Resets in (?:<1m|\d+[dhms](?:\s+\d+[dhms])*)$/.test(value)) return false;
+    if (!MODEL_LABELS.has(value) && !MODEL_LIMIT_LABEL.test(value) && !MODEL_PERCENT_LEFT.test(value) && !MODEL_GROUP_LABEL.test(value) && !MODEL_RESET_LABEL.test(value)) return false;
     // Only fixed interface labels may cross model containers. Content, names and editors stay protected.
     return ancestors(element).every(el => !matches(el, PROTECTED) || (el.hasAttribute('data-testid') && /model/.test(el.getAttribute('data-testid')) && !matches(el, '[data-agzh-protect],[contenteditable],.model-item')));
   }
@@ -516,6 +517,22 @@
     {
       key: "Resets in {duration}", pattern: /^Resets in (<1m|\d+[dhms](?:\s+\d+[dhms])*)$/i,
       replace: (_, time) => time === '<1m' ? '将在 1 分钟内重置' : `${time.replace(/(\d+)d/g, '$1天').replace(/(\d+)h/g, '$1小时').replace(/(\d+)m/g, '$1分钟').replace(/(\d+)s/g, '$1秒')}后重置`
+    },
+    {
+      key: "{window} limit, resets in {duration}",
+      pattern: /^((?:\d+[smhd]|Weekly|Daily))\s+limit,\s*resets\s+in\s+(<1m|\d+[dhms](?:\s+\d+[dhms])*)$/i,
+      replace: (_, window, time) => {
+        let winText = window;
+        const wLower = window.toLowerCase();
+        if (wLower === 'weekly') winText = '每周';
+        else if (wLower === 'daily') winText = '每日';
+        else {
+          const m = window.match(/^(\d+)([smhd])$/i);
+          if (m) winText = `${m[1]}${{ s: '秒', m: '分钟', h: '小时', d: '天' }[m[2].toLowerCase()] || m[2]}`;
+        }
+        const timeText = time === '<1m' ? '将在 1 分钟内重置' : `${time.replace(/(\d+)d/g, '$1天').replace(/(\d+)h/g, '$1小时').replace(/(\d+)m/g, '$1分钟').replace(/(\d+)s/g, '$1秒')}后重置`;
+        return `${winText}限额，${timeText}`;
+      }
     },
     {
       key: "{window} limit",
@@ -1487,6 +1504,7 @@
           const key = known.get(original);
           if (key) record(key, current !== original && /[\u3400-\u9fff]/.test(current) ? 'verified' : 'untranslated', inferKind(el));
           else if (/^Resets in (?:<1m|\d+[dhms](?:\s+\d+[dhms])*)$/.test(original)) record('Resets in {duration}', current !== original ? 'verified' : 'untranslated', 'template');
+          else if (/^(?:(?:\d+[smhd]|Weekly|Daily))\s+limit,\s*resets\s+in\s+(?:<1m|\d+[dhms](?:\s+\d+[dhms])*)$/i.test(original)) record('{window} limit, resets in {duration}', current !== original ? 'verified' : 'untranslated', 'template');
           else if (isValidUiText(current)) unmatchedCount++;
         }
         for (const el of root.querySelectorAll('[title],[aria-label],[placeholder],[data-tooltip]')) {
