@@ -5,9 +5,9 @@
 <h1 align="center">GravityBox</h1>
 
 <p align="center">
-  为 Google Antigravity 打造的 macOS 原生伴侣应用
+  Google Antigravity 的 macOS 原生伴侣应用
   <br>
-  界面汉化 · 配额监控 · 多账号管理 · Token 用量统计
+  界面汉化 · 配额监控 · 多账号管理 · Token 用量与费用估算 · 缓存维护
 </p>
 
 <p align="center">
@@ -22,32 +22,55 @@
 
 ## 简介
 
-GravityBox 是我为自己日常使用 [Google Antigravity](https://antigravity.google) 而开发的 macOS 应用。它由两部分组成：
+GravityBox 是我为日常使用 [Google Antigravity](https://antigravity.google) 开发的 macOS 应用。它把使用 Antigravity 时需要反复查看、手动处理的几件事集中到一处：
 
-- **桌面主窗口**：总览、账号、用量、设置四个页面，集中管理账号、查看配额与 Token 用量；
-- **菜单栏卡片**：常驻菜单栏，无需切换窗口即可查看当前配额、切换账号、开关界面汉化。
+- 官方界面是英文，这里提供**界面汉化**；
+- 额度分散在不同模型和周期里，这里集中展示**配额与重置时间**；
+- 使用多个 Google 账号时，这里统一做**账号管理与切换**；
+- 想知道消耗了多少 Token、折合多少费用，这里提供**用量统计与费用估算**；
+- 应用缓存越积越多，这里可以**安全清理并随时还原**。
 
-应用使用 Swift / AppKit 编写原生界面，后台由 TypeScript 服务提供账号、配额、用量分析与界面汉化能力，二者通过本地 Unix Domain Socket 通信。
+应用有两种形态：
+
+- **主窗口**：总览、账号、用量、设置四个页面；
+- **菜单栏卡片**：用量、配额、账号三个标签，不离开当前窗口即可查看和操作。
+
+界面使用 Swift / AppKit 编写；后台由 TypeScript 服务负责账号、配额、用量分析与汉化，二者通过本地 Unix Domain Socket 通信。
 
 ## 功能
 
 ### 界面汉化
-- 通过本地 Chrome DevTools Protocol 在运行时翻译 Antigravity 界面，**不修改、不解包、不重签名** Antigravity 应用本身；
-- 仅翻译菜单、按钮、设置项等界面文案；代码块、终端、聊天正文、未发送草稿、项目名与品牌名称均不处理；
-- 可随时在中文与官方原版英文之间切换，无需重启。
+- 运行时翻译 Antigravity 的菜单、按钮、设置与提示文案，**不修改、不解包、不重签名** Antigravity 本身，Antigravity 更新后无需重新打补丁；
+- 代码块、终端、聊天正文、未发送的草稿、项目名与品牌名称不会被翻译；
+- 在菜单栏中一键开关，随时回到官方英文界面，无需重启；
+- 词典按功能与版本分层，可通过覆盖率检查发现未翻译的文案，欢迎提交补充。
 
 ### 配额监控
-- 分别展示 Gemini 的 5 小时与每周额度，以及 Claude / GPT、Gemini 4 Argon 的额度，并显示距离重置的剩余时间；
-- 在主窗口与菜单栏卡片中同步呈现，可手动刷新。
+- 按账号展示 Gemini 的 5 小时与每周额度、Claude / GPT 的 5 小时与每周额度，以及 Gemini 4 Argon 的每周额度，并显示距离重置的剩余时间；
+- 5 小时窗口与每周额度分别呈现，不会互相替代；缺少真实数据时明确标注，而不是估算；
+- 主窗口与菜单栏卡片同步展示，支持手动刷新。
 
 ### 多账号管理
-- 保存多个 Google 账号，一键切换 Antigravity 当前登录的账号；
-- **智能切换**：当前账号剩余额度低于设定阈值时，自动切换到额度更充足的备用账号；
-- 登录凭据保存在 macOS 钥匙串中；切换过程可回滚，不会对原有数据做物理删除。
+- 通过 Google 授权添加多个账号，账号卡片显示套餐（FREE / PRO / ULTRA）、当前账号标记与各自配额；
+- 一键切换 Antigravity 当前使用的账号。切换前需要你先保存工作并退出 Antigravity，GravityBox 不会替你结束或重启它；
+- **智能切换**：当前账号剩余额度低于设定阈值时，按优先级或轮询策略推荐最合适的备用账号，由你确认后执行；
+- 每次切换都会记录恢复点，出现异常可一键恢复原账号；
+- 登录凭据保存在 macOS 钥匙串；账号可导出为脱敏摘要（不含凭据），或包含凭据的备份文件（需自行妥善保管）。
 
-### Token 用量统计
-- 读取本地会话数据，按会话与项目统计 Input / Output Token；
-- 内置各模型价格表，折算 API 费用；历史记录按事件发生时的价格计算。价格表可通过 `pricing-feed.json` 自定义。
+### 用量与费用估算
+- 读取本机的会话数据，按时间范围统计请求数，以及输入、缓存读取、缓存写入、输出各类 Token，并给出缓存命中率；
+- 按模型展示 Token 占比，总览页展示当日的用量、请求数、时段消耗与费用估算；
+- 内置模型价格表，支持限时价格与标准价格的生效时间段，历史记录按当时的价格计算；没有价格的模型仍会统计 Token 与请求数；
+- 价格表可通过 `pricing-feed.json` 自定义。费用为按公开价格的估算值，不代表实际账单。
+
+### 缓存维护
+- 扫描 Antigravity 的应用缓存与着色器缓存，按影响程度分为“可安全清理”与“含登录状态、需谨慎”两类，后者默认不勾选；
+- 清理时文件移入系统废纸篓，并生成恢复点，可在应用内一键原位还原；账号登录状态与历史对话不受影响。
+
+### 其他
+- 支持 Antigravity 正式版与 Insiders，两者的账号、配额与用量分别计量；
+- 可设置登录 macOS 时自动启动；
+- 可选的自动更新：开启后定期检查 GitHub Release，有新版本时提醒升级。
 
 ## 安装
 
@@ -61,9 +84,18 @@ GravityBox 是我为自己日常使用 [Google Antigravity](https://antigravity.
    sudo xattr -rd com.apple.quarantine /Applications/GravityBox.app
    ```
 
+## 使用
+
+1. 启动 GravityBox，菜单栏出现图标，点击即可打开卡片；
+2. 在「账号」中添加 Google 账号（需先完成下方的[配置](#配置)），之后即可查看各账号配额并切换；
+3. 在菜单栏菜单中开启「界面汉化」，Antigravity 界面随即显示为中文；
+4. 在「用量」中查看 Token 与费用，在「设置」中管理开机启动、自动更新与缓存清理。
+
+汉化词典已针对 Antigravity 2.23.0、2.23.1、2.24.0、2.26.0、2.27.0、2.28.0 做过覆盖率校验。其他版本也可使用，但新增文案可能暂未翻译。
+
 ## 配置
 
-通过 Google 账号在线登录、刷新云端配额需要提供 OAuth 客户端凭据。复制 [`.env.example`](./.env.example) 为 `.env`，放置于项目根目录，或 `~/Library/Application Support/GravityBox/.env`（安装版读取此路径）：
+通过 Google 账号在线登录并刷新云端配额，需要提供 OAuth 客户端凭据。复制 [`.env.example`](./.env.example) 为 `.env`，放在项目根目录，或 `~/Library/Application Support/GravityBox/.env`（安装版读取此路径）：
 
 ```bash
 GRAVITYBOX_GOOGLE_CLIENT_ID=your_client_id.apps.googleusercontent.com
@@ -73,7 +105,7 @@ GRAVITYBOX_GOOGLE_CLIENT_SECRET=your_client_secret
 # GRAVITYBOX_PRICING_FEED_URL=https://example.com/pricing-feed.json
 ```
 
-## 架构
+## 工作原理
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -91,11 +123,22 @@ GRAVITYBOX_GOOGLE_CLIENT_SECRET=your_client_secret
 └─────────────────────────────┘ └─────────────────────────────┘
 ```
 
+- **汉化**：通过本地 Chrome DevTools Protocol 连接 Antigravity 页面，在运行时替换界面文案，仅作用于本机回环地址；
+- **用量**：以只读方式读取 Antigravity 本地的会话数据库，不会写入或阻塞 Antigravity；
+- **账号切换**：先预览、再写入，过程分阶段进行并保留恢复点，失败时自动回滚。
+
 ## 隐私与网络
 
 - 不包含任何遥测、统计或数据上报；
-- 账号、用量等数据均在本机处理和存储；
-- 仅在以下场景访问网络：Google 官方接口（账号登录与配额查询）、GitHub（检查应用更新、获取默认价格表）。
+- 账号、用量等数据均在本机处理和存储，登录凭据存放于 macOS 钥匙串；
+- 仅在以下场景访问网络：Google 官方接口（账号授权与配额查询）、GitHub（检查应用更新、获取默认价格表）。
+
+## 已知限制
+
+- 应用未经 Apple 公证，首次启动需要手动放行（见[安装](#安装)）；
+- 目前只提供 Apple Silicon 的安装包；
+- 配额查询使用的是 Antigravity 自身所用的 Google 接口，该接口未公开，可能随官方更新而变化；
+- 费用是基于价格表的估算值。
 
 ## 从源码构建
 
@@ -115,7 +158,7 @@ npm run package:mac # 生成 DMG
 
 ## 参与贡献
 
-欢迎提交 Issue 与 Pull Request，开始之前请阅读 [CONTRIBUTING.md](./CONTRIBUTING.md)。安全问题请按 [SECURITY.md](./SECURITY.md) 私下报告。
+欢迎提交 Issue 与 Pull Request，开始之前请阅读 [CONTRIBUTING.md](./CONTRIBUTING.md)。汉化词条的补充与修正同样欢迎。安全问题请按 [SECURITY.md](./SECURITY.md) 私下报告。
 
 ## 声明
 
