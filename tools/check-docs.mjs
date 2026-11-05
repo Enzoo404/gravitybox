@@ -145,7 +145,7 @@ export async function checkDocs({
     }
   };
 
-  await checkDocFile('AGENTS.md', agentsPath);
+  if (existsSync(agentsPath)) await checkDocFile('AGENTS.md', agentsPath);
   await checkDocFile('README.md', readmePath);
 
   const errors = issues.filter(issue => issue.level === 'error').length;

@@ -115,10 +115,9 @@ test('A18: 历史切号归档深度不可逆脱敏，杜绝 Base64/Protobuf 凭�
   }
 });
 
-test('A20: 构建元数据注入 revision，关于窗口动态展示修订号，AGENTS 对齐真实边界', async () => {
+test('A20: 构建元数据注入 revision，关于窗口动态展示修订号', async () => {
   const pkgScript = await readFile(join(root, 'tools/package-mac.mjs'), 'utf8');
   const assistantSrc = await readFile(join(root, 'native/Assistant.swift'), 'utf8');
-  const agentsDoc = await readFile(join(root, 'AGENTS.md'), 'utf8');
 
   // 1. 打包脚本通过共享构造器注入 revision；检查实际输出，避免把实现位置写死在脚本内。
   const { buildInfoPayload } = await import('../tools/release-scope.mjs');
@@ -136,8 +135,4 @@ test('A20: 构建元数据注入 revision，关于窗口动态展示修订号，
   assert.match(assistantSrc, /info\["revision"\] as\? String/, 'Assistant.about 必须从 build-info 提取 revision');
   assert.match(assistantSrc, /buildStr = buildStr.isEmpty/ , '关于弹窗必须拼接展示 revision');
 
-  // 3. AGENTS 文档对齐真实边界，无虚构承诺
-  assert.doesNotMatch(agentsDoc, /从单点汉化跃迁为六大核心模块.*双窗口低额度轮换.*四端登录态同步/, '不得保留旧版虚构的自动轮换与四端同步完成承诺');
-  assert.match(agentsDoc, /智能备用账号推荐策略/, '必须准确描述为智能备用账号推荐策略');
-  assert.match(agentsDoc, /2026-10-19 全量产品审计 20 项问题（A01~A20）系统性重构整改/, '必须记录 2026-10-19 审计整改记录');
 });

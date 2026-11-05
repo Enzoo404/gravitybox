@@ -24,3 +24,6 @@
 /assets/master-1024.svg
 /assets/icons/*
 !/assets/icons/menu-connected.png
+
+# Local assistant instructions
+/AGENTS.md
