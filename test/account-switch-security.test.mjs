@@ -138,9 +138,9 @@ test('S3 切号事务: 从带有企业项目偏好的账号切换至个人账号
     // 预先在数据库中插入包含企业项目行的 ItemTable 数据
     await run('/usr/bin/sqlite3', [env.db, `INSERT INTO ItemTable VALUES('antigravityUnifiedStateSync.enterprisePreferences','old-enterprise-proj');`]);
 
-    const personalAcc = await env.manager.upsertAccount(makeAccount('pers-1', 'myuser@gmail.com', { projectId: null }));
+    const personalAcc = await env.manager.upsertAccount(makeAccount('pers-1', 'myuser@example.test', { projectId: null }));
     await writeFile(join(env.externalDir, 'accounts.json'), JSON.stringify({
-      accounts: [{ id: 'ext-p1', email: 'myuser@gmail.com' }],
+      accounts: [{ id: 'ext-p1', email: 'myuser@example.test' }],
       current_account_id: 'ext-p1',
     }));
 
@@ -154,7 +154,7 @@ test('S3 切号事务: 从带有企业项目偏好的账号切换至个人账号
 
     // 切换至无 project_id 的个人账号，必须成功并且把数据库中的企业项目偏好删除
     const switchRes = await service.switchAccount(personalAcc.id);
-    assert.equal(switchRes.switchedTo, 'myuser@gmail.com');
+    assert.equal(switchRes.switchedTo, 'myuser@example.test');
 
     const raw = (await run('/usr/bin/sqlite3', ['-json', env.db, "SELECT key,value FROM ItemTable WHERE key='antigravityUnifiedStateSync.enterprisePreferences';"])).stdout.trim();
     const dbRows = raw ? JSON.parse(raw) : [];

@@ -121,6 +121,8 @@ npm run package:mac # 生成 DMG
 
 GravityBox 是独立的第三方项目，与 Google、Anthropic、OpenAI、Apple 无隶属或合作关系。相关名称与商标归各自所有者所有，详见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)。
 
+使用本项目前，请自行确认符合 Google Antigravity 及相关服务的使用条款，使用风险由使用者自行承担。
+
 ## 许可证
 
 [MIT](./LICENSE) © Enzoo404
