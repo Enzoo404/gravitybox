@@ -52,7 +52,7 @@ GravityBox 是我为日常使用 [Google Antigravity](https://antigravity.google
 
 ### 多账号管理
 - 通过 Google 授权添加多个账号，账号卡片显示套餐（FREE / PRO / ULTRA）、当前账号标记与各自配额；
-- 一键切换 Antigravity 当前使用的账号。切换前需要你先保存工作并退出 Antigravity，GravityBox 不会替你结束或重启它；
+- 一键切换 Antigravity 当前使用的账号。切换时会弹出确认框，确认后 GravityBox 会先退出 Antigravity、完成切换，再重新打开它，请提前保存好工作；
 - **智能切换**：当前账号剩余额度低于设定阈值时，按优先级或轮询策略推荐最合适的备用账号，由你确认后执行；
 - 每次切换都会记录恢复点，出现异常可一键恢复原账号；
 - 登录凭据保存在 macOS 钥匙串；账号可导出为脱敏摘要（不含凭据），或包含凭据的备份文件（需自行妥善保管）。

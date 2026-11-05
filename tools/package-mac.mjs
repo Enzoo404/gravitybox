@@ -38,7 +38,7 @@ async function main() {
   await copyFile(join(root,'assets/model-catalog.json'),join(resources,'core/assets/model-catalog.json'));
   await copyFile(join(root,'assets/model-catalog.json'),join(resources,'model-catalog.json'));
   await cp(join(root, 'dict'), join(resources, 'core/dict'), { recursive: true, filter: source => includeDictionaryPath(join('dict', relative(join(root, 'dict'), source))) }); await writeFile(join(resources, 'core/package.json'), '{"type":"module"}\n');
-  for (const [from, to] of [['README.md', '使用说明.md'], ['THIRD_PARTY_NOTICES.md', 'THIRD_PARTY_NOTICES.md'], ['assets/AppIcon.icns', 'AppIcon.icns']]) await copyFile(join(root, from), join(resources, to));
+  for (const [from, to] of [['THIRD_PARTY_NOTICES.md', 'THIRD_PARTY_NOTICES.md'], ['assets/AppIcon.icns', 'AppIcon.icns']]) await copyFile(join(root, from), join(resources, to));
   const build = version.split('.').map(Number).reduce((a, n) => a * 100 + n, 0);
   await writeFile(join(app, 'Contents/Info.plist'), `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict>
 <key>CFBundleExecutable</key><string>GravityBox</string><key>CFBundleIdentifier</key><string>local.gravitybox.app</string><key>CFBundleName</key><string>GravityBox</string><key>CFBundleDisplayName</key><string>GravityBox</string><key>CFBundleIconFile</key><string>AppIcon</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleShortVersionString</key><string>${version}</string><key>CFBundleVersion</key><string>${build}</string><key>LSMinimumSystemVersion</key><string>14.0</string><key>LSUIElement</key><true/><key>NSHighResolutionCapable</key><true/></dict></plist>`);
@@ -47,7 +47,7 @@ async function main() {
   await copyFile(nativeBinary, join(app, 'Contents/MacOS/GravityBox'));
   await writeFile(join(resources, 'build-info.json'), JSON.stringify(buildInfoPayload({ version, build, verification, scope, node: process.versions.node }), null, 2));
   await run('/usr/bin/codesign', ['--force', '--deep', '--sign', '-', '--timestamp=none', app]); await run('/usr/bin/codesign', ['--verify', '--deep', '--strict', app]);
-  await run('/bin/ln', ['-s', '/Applications', join(stage, 'Applications')]); await copyFile(join(root, 'README.md'), join(stage, '安装与使用说明.md'));
+  await run('/bin/ln', ['-s', '/Applications', join(stage, 'Applications')]);
   const dmg = join(output, `GravityBox-${version}-arm64.dmg`); await run('/usr/bin/hdiutil', ['create', '-ov', '-volname', 'GravityBox', '-srcfolder', stage, '-format', 'ULFO', dmg], { maxBuffer: 2e6 }); await run('/usr/bin/hdiutil', ['verify', dmg], { maxBuffer: 2e6 });
   // hdiutil 校验通过后生成并复核 sidecar（与 `shasum -a 256` 完全一致，覆盖旧文件）；复核失败立即中止，避免发布不可校验的包。
   const sidecar = await writeSha256Sidecar(dmg); const sidecarCheck = await verifySha256Sidecar(dmg); if (sidecarCheck.hash !== sidecar.hash) throw new Error('DMG sha256 校验文件写入后复核不一致，已中止发布');
