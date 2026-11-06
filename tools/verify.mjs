@@ -28,7 +28,9 @@ async function main() {
       const result = await run(binary, args, { cwd: root, maxBuffer: 4e6 });
       await writeFile(join(out, `${name}.log`), result.stdout + result.stderr);
     } catch (error) {
-      await writeFile(join(out, `${name}.log`), String(error.stdout ?? '') + String(error.stderr ?? ''));
+      const detail = String(error.stdout ?? '') + String(error.stderr ?? '');
+      await writeFile(join(out, `${name}.log`), detail);
+      if (detail.trim()) process.stderr.write(`\n--- [${name} 错误详情] ---\n${detail}\n------------------------\n`);
       throw new Error(`${name} 未通过，见质检报告`);
     }
   }

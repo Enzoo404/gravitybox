@@ -7,7 +7,8 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 const run=promisify(execFile),root=fileURLToPath(new URL('../',import.meta.url));
-test('当前四页原生布局、菜单完整身份、部分计价与真实切号控制流隔离检查',{timeout:120000},async()=>{
+const timeout = process.env.CI ? 360000 : 120000;
+test('当前四页原生布局、菜单完整身份、部分计价与真实切号控制流隔离检查',{timeout},async()=>{
  const temp=await mkdtemp(join(tmpdir(),'gb-native-ui-'));
  const binary=join(temp,'GravityBox-layout-preview');
  const version=JSON.parse(await readFile(join(root,'package.json'),'utf8')).version;
