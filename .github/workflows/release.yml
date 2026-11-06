@@ -1,0 +1,95 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      backfill_tag:
+        description: '仅补齐已有 Release 的 .dmg.sha256 校验文件（如 v1.0.0；留空则对当前标签执行完整构建发版）'
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  backfill-sha256:
+    name: Backfill Release SHA-256 Sidecar
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.backfill_tag != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TARGET_TAG: ${{ inputs.backfill_tag }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Download DMG, Generate .dmg.sha256 & Upload to Release
+        run: |
+          mkdir -p /tmp/release-assets
+          gh release download "$TARGET_TAG" --pattern "*.dmg" --dir /tmp/release-assets --clobber
+          DMG_PATH=$(find /tmp/release-assets -maxdepth 1 -name "*.dmg" | head -n 1)
+          if [ -z "$DMG_PATH" ]; then
+            echo "未在 Release $TARGET_TAG 中找到 .dmg 文件" >&2
+            exit 1
+          fi
+          node -e '
+            import("./tools/release-integrity.mjs").then(async m => {
+              const dmg = process.argv[1];
+              const res = await m.writeSha256Sidecar(dmg);
+              const check = await m.verifySha256Sidecar(dmg);
+              console.log("Generated & verified sidecar:", check.sidecarPath, check.hash);
+            });
+          ' "$DMG_PATH"
+          gh release upload "$TARGET_TAG" "${DMG_PATH}.sha256" --clobber
+
+  build-and-release:
+    name: Package & Publish macOS DMG
+    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.backfill_tag == '') }}
+    runs-on: macos-latest
+    timeout-minutes: 25
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Check Development Environment
+        run: npm run doctor
+
+      - name: Verify & Package DMG
+        run: |
+          node tools/verify.mjs --no-vendor
+          node tools/package-mac.mjs
+
+      - name: Upload DMG & SHA-256 Sidecar to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" 成品/*.dmg 成品/*.dmg.sha256 --clobber
+          else
+            gh release create "$TAG" 成品/*.dmg 成品/*.dmg.sha256 --title "GravityBox $TAG" --generate-notes
+          fi

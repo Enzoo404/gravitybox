@@ -1,0 +1,32 @@
+name: 💡 功能建议 (Feature Request)
+description: 为 GravityBox 提出新的功能构想、汉化词条补充或交互体验改进建议
+title: "[FEAT] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        欢迎为 GravityBox 提出想法或改进建议！
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 需求背景与痛点 (Problem / Context)
+      description: 描述你在日常使用 Antigravity 或 GravityBox 时遇到的不便或缺失场景。
+      placeholder: 例如：希望在菜单栏面板中直接看到...
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: 建议方案 (Proposed Solution)
+      description: 清晰描述你期望新增的功能、交互方式或词条译文建议。
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 备选方案或补充参考 (Alternatives / Additional Context)
+      description: 如有相关的草图、参考界面或其他技术思路，可在此补充。

@@ -1,0 +1,83 @@
+name: 🐛 Bug 报告 (Bug Report)
+description: 报告 GravityBox 运行中的错误、异常行为或界面汉化遗漏
+title: "[BUG] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢你反馈问题！请尽量完整填写以下信息，帮助我们快速定位与复现。
+        > 🔒 **安全提醒**：请切勿在 Issue 中粘贴任何真实的 Google OAuth Token、Refresh Token、钥匙串导出内容或未脱敏的私人邮箱。
+
+  - type: textarea
+    id: description
+    attributes:
+      label: 问题描述 (Bug Description)
+      description: 清晰且简要地描述你遇到的问题或异常现象。
+      placeholder: 例如：在开启界面汉化后，某个特定弹窗的按钮未翻译 / 切换账号时提示...
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤 (Steps to Reproduce)
+      description: 请列出触发该问题的具体操作步骤。
+      value: |
+        1. 打开 GravityBox 并进入 '...'
+        2. 点击或执行 '...'
+        3. 观察到异常现象 '...'
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期行为 (Expected Behavior)
+      description: 描述你期望出现的正常行为。
+    validations:
+      required: true
+
+  - type: input
+    id: gravitybox-version
+    attributes:
+      label: GravityBox 版本
+      description: 你当前使用的 GravityBox 版本号（可在「设置 -> 关于」中查看）。
+      placeholder: "例如：1.0.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: antigravity-channel
+    attributes:
+      label: Google Antigravity 版本通道
+      description: 你正在使用的目标应用通道及版本。
+      options:
+        - 正式版 (Stable - 2.28.0)
+        - 正式版 (Stable - 2.24.0 ~ 2.27.0)
+        - 正式版 (Stable - 其他版本)
+        - Insiders 预览版
+    validations:
+      required: true
+
+  - type: input
+    id: macos-version
+    attributes:
+      label: macOS 系统与芯片型号
+      placeholder: "例如：macOS 15.1 Sequoia (Apple M3 Pro)"
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 截图或脱敏日志 (Screenshots / Logs)
+      description: 如有相关界面截图或错误日志，请粘贴或拖拽上传至此。
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我已确认上述内容与截图中不包含任何敏感凭据、密钥或个人隐私信息
+          required: true
