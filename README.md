@@ -192,7 +192,7 @@ npm run package:mac
 
 ## 参与贡献
 
-欢迎提交 Issue 反馈问题或发起 Pull Request 参与改进，也欢迎补充和修正 `dict/` 下的汉化词条。提交代码前请先阅读 [CONTRIBUTING.md](./CONTRIBUTING.md)。如发现安全或隐私相关隐患，请勿公开提交 Issue，请按 [SECURITY.md](./SECURITY.md) 中的说明私下联系。
+欢迎提交 Issue 反馈问题或发起 Pull Request 参与改进，也欢迎补充和修正 `dict/` 下的汉化词条。提交代码前请先阅读 [CONTRIBUTING.md](./CONTRIBUTING.md) 与 [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md)，版本变更记录详见 [CHANGELOG.md](./CHANGELOG.md)。如发现安全或隐私相关隐患，请勿公开提交 Issue，请按 [SECURITY.md](./SECURITY.md) 中的说明私下联系。
 
 ---
 

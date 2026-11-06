@@ -4,6 +4,8 @@
 
 GravityBox 致力于为 macOS 用户提供优雅、原生且注重隐私安全的 Antigravity 辅助工具箱。无论你是提交 Bug 报告、提出功能建议、改进词典质量，还是编写代码，我们都非常欢迎你的贡献。
 
+参与本项目即表示你同意遵守我们的 [贡献者行为准则 (CODE_OF_CONDUCT.md)](./CODE_OF_CONDUCT.md)。如发现安全或隐私漏洞，请勿公开提交 Issue，请按 [安全策略 (SECURITY.md)](./SECURITY.md) 私下提报。
+
 ---
 
 ## 目录

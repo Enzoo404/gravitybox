@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 🔒 报告安全或隐私漏洞 (Security Vulnerability)
+    url: https://github.com/Enzoo404/gravitybox/security/advisories/new
+    about: 请勿在公开 Issue 中报告安全隐患，请通过私密安全公告通道提交（详见 SECURITY.md）
+  - name: 📖 使用文档与常见问题 (Documentation & Guide)
+    url: https://github.com/Enzoo404/gravitybox#readme
+    about: 提交问题前，建议先查阅 README 中的安装说明、可选配置与已知限制
