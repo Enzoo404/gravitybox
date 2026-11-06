@@ -268,7 +268,7 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             button.image = baseIcon
         }
 
-        let targetAlpha: CGFloat = !reachable ? 0.50 : (statusValue.mode == "paused" ? 0.68 : 1.0)
+        let targetAlpha: CGFloat = reachable ? 1.0 : 0.50
         #if NATIVE_UI_TEST
         button.alphaValue = targetAlpha
         #else

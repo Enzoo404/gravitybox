@@ -441,6 +441,12 @@ import Cocoa
         assistant.updateStatusItemState(buttonOverride: statusButton)
         check(statusButton.image === baseIcon, "Status item image must be baseMenuConnectedIcon")
         check(statusButton.image?.isTemplate == true, "Status item image must remain template without warning dot")
+        check(statusButton.alphaValue == 1.0, "Connected status icon must maintain full opacity (1.0)")
+        let pausedStatus: [String: Any] = ["mode": "paused", "windows": 1, "entries": 4300, "appVersion": "2.25.0", "liveAccountEmail": "alex@example.invalid", "activeAccountEmail": "alex@example.invalid", "accountsRevision": "fixture", "pid": -1]
+        assistant.statusValue = LiveStatus(pausedStatus)
+        assistant.updateStatusItemState(buttonOverride: statusButton)
+        check(statusButton.alphaValue == 1.0, "Pausing translation must not reduce menu bar icon opacity")
+        assistant.statusValue = LiveStatus(status)
 
         DesktopApplicationTarget.installedChannelsOverride = ["stable", "insiders"]
         Assistant.applicationChannel = "insiders"
