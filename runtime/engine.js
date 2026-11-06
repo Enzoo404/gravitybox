@@ -1484,11 +1484,11 @@
       refreshProjectNames(scan);
       const record = (key, state, kind) => { if (observations.get(key)?.state !== 'untranslated') observations.set(key, { key, state, kind }); };
       auditRoots: for (const root of observed) {
-        if (performance.now()-auditStarted>12) {truncated=true;break;}
+        if (performance.now()-auditStarted>80) {truncated=true;break;}
         if (root !== document && !root.host?.isConnected) continue;
         const walker = document.createTreeWalker(root === document ? (document.body || document.documentElement) : root, NodeFilter.SHOW_TEXT);
         while (walker.nextNode()) {
-          if (++visited > 50000 || performance.now()-auditStarted>12) { truncated = true; break auditRoots; }
+          if (++visited > 50000 || performance.now()-auditStarted>80) { truncated = true; break auditRoots; }
           const node = walker.currentNode, el = node.parentElement;
           if (!el || !node.textContent?.trim()) continue;
           if (blocked(el, scan)) { protectedCount++; continue; }
@@ -1503,12 +1503,13 @@
           }
           const key = known.get(original);
           if (key) record(key, current !== original && /[\u3400-\u9fff]/.test(current) ? 'verified' : 'untranslated', inferKind(el));
+          else if (/^Worked for\s+(\d+.*)$/i.test(original)) record('Worked for {duration}', current !== original && /[\u3400-\u9fff]/.test(current) ? 'verified' : 'untranslated', 'template');
           else if (/^Resets in (?:<1m|\d+[dhms](?:\s+\d+[dhms])*)$/.test(original)) record('Resets in {duration}', current !== original ? 'verified' : 'untranslated', 'template');
           else if (/^(?:(?:\d+[smhd]|Weekly|Daily))\s+limit,\s*resets\s+in\s+(?:<1m|\d+[dhms](?:\s+\d+[dhms])*)$/i.test(original)) record('{window} limit, resets in {duration}', current !== original ? 'verified' : 'untranslated', 'template');
           else if (isValidUiText(current)) unmatchedCount++;
         }
         for (const el of root.querySelectorAll('[title],[aria-label],[placeholder],[data-tooltip]')) {
-          if (++visited > 50000 || performance.now()-auditStarted>12) { truncated = true; break auditRoots; }
+          if (++visited > 50000 || performance.now()-auditStarted>80) { truncated = true; break auditRoots; }
           if (!visibleUi(el)) continue;
           for (const attr of TRANSLATABLE_ATTRS) {
             if (!el.hasAttribute(attr) || !attributeAllowed(el,attr,scan)) continue;
