@@ -216,8 +216,51 @@ final class AppUpdateManager {
         #endif
     }
 
+    static func formatReleaseNotes(_ raw: String) -> String {
+        let normalized = raw.replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+        var outputLines: [String] = []
+        var inCodeBlock = false
+        for rawLine in normalized.components(separatedBy: "\n") {
+            let trimmed = rawLine.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("```") {
+                inCodeBlock.toggle()
+                continue
+            }
+            if inCodeBlock {
+                outputLines.append("  " + rawLine)
+                continue
+            }
+            var line = rawLine
+            if trimmed.hasPrefix("### ") {
+                line = String(trimmed.dropFirst(4)).trimmingCharacters(in: .whitespaces)
+            } else if trimmed.hasPrefix("## ") {
+                line = String(trimmed.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+            } else if trimmed.hasPrefix("# ") {
+                line = String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+            } else if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") {
+                line = "• " + String(trimmed.dropFirst(2))
+            }
+            line = line.replacingOccurrences(of: "**", with: "")
+                .replacingOccurrences(of: "`", with: "")
+            outputLines.append(line)
+        }
+        var result = outputLines.joined(separator: "\n")
+        while result.contains("\n\n\n") {
+            result = result.replacingOccurrences(of: "\n\n\n", with: "\n\n")
+        }
+        result = result.trimmingCharacters(in: .whitespacesAndNewlines)
+        return result.isEmpty ? "• 包含稳定性提升与细节体验优化。" : result
+    }
+
     private func cachedDMGPath(for version: String) -> URL {
         app.state.appendingPathComponent("updates/v\(version)/GravityBox-\(version)-arm64.dmg")
+    }
+
+    private static func configureSilentProcess(_ proc: Process) {
+        proc.standardInput = FileHandle.nullDevice
+        proc.standardOutput = FileHandle.nullDevice
+        proc.standardError = FileHandle.nullDevice
     }
 
     func preDownloadRelease(_ release: AppReleaseInfo, silent: Bool, completion: ((Result<URL, Error>) -> Void)? = nil) {
@@ -264,6 +307,7 @@ final class AppUpdateManager {
                 let verifyProc = Process()
                 verifyProc.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
                 verifyProc.arguments = ["verify", "-quiet", tempDMG.path]
+                Self.configureSilentProcess(verifyProc)
                 try verifyProc.run()
                 verifyProc.waitUntilExit()
                 guard verifyProc.terminationStatus == 0 else {
@@ -307,6 +351,43 @@ final class AppUpdateManager {
         }
     }
 
+    static func resolveInstallTargetAppPath(bundleURL: URL = Bundle.main.bundleURL) -> String {
+        let bundlePath = bundleURL.standardizedFileURL.path
+        if bundlePath.hasSuffix(".app"),
+           !bundlePath.hasPrefix("/Volumes/"),
+           !bundlePath.contains("/build/dmg-stage/"),
+           FileManager.default.isWritableFile(atPath: (bundlePath as NSString).deletingLastPathComponent) {
+            return bundlePath
+        }
+        return "/Applications/GravityBox.app"
+    }
+
+    static func buildDetachedUpdaterScript(myPid: Int32, stagedAppPath: String, targetAppPath: String, workDirPath: String) -> String {
+        return """
+        nohup /bin/sh -c '
+        trap "" HUP TERM INT QUIT PIPE
+        i=0
+        while kill -0 \(myPid) 2>/dev/null && [ $i -lt 25 ]; do
+          sleep 0.2
+          i=$((i + 1))
+        done
+        if kill -0 \(myPid) 2>/dev/null; then
+          kill -9 \(myPid) 2>/dev/null || true
+          sleep 0.2
+        fi
+        pkill -f "GravityBox.app/Contents/MacOS/GravityBox --lifecycle-agent" 2>/dev/null || true
+        if rm -rf "\(targetAppPath)" && mv "\(stagedAppPath)" "\(targetAppPath)"; then
+          /usr/bin/xattr -dr com.apple.quarantine "\(targetAppPath)" 2>/dev/null || true
+        else
+          /usr/bin/ditto "\(stagedAppPath)" "\(targetAppPath)" 2>/dev/null || true
+          /usr/bin/xattr -dr com.apple.quarantine "\(targetAppPath)" 2>/dev/null || true
+        fi
+        rm -rf "\(workDirPath)" 2>/dev/null || true
+        /usr/bin/open -n "\(targetAppPath)" --args --restarted-after-update >/dev/null 2>&1 || /usr/bin/open "\(targetAppPath)" >/dev/null 2>&1
+        ' >/dev/null 2>&1 &
+        """
+    }
+
     private func executeInstall(release: AppReleaseInfo, dmgFile: URL) {
         transition(.installing(release))
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -320,21 +401,25 @@ final class AppUpdateManager {
                 let attach = Process()
                 attach.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
                 attach.arguments = ["attach", "-nobrowse", "-readonly", "-quiet", "-mountpoint", mountDir.path, dmgFile.path]
+                Self.configureSilentProcess(attach)
                 try attach.run()
                 attach.waitUntilExit()
                 guard attach.terminationStatus == 0 else {
-                    throw NSError(domain: "GravityBoxUpdate", code: 4, userInfo: [NSLocalizedDescriptionKey: "无法挂载更新镜像。"])
+                    try? fm.removeItem(at: dmgFile)
+                    throw NSError(domain: "GravityBoxUpdate", code: 4, userInfo: [NSLocalizedDescriptionKey: "无法挂载更新镜像，已清理缓存文件，请点击重试。"])
                 }
                 defer {
                     let detach = Process()
                     detach.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
                     detach.arguments = ["detach", mountDir.path, "-force", "-quiet"]
+                    Self.configureSilentProcess(detach)
                     try? detach.run()
                     detach.waitUntilExit()
                 }
 
                 let mountedApp = mountDir.appendingPathComponent("GravityBox.app")
                 guard fm.fileExists(atPath: mountedApp.appendingPathComponent("Contents/MacOS/GravityBox").path) else {
+                    try? fm.removeItem(at: dmgFile)
                     throw NSError(domain: "GravityBoxUpdate", code: 5, userInfo: [NSLocalizedDescriptionKey: "更新镜像内未找到有效的 GravityBox.app。"])
                 }
                 try fm.copyItem(at: mountedApp, to: stagedApp)
@@ -342,38 +427,50 @@ final class AppUpdateManager {
                 let xattrProc = Process()
                 xattrProc.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
                 xattrProc.arguments = ["-dr", "com.apple.quarantine", stagedApp.path]
+                Self.configureSilentProcess(xattrProc)
                 try? xattrProc.run()
                 xattrProc.waitUntilExit()
 
                 let signCheck = Process()
                 signCheck.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
                 signCheck.arguments = ["--verify", "--deep", "--strict", stagedApp.path]
+                Self.configureSilentProcess(signCheck)
                 try signCheck.run()
                 signCheck.waitUntilExit()
                 guard signCheck.terminationStatus == 0 else {
+                    try? fm.removeItem(at: dmgFile)
                     throw NSError(domain: "GravityBoxUpdate", code: 6, userInfo: [NSLocalizedDescriptionKey: "新版本应用包代码签名校验未通过。"])
                 }
 
                 DispatchQueue.main.async {
-                    self.app.suppressLifecycleAutoQuit(seconds: 30)
+                    self.app.suppressLifecycleAutoQuit(seconds: 60)
                     let myPid = getpid()
-                    let targetAppPath = "/Applications/GravityBox.app"
-                    let script = """
-                    while kill -0 \(myPid) 2>/dev/null; do sleep 0.2; done
-                    pkill -f "/Applications/GravityBox.app/Contents/MacOS/GravityBox --lifecycle-agent" 2>/dev/null || true
-                    rm -rf "\(targetAppPath)" && mv "\(stagedApp.path)" "\(targetAppPath)"
-                    rm -rf "\(workDir.path)"
-                    open -a "\(targetAppPath)"
-                    """
+                    let targetAppPath = Self.resolveInstallTargetAppPath()
+                    let script = Self.buildDetachedUpdaterScript(
+                        myPid: myPid,
+                        stagedAppPath: stagedApp.path,
+                        targetAppPath: targetAppPath,
+                        workDirPath: workDir.path
+                    )
                     let updater = Process()
                     updater.executableURL = URL(fileURLWithPath: "/bin/sh")
                     updater.arguments = ["-c", script]
-                    try? updater.run()
-                    self.app.quit()
+                    Self.configureSilentProcess(updater)
+                    do {
+                        try updater.run()
+                        updater.waitUntilExit()
+                        self.app.quitForUpdate()
+                    } catch {
+                        try? fm.removeItem(at: workDir)
+                        self.transition(.failed("无法启动安装辅助脚本：\(error.localizedDescription)"))
+                    }
                 }
             } catch {
                 try? fm.removeItem(at: workDir)
                 DispatchQueue.main.async {
+                    if !fm.fileExists(atPath: dmgFile.path) {
+                        self.downloadedDMGURL = nil
+                    }
                     self.transition(.failed(error.localizedDescription))
                 }
             }
@@ -544,6 +641,7 @@ final class UpdateSheetController: NSObject, NSWindowDelegate {
             spinner.isHidden = false
             spinner.startAnimation(nil)
             closeBtn.title = "关闭"
+            closeBtn.isEnabled = true
             primaryBtn.title = "检查中…"
             primaryBtn.isEnabled = false
         case .upToDate:
@@ -554,45 +652,50 @@ final class UpdateSheetController: NSObject, NSWindowDelegate {
             spinner.stopAnimation(nil)
             spinner.isHidden = true
             closeBtn.title = "完成"
+            closeBtn.isEnabled = true
             primaryBtn.title = "重新检查"
             primaryBtn.isEnabled = true
         case .updateAvailable(let release):
             statusHeadline.stringValue = "发现新版本 v\(release.version)（发布于 \(release.publishedDate)）"
             statusHeadline.textColor = Design.blue
             changelogHeading.stringValue = "\(release.tagName) 更新日志 (GitHub Release)"
-            changelogTextView.string = release.changelog
+            changelogTextView.string = AppUpdateManager.formatReleaseNotes(release.changelog)
             spinner.stopAnimation(nil)
             spinner.isHidden = true
             closeBtn.title = "稍后"
+            closeBtn.isEnabled = true
             primaryBtn.title = "立即更新"
             primaryBtn.isEnabled = true
         case .downloading(let release):
             statusHeadline.stringValue = "正在下载并校验 GravityBox v\(release.version)…"
             statusHeadline.textColor = Design.blue
             changelogHeading.stringValue = "\(release.tagName) 更新日志 (GitHub Release)"
-            changelogTextView.string = release.changelog
+            changelogTextView.string = AppUpdateManager.formatReleaseNotes(release.changelog)
             spinner.isHidden = false
             spinner.startAnimation(nil)
             closeBtn.title = "后台下载"
+            closeBtn.isEnabled = true
             primaryBtn.title = "下载中…"
             primaryBtn.isEnabled = false
         case .readyToInstall(let release, _):
             statusHeadline.stringValue = "新版本 v\(release.version) 已下载并通过 SHA-256 校验"
             statusHeadline.textColor = Design.blue
             changelogHeading.stringValue = "\(release.tagName) 更新日志 (GitHub Release)"
-            changelogTextView.string = release.changelog
+            changelogTextView.string = AppUpdateManager.formatReleaseNotes(release.changelog)
             spinner.stopAnimation(nil)
             spinner.isHidden = true
             closeBtn.title = "稍后"
+            closeBtn.isEnabled = true
             primaryBtn.title = "立即更新"
             primaryBtn.isEnabled = true
         case .installing(let release):
             statusHeadline.stringValue = "正在安装 GravityBox v\(release.version) 并准备重启…"
             statusHeadline.textColor = Design.blue
             changelogHeading.stringValue = "\(release.tagName) 更新日志 (GitHub Release)"
-            changelogTextView.string = release.changelog
+            changelogTextView.string = AppUpdateManager.formatReleaseNotes(release.changelog)
             spinner.isHidden = false
             spinner.startAnimation(nil)
+            closeBtn.title = "稍后"
             closeBtn.isEnabled = false
             primaryBtn.title = "正在安装…"
             primaryBtn.isEnabled = false
@@ -644,6 +747,12 @@ final class UpdateSheetController: NSObject, NSWindowDelegate {
         } else {
             NSWorkspace.shared.open(AppUpdateManager.releasesPageURL)
         }
+    }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        guard closeBtn.isEnabled else { return false }
+        closeSheet()
+        return false
     }
 
     @objc func closeSheet() {

@@ -473,7 +473,7 @@ import Cocoa
             version: "1.1.0",
             tagName: "v1.1.0",
             title: "GravityBox v1.1.0",
-            changelog: "• 新增 GitHub Release 检查更新与后台预下载\n• 毛玻璃更新 Sheet 展示完整 Changelog",
+            changelog: "### 更新亮点\n- 新增 GitHub Release 检查更新与后台预下载\n- 毛玻璃更新 Sheet 展示完整 Changelog\n```bash\nsudo xattr -rd com.apple.quarantine /Applications/GravityBox.app\n```\n### 附件 SHA-256 校验\n```text\n7a88a030118d8e58a5f265bf0de61d00f9d26c115d56bad41e52f0969f3b3346  GravityBox-1.0.1-arm64.dmg\n```",
             publishedDate: "2026-11-04",
             htmlURL: URL(string: "https://github.com/Enzoo404/gravitybox/releases/tag/v1.1.0")!,
             dmgURL: nil,
@@ -484,7 +484,11 @@ import Cocoa
         stableSettings.showUpdateSheet(); pump()
         if let updateSheet = stableSettings.updateSheet {
             check(updateSheet.primaryBtn.title == "立即更新", "Update sheet must display 立即更新 button when release is available")
-            check(updateSheet.changelogTextView.string.contains("新增 GitHub Release 检查更新"), "Update sheet must display GitHub Release changelog")
+            check(updateSheet.closeBtn.isEnabled == true, "Update sheet closeBtn must be enabled in updateAvailable state")
+            check(updateSheet.changelogTextView.string.contains("• 新增 GitHub Release 检查更新"), "Update sheet must format markdown list items into bullets")
+            check(!updateSheet.changelogTextView.string.contains("```") && !updateSheet.changelogTextView.string.contains("###"), "Update sheet must strip raw markdown code fences and heading hashes")
+            let updaterScript = AppUpdateManager.buildDetachedUpdaterScript(myPid: 12345, stagedAppPath: "/tmp/staged/GravityBox.app", targetAppPath: "/Applications/GravityBox.app", workDirPath: "/tmp/staged")
+            check(updaterScript.contains("trap \"\" HUP TERM INT QUIT PIPE") && updaterScript.contains("kill -9 12345") && updaterScript.contains("--restarted-after-update"), "Detached updater script must ignore signals, bound PID wait with kill -9 fallback, and pass --restarted-after-update")
             check(updateSheet.autoUpdateSwitch.state == .off, "Auto update switch in sheet footer must default to off")
             updateSheet.autoUpdateSwitch.state = .off
             updateSheet.toggleAutoUpdate()
@@ -492,11 +496,15 @@ import Cocoa
             updateSheet.autoUpdateSwitch.state = .on
             updateSheet.toggleAutoUpdate()
             check(assistant.configuration.value.autoUpdateEnabled == true, "Toggling autoUpdateSwitch back must persist autoUpdateEnabled = true")
-            updateSheet.closeSheet(); pump()
+            assistant.dismissAllSheetsAndPopovers(); pump()
+            check(window.activeSheetWindow == nil, "dismissAllSheetsAndPopovers must cleanly end attached modal update sheet before update restart")
         }
         assistant.updateManager.simulateRelease(nil)
         stableSettings.refreshUpdateRowState()
         check(stableSettings.aboutSubtitleLabel.isHidden, "Clearing available release must hide about row subtitle again")
+        if let updateSheet = stableSettings.updateSheet {
+            check(updateSheet.closeBtn.isEnabled == true && updateSheet.primaryBtn.isEnabled == true, "Transitioning to upToDate must keep closeBtn and primaryBtn enabled")
+        }
         let stableAccounts = AccountsPage(app: assistant)
         stableAccounts.updateAutoSwitchState()
         check(stableAccounts.autoSwitchToggle.isEnabled && stableAccounts.configButton.isEnabled, "All account switch controls must remain enabled for stable Antigravity")

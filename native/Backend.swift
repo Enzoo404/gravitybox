@@ -234,4 +234,67 @@ final class BackendBridge {
     func stop(completion: @escaping () -> Void) {
         send(["command": "stop"]) { _ in completion() }
     }
+
+    /// Best-effort fast stop for self-update or forced termination: bypasses the serial `queue`
+    /// so an in-flight long command cannot block shutdown, and guarantees `child` termination
+    /// and `completion` callback on the main thread within `timeout` seconds.
+    func forceStop(timeout: TimeInterval = 2.0, completion: @escaping () -> Void) {
+        generation += 1
+        isRestarting = true
+        #if NATIVE_UI_TEST
+        DispatchQueue.main.async {
+            self.isRestarting = false
+            completion()
+        }
+        #else
+        let targetChild = child
+        let pid = targetChild?.processIdentifier ?? 0
+        let lock = NSLock()
+        var completed = false
+        let finish: () -> Void = {
+            lock.lock()
+            let shouldRun = !completed
+            completed = true
+            lock.unlock()
+            if shouldRun {
+                DispatchQueue.main.async { completion() }
+            }
+        }
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + timeout + 0.4) {
+            if let targetChild, targetChild.isRunning {
+                targetChild.terminate()
+                if pid > 0 { _ = Darwin.kill(pid, SIGKILL) }
+            }
+            finish()
+        }
+        controlQueue.async { [self] in
+            if let targetChild, targetChild.isRunning {
+                let stopDeadline = Date().addingTimeInterval(min(1.2, max(0.3, timeout * 0.6)))
+                if let fd = try? openSocket(deadline: stopDeadline) {
+                    if var data = try? JSONSerialization.data(withJSONObject: ["command": "stop"]) {
+                        data.append(0x0A)
+                        try? writeAll(data, fd: fd, deadline: stopDeadline)
+                        _ = try? readReply(fd: fd, deadline: stopDeadline)
+                    }
+                    Darwin.close(fd)
+                }
+                let waitDeadline = Date().addingTimeInterval(max(0.2, timeout * 0.4))
+                while targetChild.isRunning && Date() < waitDeadline {
+                    usleep(30_000)
+                }
+                if targetChild.isRunning {
+                    targetChild.terminate()
+                    let termDeadline = Date().addingTimeInterval(0.25)
+                    while targetChild.isRunning && Date() < termDeadline {
+                        usleep(25_000)
+                    }
+                    if targetChild.isRunning && pid > 0 {
+                        _ = Darwin.kill(pid, SIGKILL)
+                    }
+                }
+            }
+            finish()
+        }
+        #endif
+    }
 }

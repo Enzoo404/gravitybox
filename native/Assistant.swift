@@ -117,8 +117,55 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     var openedApplications = 0
     #endif
 
+    static func processArguments(for pid: pid_t) -> [String] {
+        guard pid > 0 else { return [] }
+        var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
+        var size: Int = 0
+        guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > MemoryLayout<Int32>.size else { return [] }
+        var buffer = [UInt8](repeating: 0, count: size)
+        guard sysctl(&mib, 3, &buffer, &size, nil, 0) == 0 else { return [] }
+        let argc = buffer.withUnsafeBytes { $0.load(as: Int32.self) }
+        guard argc > 0 else { return [] }
+        var index = MemoryLayout<Int32>.size
+        while index < size && buffer[index] != 0 { index += 1 }
+        while index < size && buffer[index] == 0 { index += 1 }
+        var args: [String] = []
+        for _ in 0..<argc {
+            guard index < size else { break }
+            let start = index
+            while index < size && buffer[index] != 0 { index += 1 }
+            if let str = String(bytes: buffer[start..<index], encoding: .utf8) {
+                args.append(str)
+            }
+            index += 1
+        }
+        return args
+    }
+
+    static func isMainPeerApplication(_ app: NSRunningApplication, excludingPid myPid: pid_t) -> Bool {
+        let pid = app.processIdentifier
+        guard pid > 0, pid != myPid, !app.isTerminated, app.activationPolicy != .prohibited else { return false }
+        let args = processArguments(for: pid)
+        if args.contains("--lifecycle-agent") { return false }
+        return true
+    }
+
+    static func findExistingMainPeer(excludingPid myPid: pid_t = getpid()) -> NSRunningApplication? {
+        let bundleId = Bundle.main.bundleIdentifier ?? "local.gravitybox.app"
+        return NSRunningApplication.runningApplications(withBundleIdentifier: bundleId).first {
+            isMainPeerApplication($0, excludingPid: myPid)
+        }
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
-        if let peer = NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "local.gravitybox.app").first(where: { $0.processIdentifier != getpid() && $0.activationPolicy != .prohibited }) {
+        let restartedAfterUpdate = CommandLine.arguments.contains("--restarted-after-update")
+        if restartedAfterUpdate {
+            for _ in 0..<25 {
+                if Self.findExistingMainPeer() == nil { break }
+                usleep(100_000)
+            }
+        }
+        if let peer = Self.findExistingMainPeer() {
             DistributedNotificationCenter.default().postNotificationName(NSNotification.Name("local.gravitybox.show-panel"), object: nil); peer.activate(); quitting = true; NSApp.terminate(nil); return
         }
         NSApp.setActivationPolicy(.accessory)
@@ -1379,7 +1426,7 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             guard let self else { return }
             self.accountListInFlight = false
             let waiters = self.accountListWaiters
-            let shouldNotifyPage = self.accountListPendingNotifyPage && waiters.isEmpty
+            let shouldNotifyPage = self.accountListPendingNotifyPage
             self.accountListWaiters.removeAll()
             self.accountListPendingNotifyPage = false
             if case .success(let val) = res, generation >= self.accountListGeneration, let list = val["accounts"] as? [[String: Any]] {
@@ -1571,6 +1618,46 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         performQuit()
     }
 
+    func dismissAllSheetsAndPopovers() {
+        closeMenuPopover()
+        guard let window else { return }
+        var safetyCounter = 0
+        while let sheet = window.activeSheetWindow, safetyCounter < 8 {
+            safetyCounter += 1
+            sheet.sheetParent?.endSheet(sheet)
+            window.endSheet(sheet)
+            sheet.orderOut(nil)
+        }
+    }
+
+    func quitForUpdate() {
+        quitting = true
+        suppressLifecycleAutoQuit(seconds: 60)
+        timer?.invalidate(); timer = nil
+        quotaRefreshTimer?.invalidate(); quotaRefreshTimer = nil
+        quotaRefreshPollTimer?.invalidate(); quotaRefreshPollTimer = nil
+        autoUpdateTimer?.invalidate(); autoUpdateTimer = nil
+        if configSaveWorkItem != nil {
+            configSaveWorkItem?.cancel()
+            configSaveWorkItem = nil
+            try? configuration?.save()
+        }
+        dismissAllSheetsAndPopovers()
+        window?.orderOut(nil)
+        #if NATIVE_UI_TEST
+        return
+        #else
+        bridge.forceStop(timeout: 2.0) { [weak self] in
+            self?.directorySource?.cancel()
+            self?.directorySource = nil
+            NSApp.terminate(nil)
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.35) {
+                Darwin._exit(0)
+            }
+        }
+        #endif
+    }
+
     private func performQuit() {
         guard !quitting else { return }
         stopBackendAndQuit()
@@ -1578,10 +1665,16 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     private func stopBackendAndQuit() {
         guard !quitting else { return }; quitting = true
         timer?.invalidate(); quotaRefreshTimer?.invalidate(); quotaRefreshPollTimer?.invalidate(); autoUpdateTimer?.invalidate()
+        if configSaveWorkItem != nil {
+            configSaveWorkItem?.cancel()
+            configSaveWorkItem = nil
+            try? configuration?.save()
+        }
+        dismissAllSheetsAndPopovers()
         bridge.send(["command":"stop"]) { [weak self] result in
             guard let self else { return }
             if case .success = result { self.directorySource?.cancel(); NSApp.terminate(nil) }
-            else if !self.bridge.isOwnedProcessRunning { NSApp.terminate(nil) }
+            else if !self.bridge.isOwnedProcessRunning { self.directorySource?.cancel(); NSApp.terminate(nil) }
             else { self.quitting = false; self.configureRefreshTimer(); self.configureQuotaRefreshTimer(); self.showPanel(); self.showMessage("尚未确认撤销汉化，请稍后重试退出。", error:true) }
         }
     }
@@ -1613,10 +1706,7 @@ private enum AntigravityLifecycleAgent {
     }
 
     static func isMainGravityBoxRunning() -> Bool {
-        let myPid = getpid()
-        return NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "local.gravitybox.app").contains {
-            $0.processIdentifier != myPid && $0.activationPolicy != .prohibited
-        }
+        Assistant.findExistingMainPeer(excludingPid: getpid()) != nil
     }
 
     static func launchGravityBoxIfNeeded() {
@@ -1631,6 +1721,8 @@ private enum AntigravityLifecycleAgent {
     }
 
     static func run() -> Never {
+        _ = NSApplication.shared
+        NSApp.setActivationPolicy(.prohibited)
         if !isSyncEnabled() { exit(0) }
         var wasRunning = Assistant.isAntigravityRunning()
         let nc = NSWorkspace.shared.notificationCenter

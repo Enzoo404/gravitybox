@@ -62,7 +62,7 @@ final class UsageLogController: NSObject, NSTableViewDataSource, NSTableViewDele
     let periods = ["today", "7d", "30d", "all"]
     init(app: Assistant, period selected: String) {
         self.app = app; super.init()
-        sheet.title = "请求明细"; table.rowHeight = 64; table.backgroundColor = .clear
+        sheet.title = "请求明细"; sheet.isReleasedWhenClosed = false; table.rowHeight = 64; table.backgroundColor = .clear
         search.placeholderString = "搜索模型"; search.delegate = self; search.setAccessibilityLabel("搜索请求模型")
         period.selectedSegment = periods.firstIndex(of: selected) ?? 0; period.controlSize = .regular; period.target = self; period.action = #selector(periodChanged)
         period.translatesAutoresizingMaskIntoConstraints = false; period.heightAnchor.constraint(equalToConstant: 28).isActive = true
