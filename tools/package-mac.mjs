@@ -37,7 +37,7 @@ async function main() {
   await mkdir(join(resources,'core/assets'),{recursive:true});
   await copyFile(join(root,'assets/model-catalog.json'),join(resources,'core/assets/model-catalog.json'));
   await copyFile(join(root,'assets/model-catalog.json'),join(resources,'model-catalog.json'));
-  await cp(join(root, 'dict'), join(resources, 'core/dict'), { recursive: true, filter: source => includeDictionaryPath(join('dict', relative(join(root, 'dict'), source))) }); await writeFile(join(resources, 'core/package.json'), '{"type":"module"}\n');
+  await cp(join(root, 'dict'), join(resources, 'core/dict'), { recursive: true, filter: source => includeDictionaryPath(join('dict', relative(join(root, 'dict'), source))) }); await writeFile(join(resources, 'core/package.json'), JSON.stringify({ type: 'module', version }) + '\n');
   for (const [from, to] of [['THIRD_PARTY_NOTICES.md', 'THIRD_PARTY_NOTICES.md'], ['assets/AppIcon.icns', 'AppIcon.icns']]) await copyFile(join(root, from), join(resources, to));
   const build = version.split('.').map(Number).reduce((a, n) => a * 100 + n, 0);
   await writeFile(join(app, 'Contents/Info.plist'), `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict>

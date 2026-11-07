@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { atomicJson } from './files.js';
 import { createHash } from 'node:crypto';
+import { APP_VERSION } from './version.js';
 
 try {
   process.loadEnvFile?.();
@@ -609,7 +610,7 @@ export class UsageStatsManager {
     try {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 6000);
-      const res = await fetch(targetUrl, { signal: controller.signal, headers: { 'User-Agent': 'GravityBox/1.0.0' } });
+      const res = await fetch(targetUrl, { signal: controller.signal, headers: { 'User-Agent': `GravityBox/${APP_VERSION}` } });
       clearTimeout(timer);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();

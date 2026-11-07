@@ -6,11 +6,22 @@
 
 ## [Unreleased]
 
+---
+
+## [1.0.1] - 待验收发布
+
 ### Fixed
-- **Native UI**：保持菜单栏状态图标在不同翻译开关状态下的不透明度一致（`b9921e8`）
+- **Usage**：等待用量持久化缓存写入完成；测试目录默认不触发远程价格同步。
+- **Version**：价格同步请求的 User-Agent 随实际构建版本更新；打包的后端元数据保留版本号，测试缓存与日常数据隔离。
+- **CI / Browser**：固定测试浏览器版本及 SHA-256，等待页面导航完成，补齐测试重启隔离与临时目录清理。
 - **CI / Test**：放宽 CI 环境下 Swift 原生编译测试超时阈值并完善错误诊断输出（`e8dbd1c`）
 - **CI / Test**：修复 UTC 时区环境下的单元测试差异与测试夹具清理逻辑（`b9733f2`）
 - **Browser / i18n**：优化浏览器回归测试耗时预算并补充时长模板回退处理（`e4be614`）
+
+### Maintenance
+- 标签只构建草稿 Release，验收后手动公开原包；拒绝版本不一致、哈希不符和覆盖已有附件。
+- CI 保留验证报告，贡献指南补充维护与发版步骤。
+- 限制 TypeScript 与 Node 类型声明的自动主版本升级。
 
 ### Documentation
 - 重写并完善 `README.md`、`THIRD_PARTY_NOTICES.md`，补充完整功能说明、架构图、隐私说明与使用条款提示
@@ -28,5 +39,9 @@
 - **Token 用量统计与 API 费用估算**：只读快照解析本地 SQLite 会话数据库，支持按时间范围（今日 / 7 天 / 30 天 / 全部）统计四类 Token 与缓存命中率，内置支持时间区间的模型价格表与逐条请求明细检索导出。
 - **安全缓存维护与系统联动**：按“运行加速缓存”“会话状态与应用授权”“已保护核心数据”三类扫描存储空间，清理统一移入系统废纸篓并支持一键原位恢复；支持开机自启、跟随 Antigravity 启停、正式版与 Insiders 双通道切换及在线更新校验。
 
-[Unreleased]: https://github.com/Enzoo404/gravitybox/compare/v1.0.0...HEAD
+### Fixed
+- **Native UI**：保持菜单栏状态图标在不同翻译开关状态下的不透明度一致（`b9921e8`，已包含于 1.0.0）。
+
+[Unreleased]: https://github.com/Enzoo404/gravitybox/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/Enzoo404/gravitybox/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/Enzoo404/gravitybox/releases/tag/v1.0.0
