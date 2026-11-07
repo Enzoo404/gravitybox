@@ -37,7 +37,7 @@ jobs:
         shell: bash
         run: '[[ "$GITHUB_REF" == refs/heads/main ]] || { echo "请从 main 运行只读检查" >&2; exit 1; }'
       - name: Checkout Controller & Tags
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Setup Node.js 22
@@ -64,7 +64,7 @@ jobs:
           [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || { echo '需要 vX.Y.Z 正式版本标签' >&2; exit 1; }
 
       - name: Checkout Tagged Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: refs/tags/${{ inputs.tag || github.ref_name }}
 
