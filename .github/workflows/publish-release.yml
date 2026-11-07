@@ -1,0 +1,70 @@
+name: Publish Accepted Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '待发布的草稿版本标签（如 v1.0.1）'
+        required: true
+        type: string
+      dmg_sha256:
+        description: '实际下载并验收的 DMG 的完整 SHA-256'
+        required: true
+        type: string
+      acceptance_confirmed:
+        description: '我已验收该 DMG 的安装、升级和数据保留，并确认公开发布'
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish Existing Accepted Assets
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      RELEASE_TAG: ${{ inputs.tag }}
+      EXPECTED_DMG_SHA256: ${{ inputs.dmg_sha256 }}
+      ACCEPTANCE_CONFIRMED: ${{ inputs.acceptance_confirmed }}
+    steps:
+      - name: Require Main Controller & Explicit Acceptance
+        env:
+          CONTROLLER_REF: ${{ github.ref }}
+        shell: bash
+        run: |
+          [[ "$CONTROLLER_REF" == refs/heads/main ]] || { echo '请从 main 运行发布流程' >&2; exit 1; }
+          [[ "$ACCEPTANCE_CONFIRMED" == true ]] || { echo '需要先完成安装、升级和数据保留验收' >&2; exit 1; }
+
+      - name: Checkout Release Controller
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Check Draft Before Download
+        run: node tools/release-control.mjs prepublish
+
+      - name: Download Existing Draft Assets
+        shell: bash
+        run: |
+          RELEASE_DOWNLOAD_DIR="$RUNNER_TEMP/gravitybox-release-$GITHUB_RUN_ID"
+          echo "RELEASE_DOWNLOAD_DIR=$RELEASE_DOWNLOAD_DIR" >> "$GITHUB_ENV"
+          mkdir -p "$RELEASE_DOWNLOAD_DIR"
+          gh release download "$RELEASE_TAG" --dir "$RELEASE_DOWNLOAD_DIR"
+
+      - name: Verify Accepted Hash & Publish Without Rebuilding
+        run: node tools/release-control.mjs publish

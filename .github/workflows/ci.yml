@@ -37,5 +37,16 @@ jobs:
       - name: Check Development Environment
         run: npm run doctor
 
+      - name: Setup Pinned Test Browser
+        run: node tools/setup-test-browser.mjs
+
       - name: Run Full Release Gate (Build, Unit, Browser, Swift & i18n Gate)
         run: node tools/verify.mjs --no-vendor
+
+      - name: Preserve Verification Reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-verification-${{ github.run_id }}
+          path: 质检报告/
+          retention-days: 7

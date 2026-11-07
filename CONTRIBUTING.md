@@ -16,6 +16,7 @@ GravityBox 致力于为 macOS 用户提供优雅、原生且注重隐私安全�
 4. [测试与门禁验证](#4-测试与门禁验证)
 5. [分支与提交规范](#5-分支与提交规范)
 6. [Pull Request 流程](#6-pull-request-流程)
+7. [维护与版本发布](#7-维护与版本发布)
 
 ---
 
@@ -82,9 +83,12 @@ npm test
 
 ### 浏览器端回归测试 (Browser Regression)
 ```bash
+node tools/setup-test-browser.mjs
 npm run test:browser
 ```
 启动无头 Chromium 实例，通过 CDP 验证界面汉化、微补丁、Shadow DOM 穿透、双语热切换及受保护元素隔离。
+
+macOS ARM64 开发环境与 CI 使用固定版本的 Chrome Headless Shell，下载至 `.cache/` 并核对压缩包及二进制 SHA-256。版本与哈希在 `tools/setup-test-browser.mjs` 中一起维护。可用 `CHROME_BIN` 显式指定其他测试浏览器；未准备固定浏览器时，本地仍可使用已安装的 Chrome。测试浏览器不随应用打包。
 
 ### 自动化发布门禁 (Release Gate)
 ```bash
@@ -95,6 +99,8 @@ npm run verify
 ---
 
 ## 5. 分支与提交规范
+
+日常采用 `main` + 短期任务分支。本机修改和测试后推送分支，创建 PR，检查通过后合并；保存代码与发布安装包分别进行。维护者可直接使用仓库内任务分支，无需 Fork。
 
 我们推荐遵循 [Conventional Commits](https://www.conventionalcommits.org/) 规范，保持提交历史整洁易读：
 
@@ -115,3 +121,18 @@ npm run verify
 4. 运行 `npm test` 与 `npm run verify`，确保所有门禁 100% 绿色通过。
 5. 推送至个人分支并向 `Enzoo404/gravitybox:main` 发起 Pull Request。
 6. CI 自动化检查通过后，核心维护者将对 PR 进行 Review 并合并。
+
+## 7. 维护与版本发布
+
+开发包先使用单独的 macOS 测试用户验证。仅改 App 名称不能隔离正式账号、钥匙串和数据；不要直接覆盖日常使用的正式版。
+
+1. 版本 PR 统一更新 `package.json`、`package-lock.json` 的项目版本和 `CHANGELOG.md`。完整门禁及合并后 main CI 均通过后，再确定发布提交。
+2. 推送指向该提交的 `vX.Y.Z` 标签，触发 **Release** 工作流；也可手动输入已存在的标签。当前仅支持数字正式版本，次版本与修订号各不超过 99。
+3. 工作流验证标签、提交、项目版本、包内版本、源码摘要和 DMG 校验文件，然后创建**草稿 Release**，不会自动公开。已有 Release（含草稿）会被拒绝，不覆盖任何附件。
+4. 从草稿下载 DMG、`.dmg.sha256` 和 `release-manifest.json`，校验 DMG，并实际验证全新安装、从上一正式版升级及账号/设置保留；按变更范围补充实际功能验收。记录实际验收文件的完整 SHA-256。
+5. 在 Actions 中从 `main` 运行 **Publish Accepted Release**，填写标签和上述 SHA-256，并勾选验收确认。流程重新下载已有附件，核对文件哈希、清单、远端附件摘要与标签提交后，仅把原草稿转为公开版本，**不重新构建**。
+6. 你日常使用的正式版也从该 Release 安装；已发布版本不移动标签、不替换包，修正使用新版本号。
+
+CI 与构建草稿的验证日志保留为 Actions artifacts（7 天）。如草稿上传中断，先检查已存在的草稿和附件；重跑不会自动删除草稿或覆盖文件，也不能将不完整草稿直接发布。需要重建时由维护者确认如何处理该未公开草稿，或改用新版本号。
+
+应用内更新只面向公开正式 Release；草稿验收由维护者手动下载进行。实际安装、升级和数据保留仍需人工验证，Actions 中的确认框只是记录维护者的确认。

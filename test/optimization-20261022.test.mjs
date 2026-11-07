@@ -19,7 +19,7 @@ import {Tasks} from '../dist/tasks.js';
 import {sourceDigest} from '../tools/release-integrity.mjs';
 import {checkDocs} from '../tools/check-docs.mjs';
 const pause=ms=>new Promise(r=>setTimeout(r,ms));
-const fixture=async fn=>{const dir=await mkdtemp(join(tmpdir(),'gb-opt-'));try{return await fn(dir);}finally{await rm(dir,{recursive:true,force:true});}};
+const fixture=async fn=>{const dir=await mkdtemp(join(tmpdir(),'gb-opt-'));try{return await fn(dir);}finally{await rm(dir,{recursive:true,force:true,maxRetries:10,retryDelay:50});}};
 const blob=(tokens=100,padding=0)=>Buffer.concat([W.encodeLengthDelimited(1,Buffer.concat([W.encodeString(19,'gemini-2.5-flash'),W.encodeLengthDelimited(4,W.encodeVarintField(2,tokens))])), ...(padding?[W.encodeLengthDelimited(99,Buffer.alloc(padding))]:[])]);
 async function stop(child){if(!child||child.exitCode!==null)return;child.kill('SIGTERM');await Promise.race([once(child,'exit'),pause(3000)]);if(child.exitCode===null){child.kill('SIGKILL');await once(child,'exit');}}
 const rpc=(dir,p)=>new Promise((resolve,reject)=>{const s=createConnection(join(dir,'control.sock'));let b='';s.on('error',reject);s.on('connect',()=>s.write(JSON.stringify(p)+'\n'));s.setTimeout(10000,()=>{s.destroy();reject(new Error('timeout'));});s.on('data',c=>{b+=c;if(b.includes('\n')){s.end();resolve(JSON.parse(b.split('\n')[0]));}});});
