@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileSha256, writeSha256Sidecar, sourceDigest } from '../tools/release-integrity.mjs';
-import { validateVersion, releaseAssetNames, assertNewRelease, validateDraft, requireAcceptance, githubClient, releaseContext, writeReleaseManifest, verifyAcceptedFiles, publishAcceptedDraft } from '../tools/release-control.mjs';
+import { validateVersion, releaseAssetNames, assertNewRelease, findReleaseByTag, validateDraft, requireAcceptance, githubClient, releaseContext, writeReleaseManifest, verifyAcceptedFiles, publishAcceptedDraft } from '../tools/release-control.mjs';
 
 const version = '1.0.1', tag = 'v1.0.1', commit = 'a'.repeat(40);
 const pkg = { version }, lock = { version, packages: { '': { version } } };
@@ -30,6 +30,22 @@ test('已有正式版或草稿均拒绝覆盖，网络/权限错误不能误判�
 test('公开发布必须显式确认且提供完整验收哈希', () => {
   assert.equal(requireAcceptance('true', 'A'.repeat(64)), 'a'.repeat(64));
   for (const [confirmed, hash] of [['false', 'a'.repeat(64)], ['true', 'abc'], [undefined, undefined]]) assert.throws(() => requireAcceptance(confirmed, hash), /实际验收/);
+});
+
+test('草稿通过分页列表查询，不能将只返回正式版本的 tag 接口 404 当作不存在', async () => {
+  const calls = [], draft = { id: 123, tag_name: tag, draft: true };
+  const api = async path => {
+    calls.push(path);
+    if (path === 'releases?per_page=100&page=1') return Array.from({ length: 100 }, (_, i) => ({ tag_name: `other-${i}` }));
+    if (path === 'releases?per_page=100&page=2') return [draft];
+    throw Error('不应调用按标签的正式发布接口');
+  };
+  assert.equal(await findReleaseByTag(api, tag), draft);
+  assert.throws(() => assertNewRelease(draft), /禁止重复构建/);
+  assert.deepEqual(calls, ['releases?per_page=100&page=1', 'releases?per_page=100&page=2']);
+  assert.equal(await findReleaseByTag(async () => [], tag), null);
+  await assert.rejects(findReleaseByTag(async () => [draft, draft], tag), /多个 Release/);
+  await assert.rejects(findReleaseByTag(async () => { throw Error('permission denied'); }, tag), /permission denied/);
 });
 
 async function fixture(fn) {
@@ -66,6 +82,7 @@ test('通过验收后仅修改草稿的发布状态，不上传或重新构建�
   const api = async (path, options) => {
     calls.push({ path, options });
     if (path.startsWith('commits/')) return { sha: commit };
+    if (path.startsWith('releases?')) return [release];
     if (options?.method === 'PATCH') return { ...release, draft: false, html_url: 'https://github.com/owner/repo/releases/tag/v1.0.1' };
     return release;
   };
@@ -80,10 +97,11 @@ test('哈希不符、远端附件替换或标签移动均禁止发布', () => fi
     const api = async (path, options) => {
       if (options?.method) { mutations++; throw Error('must not mutate'); }
       if (path.startsWith('commits/')) return { sha: scenario === 'moved-tag' ? 'd'.repeat(40) : commit };
-      if (scenario === 'already-published') return { ...release, draft: false };
-      if (scenario === 'remote-digest') return { ...release, assets: release.assets.map(a => ({ ...a, digest: 'sha256:' + '0'.repeat(64) })) };
+      const response = value => path.startsWith('releases?') ? [value] : value;
+      if (scenario === 'already-published') return response({ ...release, draft: false });
+      if (scenario === 'remote-digest') return response({ ...release, assets: release.assets.map(a => ({ ...a, digest: 'sha256:' + '0'.repeat(64) })) });
       if (path === 'releases/123' && scenario === 'changed-assets') return { ...release, assets: release.assets.map(a => ({ ...a, id: a.id + 10 })) };
-      return release;
+      return response(release);
     };
     await assert.rejects(publishAcceptedDraft({ api, directory, context, expectedHash: scenario === 'wrong-hash' ? '0'.repeat(64) : hash }), undefined, scenario);
     assert.equal(mutations, 0, scenario);

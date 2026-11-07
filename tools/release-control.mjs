@@ -24,6 +24,22 @@ export function assertNewRelease(release) {
   if (release) throw Error('该版本已有 Release（含草稿），禁止重复构建或覆盖附件；请先核对已有草稿或使用新版本号');
 }
 
+// The tag endpoint only returns published releases. Drafts require the authenticated list API.
+export async function findReleaseByTag(api, tag) {
+  let found = null;
+  for (let page = 1; page <= 100; page++) {
+    const releases = await api(`releases?per_page=100&page=${page}`);
+    if (!Array.isArray(releases)) throw Error('GitHub Release 列表响应无效');
+    for (const release of releases) {
+      if (release.tag_name !== tag) continue;
+      if (found) throw Error('该标签对应多个 Release，需先人工核对');
+      found = release;
+    }
+    if (releases.length < 100) return found;
+  }
+  throw Error('Release 列表超出查询上限，已中止而非假定版本不存在');
+}
+
 export function validateDraft(release, tag) {
   if (!release || release.draft !== true || release.prerelease || release.tag_name !== tag || !Number.isSafeInteger(release.id)) throw Error('只允许发布指定标签的正式版本草稿；已公开版本不可重发');
   const expected = releaseAssetNames(tag.slice(1)).sort();
@@ -99,8 +115,7 @@ function assetSnapshot(release) {
 }
 
 export async function publishAcceptedDraft({ api, directory, context, expectedHash }) {
-  const path = `releases/tags/${encodeURIComponent(context.tag)}`;
-  const draft = validateDraft(await api(path), context.tag);
+  const draft = validateDraft(await findReleaseByTag(api, context.tag), context.tag);
   const hash = await verifyAcceptedFiles(directory, context, expectedHash);
   for (const asset of draft.assets) {
     if (asset.digest !== `sha256:${await fileSha256(join(directory, asset.name))}`) throw Error('GitHub 草稿附件与下载验收文件的摘要不一致或缺失');
@@ -119,16 +134,19 @@ async function main() {
   const root = fileURLToPath(new URL('../', import.meta.url));
   const mode = process.argv[2], tag = process.env.RELEASE_TAG ?? '';
   const api = githubClient(process.env.GITHUB_REPOSITORY ?? '', process.env.GH_TOKEN);
-  if (!['preflight', 'manifest', 'prepublish', 'publish'].includes(mode)) throw Error('使用 preflight / manifest / prepublish / publish');
+  if (!['preflight', 'manifest', 'inspect', 'prepublish', 'publish'].includes(mode)) throw Error('使用 preflight / manifest / inspect / prepublish / publish');
   const expectedHash = ['prepublish', 'publish'].includes(mode) ? requireAcceptance(process.env.ACCEPTANCE_CONFIRMED, process.env.EXPECTED_DMG_SHA256) : undefined;
   const context = await releaseContext(root, tag, api, { requireHead: ['preflight', 'manifest'].includes(mode) });
   if (mode === 'preflight') {
-    assertNewRelease(await api(`releases/tags/${encodeURIComponent(tag)}`, { allowMissing: true }));
+    assertNewRelease(await findReleaseByTag(api, tag));
     console.log(`检查通过：${tag} / ${context.commit}；仅允许创建新的草稿`);
   } else if (mode === 'manifest') {
     console.log(JSON.stringify(await writeReleaseManifest(root, context)));
+  } else if (mode === 'inspect') {
+    const draft = validateDraft(await findReleaseByTag(api, tag), tag);
+    console.log(JSON.stringify({ releaseId: draft.id, tag, commit: context.commit, draft: true, assets: draft.assets.map(a => ({ name: a.name, digest: a.digest })) }));
   } else if (mode === 'prepublish') {
-    validateDraft(await api(`releases/tags/${encodeURIComponent(tag)}`), tag);
+    validateDraft(await findReleaseByTag(api, tag), tag);
     console.log(`草稿检查通过：${tag}；仍需校验实际下载的附件`);
   } else {
     if (!process.env.RELEASE_DOWNLOAD_DIR) throw Error('缺少草稿附件下载目录');
