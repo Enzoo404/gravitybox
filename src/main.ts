@@ -637,7 +637,7 @@ async function run() {
             });
             let pendingSwitch = false;
             try {
-              const journalPath = join(channelStateDir, 'account-switch-journal.json');
+              const journalPath = join(channelStateDir, 'account-switch-journal-stable.json');
               const journal = JSON.parse(await readFile(journalPath, 'utf8'));
               if (journal && !['complete', 'rolled-back', 'cleared'].includes(journal.status)) {
                 pendingSwitch = true;

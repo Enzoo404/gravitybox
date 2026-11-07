@@ -134,7 +134,7 @@ test('C01/C02: auto_switch_best 默认只读、execute 需确认，IPC 响应不
       assert.match(replyExecute.error, /确认/);
 
       // 4) 只读命令的副作用为 0：没有切号 journal，索引仍指向原账号。
-      await assert.rejects(readFile(join(dir, 'account-switch-journal.json'), 'utf8'), /ENOENT/);
+      await assert.rejects(readFile(join(dir, 'account-switch-journal-stable.json'), 'utf8'), /ENOENT/);
       const index = JSON.parse(await readFile(join(dir, 'accounts.json'), 'utf8'));
       assert.equal(index.current_account_id, current.id, '只读推荐不得修改当前账号');
 

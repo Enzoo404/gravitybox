@@ -145,14 +145,14 @@ export class AccountSwitchService {
   }) {
     this.keychain = options.keychain ?? new SystemKeychainAdapter();
     this.target = options.target ?? applicationTarget(options.channel ?? 'stable', undefined, { profile: options.profile });
-    this.journalPath = join(channelStateDirectory(options.stateDir, this.target.channel), 'account-switch-journal.json');
+    this.journalPath = join(channelStateDirectory(options.stateDir, this.target.channel), 'account-switch-journal-stable.json');
   }
 
   setTarget(target: ApplicationTarget) {
     this.target = target;
     this.options.channel = target.channel;
     this.options.profile = target.profile;
-    this.journalPath = join(channelStateDirectory(this.options.stateDir, target.channel), 'account-switch-journal.json');
+    this.journalPath = join(channelStateDirectory(this.options.stateDir, target.channel), 'account-switch-journal-stable.json');
   }
 
   private assertSupported() {}
@@ -166,7 +166,7 @@ export class AccountSwitchService {
         const trimmed = line.trim();
         return candidatePrefixes.some(prefix => trimmed.startsWith(prefix));
       });
-    if (running) throw new Error('请先保存工作并手动退出 Antigravity，再切换账号；GravityBox 不会结束或重启它');
+    if (running) throw new Error('请先保存工作并手动退出 Antigravity（如运行了 Insiders，也请退出），再切换账号；GravityBox 不会结束或重启应用');
   }
   private async archivePreviousJournal(previous: Journal) {
     const backupsDir = join(this.options.stateDir, 'account-switch-backups');

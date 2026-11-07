@@ -83,7 +83,7 @@ GravityBox 是为 [Google Antigravity](https://antigravity.google) 打造的 mac
 
 **系统要求**：macOS 14.0 (Sonoma) 及以上，Apple Silicon (`arm64`，M 系列芯片)；已安装 Google Antigravity（仅支持正式版，不支持 Insiders 预览版）。
 
-从旧的双版本支持升级时，历史 `insiders` 通道配置会先备份，再迁移为正式版；账号、其它设置及历史文件保留。用量仅统计正式版，旧的混合统计缓存不再使用。若只安装了 Insiders，需要另外安装 Antigravity 正式版。
+从旧的双版本支持升级时，历史 `insiders` 通道配置会先备份，再迁移为正式版；账号、其它设置及历史文件保留。用量仅统计正式版，旧的混合统计缓存不再使用。正式版使用独立配额缓存和切号恢复记录；旧共享恢复材料保留，但不会自动回滚到它们，必要时需单独核对。若只安装了 Insiders，需要另外安装 Antigravity 正式版。
 
 ### 1. 下载安装
 1. 前往 [**Releases**](https://github.com/Enzoo404/gravitybox/releases/latest) 下载最新的 `GravityBox-<version>-arm64.dmg`（安装包已内置独立运行环境，无需配置 Node.js）；

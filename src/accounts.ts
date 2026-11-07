@@ -895,14 +895,14 @@ export class AccountsManager {
       for (const { target: candidate, version } of installedTargets) {
         const context = text.split('\n').map(line => cloudProviderContextFromCommand(line.trim(), version, candidate)).find(Boolean);
         if (context) {
-          await atomicJson(join(channelStateDirectory(this.stateDir, candidate.channel), 'quota-provider.json'), context);
+          await atomicJson(join(channelStateDirectory(this.stateDir, candidate.channel), 'quota-provider-stable.json'), context);
           this.providerContextCache = { value: context, expiresAt: Date.now() + 15000 };
           return context;
         }
       }
       for (const { target: candidate, version } of installedTargets) {
         try {
-          const cached = JSON.parse(await readFile(join(channelStateDirectory(this.stateDir, candidate.channel), 'quota-provider.json'), 'utf8')) as CloudProviderContext;
+          const cached = JSON.parse(await readFile(join(channelStateDirectory(this.stateDir, candidate.channel), 'quota-provider-stable.json'), 'utf8')) as CloudProviderContext;
           if (validCachedCloudProviderContext(cached, version, candidate)) {
             this.providerContextCache = { value: cached, expiresAt: Date.now() + 15000 };
             return cached;

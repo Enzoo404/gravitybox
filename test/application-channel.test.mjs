@@ -169,6 +169,25 @@ test('正式版 WCV 无 state.vscdb 时仍支持保存、切号和回滚', async
   assert.equal(captured.email, account.email);
 });
 
+test('旧共享恢复记录原样保留，不能被正式版自动回滚', async t => {
+  const state = await temporary(t);
+  const manager = new AccountsManager(state);
+  const legacyPath = join(state, 'account-switch-journal.json');
+  const legacy = JSON.stringify({ version: 1, status: 'complete', at: new Date().toISOString(),
+    before: { oauthToken: 'synthetic-old-channel' }, after: {}, files: [],
+    keychainBefore: 'synthetic-previous', keychainAfter: 'synthetic-next' });
+  await writeFile(legacyPath, legacy);
+  const service = new AccountSwitchService(manager, { stateDir: state, profile: state,
+    externalDir: join(state, 'external'), keychain: new MockKeychainAdapter(), isRunning: async () => false });
+  assert.equal((await service.recoveryInfo()).available, false);
+  await assert.rejects(service.rollback(), /ENOENT/);
+  assert.equal(await readFile(legacyPath, 'utf8'), legacy);
+  await manager.saveAccount(account);
+  await service.switchAccount(account.id);
+  assert.equal((await service.recoveryInfo()).available, true);
+  assert.equal(await readFile(legacyPath, 'utf8'), legacy);
+});
+
 test('语言服务只匹配正式版并保留 WCV hub 身份，拒绝 Insiders 进程', () => {
   const target = applicationTarget('stable');
   const version = '2.29.0';

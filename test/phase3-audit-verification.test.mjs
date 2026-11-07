@@ -80,7 +80,7 @@ test('阶段3验证 - U10: 单账号 quota_refresh 精准刷新指定账号且�
 
 test('阶段3验证 - B12: 账号切换 pending 状态识别与未完成流转', async () => {
   const root = await mkdtemp(join(tmpdir(), 'gb-test-b12-'));
-  const journalPath = join(root, 'account-switch-journal.json');
+  const journalPath = join(root, 'account-switch-journal-stable.json');
 
   // 当 journal 为 pending 状态时
   await writeFile(journalPath, JSON.stringify({
