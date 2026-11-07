@@ -7,6 +7,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createConnection } from 'node:net';
+import { existsSync } from 'node:fs';
+import { TEST_CHROME_PATH } from '../tools/setup-test-browser.mjs';
 import { CDP } from '../dist/cdp.js';
 import { DEEP_STEPS } from '../dist/deep-scan.js';
 const execute = promisify(execFile);
@@ -23,7 +25,7 @@ const server = createServer((req, res) => {
 });
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const origin = `http://127.0.0.1:${server.address().port}`;
-let chrome, backend, browser, main, second;
+let chrome, backend, browserEndpoint, main, second;
 let backendErrors = ''; let chromeErrors = '';
 const checks = [];
 async function until(fn, timeout = 6000) {
@@ -49,14 +51,25 @@ async function override(entries, atomic = false) {
   else await writeFile(file, JSON.stringify(entries));
 }
 async function check(name, fn) { await fn(); checks.push({ name, passed: true }); console.log('PASS', name); }
+// A body can exist in the initial about:blank document before the requested navigation commits.
+async function documentReady(cdp) {
+  await until(async () => cdp.evaluate(`document.readyState === 'complete' && !!document.body && location.origin === ${JSON.stringify(origin)}`).catch(() => false));
+}
+// Keep browser-control transports scoped to one command, independent of page reloads and idle time.
+async function browserCommand(method, params) {
+  const control = new CDP(browserEndpoint);
+  try { await control.connect(); return await control.send(method, params); }
+  finally { control.close(); }
+}
 try {
   await mkdir(profile);
-  const chromeBin = process.env.CHROME_BIN || process.env.CHROME_PATH || process.env.PUPPETEER_EXECUTABLE_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-  chrome = spawn(chromeBin, ['--headless=new', `--user-data-dir=${profile}`, '--remote-debugging-port=0', '--no-first-run', '--no-default-browser-check', '--disable-background-networking', '--disable-extensions', `${origin}/fixture`], { stdio: ['ignore', 'ignore', 'pipe'] });
+  const chromeBin = process.env.CHROME_BIN || process.env.CHROME_PATH || process.env.PUPPETEER_EXECUTABLE_PATH || (existsSync(TEST_CHROME_PATH) ? TEST_CHROME_PATH : '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome');
+  // These fixtures exercise DOM behavior with software rendering, not GPU behavior.
+  chrome = spawn(chromeBin, ['--headless=new', '--disable-gpu', `--user-data-dir=${profile}`, '--remote-debugging-port=0', '--no-first-run', '--no-default-browser-check', '--disable-background-networking', '--disable-extensions', `${origin}/fixture`], { stdio: ['ignore', 'ignore', 'pipe'] });
   chrome.stderr.on('data', chunk => { chromeErrors = (chromeErrors + chunk.toString()).slice(-16000); });
   const port = await until(async () => { if (chrome.exitCode !== null) throw new Error(`测试浏览器提前退出 (${chrome.exitCode}): ${chromeErrors.slice(-600)}`); return Number((await readFile(join(profile, 'DevToolsActivePort'), 'utf8')).split('\n')[0]); }, 20000);
   const version = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json();
-  browser = new CDP(version.webSocketDebuggerUrl); await browser.connect();
+  browserEndpoint = version.webSocketDebuggerUrl;
   const page = await until(async () => (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find(target => target.url === `${origin}/fixture`));
   main = new CDP(page.webSocketDebuggerUrl); await main.connect(); await main.send('Page.enable');
   const initialHeap = await main.send('Runtime.getHeapUsage');
@@ -215,7 +228,7 @@ try {
     await until(async () => await text(main, '#late-button') === 'Settings');
   });
   await check('第二窗口自动连接并接收词典更新', async () => {
-    const target = await browser.send('Target.createTarget', { url: `${origin}/fixture` });
+    const target = await browserCommand('Target.createTarget', { url: `${origin}/fixture` });
     const page = await until(async () => (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find(page => page.id === target.targetId));
     second = new CDP(page.webSocketDebuggerUrl); await second.connect();
     await until(async () => (await status()).windows === 2);
@@ -246,7 +259,7 @@ try {
     await writeFile(join(state, '词典', '个人覆盖.json'), '{invalid');
     await until(async () => !!(await status()).dictionaryError);
     await command('stop'); await until(async () => backend.exitCode === 0);
-    backend = spawn(process.execPath, ['--max-old-space-size=48', '--max-semi-space-size=2', join(root, 'dist/main.js'), '--state-dir', state, '--fixture-port', String(port), '--fixture-origin', origin], { stdio: ['ignore', 'ignore', 'pipe'] });
+    backend = spawn(process.execPath, ['--max-old-space-size=48', '--max-semi-space-size=2', join(root, 'dist/main.js'), '--state-dir', state, '--fixture-port', String(port), '--fixture-origin', origin, '--home-dir', temp, '--app-support-dir', temp, '--gemini-dir', join(temp, 'gemini')], { stdio: ['ignore', 'ignore', 'pipe'], env: { ...process.env, GRAVITYBOX_PROBE_LS: 'false' } });
     backend.stderr.on('data', chunk => { backendErrors += chunk.toString(); });
     await until(async () => (await status()).mode === 'connected' && !!(await status()).dictionaryError);
     await until(async () => await text(main, '#settings') === '设置第11版');
@@ -570,9 +583,9 @@ ${engine}`,ctx.executionContextId);
     await until(async()=>await text(main,'#conservative-known')==='已知操作');assert.equal(await text(main,'#conservative-dynamic'),'已用时 91秒');assert.equal(await text(main,'#conservative-private'),'Known action');await main.evaluate('globalThis.__AGZH_ENGINE_V1__.dispose()',ctx.executionContextId);await main.evaluate('document.querySelector("#conservative-test").remove()');await command('resume');await until(async()=>(await status()).mode==='connected');
   });
   await check('插件说明仅在明确的目录卡片应用场景译文，不翻译同文普通段落',async()=>{
-    const target=await browser.send('Target.createTarget',{url:origin+'/customizations'});let cdp;
+    const target=await browserCommand('Target.createTarget',{url:origin+'/customizations'});let cdp;
     try{
-      const targets=await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();const page=targets.find(t=>t.id===target.targetId);cdp=new CDP(page.webSocketDebuggerUrl);await cdp.connect();const tree=await cdp.send('Page.getFrameTree'),ctx=await cdp.send('Page.createIsolatedWorld',{frameId:tree.frameTree.frame.id,worldName:'AGZH-plugin-test'});
+      const page=await until(async()=>(await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find(t=>t.id===target.targetId));cdp=new CDP(page.webSocketDebuggerUrl);await cdp.connect();await documentReady(cdp);const tree=await cdp.send('Page.getFrameTree'),ctx=await cdp.send('Page.createIsolatedWorld',{frameId:tree.frameTree.frame.id,worldName:'AGZH-plugin-test'});
       await cdp.evaluate(`document.body.innerHTML='<main><div><a href="/customizations/plugins/public-plugin">Public Plugin</a><p id="plugin-desc">Read and draft public documents.</p><button>Install</button></div><p id="outside-desc">Read and draft public documents.</p></main>'`);
       const engine=await readFile(join(root,'dist/engine.js'),'utf8');await cdp.evaluate(`globalThis.__AGZH_BOOT__=${JSON.stringify({origin,path:'/customizations',dictionary:{schema:1,version:'plugin',entries:{'@ui:/customizations|description|Read and draft public documents.':'阅读并起草公共文档。'}}})};
 ${engine}`,ctx.executionContextId);await until(async()=>await text(cdp,'#plugin-desc')==='阅读并起草公共文档。');assert.equal(await text(cdp,'#outside-desc'),'Read and draft public documents.');await cdp.evaluate('globalThis.__AGZH_ENGINE_V1__.dispose()',ctx.executionContextId);
@@ -585,12 +598,12 @@ ${engine}`,gate.executionContextId);assert.equal(await text(cdp,'#gate-known'),'
       await cdp.evaluate(`globalThis.__AGZH_BOOT__=${JSON.stringify({origin,path:'/login',dictionary:{schema:1,version:'guard',entries:{Settings:'设置'}}})};
 ${engine}`,login.executionContextId);assert.equal(await text(cdp,'button'),'Settings');assert.equal(await cdp.evaluate('!!globalThis.__AGZH_ENGINE_V1__',login.executionContextId),false);
 
-    }finally{cdp?.close();await browser.send('Target.closeTarget',{targetId:target.targetId});}
+    }finally{cdp?.close();await browserCommand('Target.closeTarget',{targetId:target.targetId}).catch(error => { chromeErrors += '\nTarget cleanup: ' + error.message; });}
   });
 
   await check('模型关闭使用受控事件序列，设置关闭只操作本轮容器',async()=>{
-    const target=await browser.send('Target.createTarget',{url:origin+'/customizations'});let isolated;
-    try { const targets=await(await fetch(`http://127.0.0.1:${port}/json/list`)).json();isolated=new CDP(targets.find(t=>t.id===target.targetId).webSocketDebuggerUrl);await isolated.connect();await until(async()=>await isolated.evaluate("!!document.body").catch(()=>false));await isolated.evaluate("document.body.innerHTML=''");const tree=await isolated.send('Page.getFrameTree'),ctx=await isolated.send('Page.createIsolatedWorld',{frameId:tree.frameTree.frame.id,worldName:'AGZH-close-guards-test'});
+    const target=await browserCommand('Target.createTarget',{url:origin+'/customizations'});let isolated;
+    try { const page=await until(async()=>(await(await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find(t=>t.id===target.targetId));isolated=new CDP(page.webSocketDebuggerUrl);await isolated.connect();await documentReady(isolated);await isolated.evaluate("document.body.innerHTML=''");const tree=await isolated.send('Page.getFrameTree'),ctx=await isolated.send('Page.createIsolatedWorld',{frameId:tree.frameTree.frame.id,worldName:'AGZH-close-guards-test'});
     const engine=await readFile(join(root,'dist/engine.js'),'utf8');
     await isolated.evaluate(`globalThis.__AGZH_BOOT__=${JSON.stringify({origin,path:'/customizations',dictionary:{schema:1,version:'close',entries:{}}})};
 ${engine}`,ctx.executionContextId);
@@ -602,12 +615,12 @@ ${engine}`,ctx.executionContextId);
     assert.equal((await isolated.evaluate('globalThis.__AGZH_ENGINE_V1__.deepScan.step("settings-open")',ctx.executionContextId)).ok,true);
     assert.equal((await isolated.evaluate('globalThis.__AGZH_ENGINE_V1__.deepScan.step("settings-close")',ctx.executionContextId)).ok,true);
     assert.equal((await isolated.evaluate('globalThis.__AGZH_ENGINE_V1__.deepScan.finish()',ctx.executionContextId)).editorsMatch,true);
-    await isolated.evaluate('globalThis.__AGZH_ENGINE_V1__.dispose()',ctx.executionContextId);await isolated.evaluate('document.querySelector("#close-guards").remove()');} finally { isolated?.close();await browser.send('Target.closeTarget',{targetId:target.targetId});}
+    await isolated.evaluate('globalThis.__AGZH_ENGINE_V1__.dispose()',ctx.executionContextId);await isolated.evaluate('document.querySelector("#close-guards").remove()');} finally { isolated?.close();await browserCommand('Target.closeTarget',{targetId:target.targetId}).catch(error => { chromeErrors += '\nTarget cleanup: ' + error.message; });}
   });
   await check('插件说明多文本节点与场景译文粒度一致，普通段落仍受保护',async()=>{
-    const target=await browser.send('Target.createTarget',{url:origin+'/customizations'});let cdp;
+    const target=await browserCommand('Target.createTarget',{url:origin+'/customizations'});let cdp;
     try{
-      const targets=await(await fetch(`http://127.0.0.1:${port}/json/list`)).json();cdp=new CDP(targets.find(t=>t.id===target.targetId).webSocketDebuggerUrl);await cdp.connect();
+      const page=await until(async()=>(await(await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find(t=>t.id===target.targetId));cdp=new CDP(page.webSocketDebuggerUrl);await cdp.connect();await documentReady(cdp);
       await cdp.evaluate(`document.body.innerHTML='<div><a href="/customizations/plugins/chunks">Chunked Plugin</a><p id="block-one">Read public documents.</p><p id="block-two"><span>Draft public documents.</span> Review public documents.</p><button>Install</button></div><p id="not-card">Read public documents.</p>'`);
       const tree=await cdp.send('Page.getFrameTree'),ctx=await cdp.send('Page.createIsolatedWorld',{frameId:tree.frameTree.frame.id,worldName:'AGZH-plugin-chunks'}),engine=await readFile(join(root,'dist/engine.js'),'utf8');
       const entries={'@ui:/customizations|description|Read public documents.':'阅读公共文档。','@ui:/customizations|description|Draft public documents.':'起草公共文档。','@ui:/customizations|description|Review public documents.':'审查公共文档。'};
@@ -616,12 +629,12 @@ ${engine}`,ctx.executionContextId);
       await until(async()=>await text(cdp,'#block-one')==='阅读公共文档。');assert.equal((await text(cdp,'#block-two')).replace(/\s/g,''),'起草公共文档。审查公共文档。');assert.equal(await text(cdp,'#not-card'),'Read public documents.');
       const catalogue=await cdp.evaluate('globalThis.__AGZH_ENGINE_V1__.pluginCatalog()',ctx.executionContextId);assert.deepEqual(catalogue.map(x=>x.description).sort(),['Read public documents.','Draft public documents.','Review public documents.'].sort());
       await cdp.evaluate('globalThis.__AGZH_ENGINE_V1__.dispose()',ctx.executionContextId);
-    }finally{cdp?.close();await browser.send('Target.closeTarget',{targetId:target.targetId});}
+    }finally{cdp?.close();await browserCommand('Target.closeTarget',{targetId:target.targetId}).catch(error => { chromeErrors += '\nTarget cleanup: ' + error.message; });}
   });
   await check('独立设置壳可保守汉化提示与占位符，引导页仍拒绝注入',async()=>{
-    const target=await browser.send('Target.createTarget',{url:origin+'/settings-standalone'});let cdp;
+    const target=await browserCommand('Target.createTarget',{url:origin+'/settings-standalone'});let cdp;
     try{
-      const targets=await(await fetch(`http://127.0.0.1:${port}/json/list`)).json();cdp=new CDP(targets.find(t=>t.id===target.targetId).webSocketDebuggerUrl);await cdp.connect();const engine=await readFile(join(root,'dist/engine.js'),'utf8');
+      const page=await until(async()=>(await(await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find(t=>t.id===target.targetId));cdp=new CDP(page.webSocketDebuggerUrl);await cdp.connect();await documentReady(cdp);const engine=await readFile(join(root,'dist/engine.js'),'utf8');
       await cdp.evaluate(`document.body.innerHTML='<section data-testid="settings-root"><nav role="tablist"><button>General</button></nav><input id="standalone-input" placeholder="Find settings" value="Private draft"><div role="tooltip" id="standalone-tooltip">Worked for 12s</div><div class="monaco-editor">Settings</div></section>'`);
       const tree=await cdp.send('Page.getFrameTree'),ctx=await cdp.send('Page.createIsolatedWorld',{frameId:tree.frameTree.frame.id,worldName:'AGZH-standalone-test'});
       const boot={origin,path:'/settings-standalone',conservative:true,dictionary:{schema:1,version:'standalone',entries:{General:'通用','Find settings':'查找设置',Settings:'设置'}}};
@@ -632,7 +645,7 @@ ${engine}`,ctx.executionContextId);
       const authTree=await cdp.send('Page.getFrameTree'),auth=await cdp.send('Page.createIsolatedWorld',{frameId:authTree.frameTree.frame.id,worldName:'AGZH-onboarding-test'});
       await cdp.evaluate(`document.body.innerHTML='<nav aria-label="Sidebar"><a href="/history">History</a></nav><button>Settings</button>'`);await cdp.evaluate(`globalThis.__AGZH_BOOT__=${JSON.stringify({...boot,path:'/onboarding'})};
 ${engine}`,auth.executionContextId);assert.equal(await cdp.evaluate('!!globalThis.__AGZH_ENGINE_V1__',auth.executionContextId),false);assert.equal(await text(cdp,'button'),'Settings');
-    }finally{cdp?.close();await browser.send('Target.closeTarget',{targetId:target.targetId});}
+    }finally{cdp?.close();await browserCommand('Target.closeTarget',{targetId:target.targetId}).catch(error => { chromeErrors += '\nTarget cleanup: ' + error.message; });}
   });
   await check('class 抖动不触发全量 reconcile/重建，保护状态变化仍能纠正', async () => {
     const tree = await main.send('Page.getFrameTree');const context = await main.send('Page.createIsolatedWorld', { frameId: tree.frameTree.frame.id, worldName: 'AGZH-localization-v1' });
@@ -654,8 +667,14 @@ ${engine}`,auth.executionContextId);assert.equal(await cdp.evaluate('!!globalThi
     await main.evaluate('document.querySelector("#jitter-probe").remove()');
   });
   await check('词典同步提示只在版本改变后出现，重复应用及英文对照保持安静',async()=>{
-    await main.send('Page.bringToFront');const tree=await main.send('Page.getFrameTree'),ctx=await main.send('Page.createIsolatedWorld',{frameId:tree.frameTree.frame.id,worldName:'AGZH-localization-v1'});
+    try { await main.send('Page.bringToFront'); } catch {
+      main.close();const same=await until(async()=>(await(await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find(t=>t.id===page.id));main=new CDP(same.webSocketDebuggerUrl);await main.connect();await main.send('Page.enable');await main.send('Page.bringToFront');
+    }
     await new Promise(r=>setTimeout(r,3000));
+    try { await main.send('Page.enable'); } catch {
+      main.close();const same=await until(async()=>(await(await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find(t=>t.id===page.id));main=new CDP(same.webSocketDebuggerUrl);await main.connect();await main.send('Page.enable');
+    }
+    const tree=await main.send('Page.getFrameTree'),ctx=await main.send('Page.createIsolatedWorld',{frameId:tree.frameTree.frame.id,worldName:'AGZH-localization-v1'});
     await main.evaluate(`globalThis.__GB_TOAST_TEST__={...globalThis.__AGZH_BOOT__.dictionary,version:'toast-test-'+Date.now()};globalThis.__AGZH_ENGINE_V1__.update(globalThis.__GB_TOAST_TEST__)`,ctx.executionContextId);
     await until(async()=>await text(main,'#__agzh_toast__')==='GravityBox · 词典已同步更新');await until(async()=>await text(main,'#__agzh_toast__')===undefined,3000);
     await main.evaluate('globalThis.__AGZH_ENGINE_V1__.update(globalThis.__GB_TOAST_TEST__)',ctx.executionContextId);await new Promise(r=>setTimeout(r,200));assert.equal(await text(main,'#__agzh_toast__'),undefined);
@@ -672,9 +691,9 @@ ${engine}`,auth.executionContextId);assert.equal(await cdp.evaluate('!!globalThi
     }
   });
   await check('真实设置结构：兼容模式翻译普通标签和说明、保留代码/链接/项目名，并可在设置已打开时启动',async()=>{
-    const target=await browser.send('Target.createTarget',{url:origin+'/?settingsOpen=true&settingsScreen=General'});let cdp;
+    const target=await browserCommand('Target.createTarget',{url:origin+'/?settingsOpen=true&settingsScreen=General'});let cdp;
     try {
-      const page=await until(async()=>(await(await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find(t=>t.id===target.targetId));cdp=new CDP(page.webSocketDebuggerUrl);await cdp.connect();
+      const page=await until(async()=>(await(await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find(t=>t.id===target.targetId));cdp=new CDP(page.webSocketDebuggerUrl);await cdp.connect();await documentReady(cdp);
       const html='<div role="dialog" aria-label="Settings"><button aria-label="Close">Close</button><aside><h1>Settings</h1><button>General</button><button>App Settings</button><button>Appearance</button><h2>Project list</h2><button id="settings-project">Queued Messages</button><button id="settings-expand" class="text-xs mx-4 hover:underline">Show All</button><h2>Not in a project</h2><button>Chats</button></aside><main><h2>General</h2><div id="settings-description">Configure agent execution, queued message delivery, and permissions.</div><div><span id="settings-queued">Queued Messages</span><div>Configure when follow-up messages are sent.</div><span id="settings-policy">Permission Preset</span><p id="settings-inline">Type <code>/</code> and select <code>plan</code> to have the agent generate a plan.</p><div class="font-mono" style="white-space: pre"><div><span id="settings-code-name">Name</span></div></div><div data-agzh-user-content id="settings-private">Permission Preset</div><input value="Queued Messages"></div></main></div><div id="settings-outside">Permission Preset</div>';
       await cdp.evaluate('document.body.innerHTML='+JSON.stringify(html));
       const entries={Name:'名称','Show All':'显示全部',Settings:'设置',General:'通用','App Settings':'应用设置',Appearance:'外观','Queued Messages':'排队消息','Permission Preset':'权限预设','Configure when follow-up messages are sent.':'配置何时发送后续追问消息。','Configure agent execution, queued message delivery, and permissions.':'配置智能体执行、排队消息发送及权限。','Type {0} and select {1} to have the agent generate a plan.':'输入 {0} 并选择 {1}，让智能体生成规划。'};
@@ -682,13 +701,13 @@ ${engine}`,auth.executionContextId);assert.equal(await cdp.evaluate('!!globalThi
       await until(async()=>await text(cdp,'#settings-queued')==='排队消息');assert.equal(await text(cdp,'#settings-policy'),'权限预设');assert.equal(await text(cdp,'#settings-description'),'配置智能体执行、排队消息发送及权限。');
       assert.equal(await text(cdp,'#settings-inline'),'输入 / 并选择 plan，让智能体生成规划。');assert.equal(await cdp.evaluate('document.querySelector("input").value'),'Queued Messages');assert.equal(await text(cdp,'#settings-project'),'Queued Messages');assert.equal(await text(cdp,'#settings-expand'),'显示全部');assert.equal(await text(cdp,'#settings-code-name'),'Name');assert.equal(await text(cdp,'#settings-private'),'Permission Preset');assert.equal(await text(cdp,'#settings-outside'),'Permission Preset');assert.equal(await text(cdp,'code'),' /'.trim());
       await cdp.evaluate('globalThis.__AGZH_ENGINE_V1__.dispose()');assert.equal(await text(cdp,'#settings-queued'),'Queued Messages');assert.equal(await text(cdp,'#settings-inline'),'Type / and select plan to have the agent generate a plan.');
-    }finally{cdp?.close();await browser.send('Target.closeTarget',{targetId:target.targetId});}
+    }finally{cdp?.close();await browserCommand('Target.closeTarget',{targetId:target.targetId}).catch(error => { chromeErrors += '\nTarget cleanup: ' + error.message; });}
   });
   await check('设置首帧、同词典刷新、热更新和退出动画保持译文，不跨帧回写英文', async () => {
-    const target=await browser.send('Target.createTarget',{url:origin+'/'});let cdp;
+    const target=await browserCommand('Target.createTarget',{url:origin+'/'});let cdp;
     try {
       const page=await until(async()=>(await(await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find(t=>t.id===target.targetId));
-      cdp=new CDP(page.webSocketDebuggerUrl);await cdp.connect();await cdp.send('Page.bringToFront');
+      cdp=new CDP(page.webSocketDebuggerUrl);await cdp.connect();await cdp.send('Page.bringToFront');await documentReady(cdp);
       const rows=Array.from({length:320},(_,i)=>`<div data-testid="conversation-row-sidebar"><span class="truncate">Private conversation ${i}</span><span>1d</span></div>`).join('');
       const html='<div role="dialog" aria-label="Settings" id="flash-root"><button aria-label="Close">Close</button><aside><h1 id="flash-heading">Settings</h1><button id="flash-general">General</button><button id="flash-app">Application</button><button>Appearance</button><h2>Project list</h2><button id="flash-project">Application</button>'+rows+'</aside><main><h2>General</h2><span id="flash-label">Permission Preset</span><div id="flash-description">Configure agent execution, queued message delivery, and permissions.</div><p id="flash-inline">Type <code>/</code> and select <code>plan</code> to have the agent generate a plan.</p><input id="flash-input" value="Permission Preset"><div data-agzh-user-content id="flash-private">Permission Preset</div></main></div>';
       const entries={Settings:'设置',Close:'关闭',General:'通用',Application:'应用设置','App Settings':'应用设置',Appearance:'外观','Permission Preset':'权限预设','Configure agent execution, queued message delivery, and permissions.':'配置智能体执行、排队消息发送及权限。','Type {0} and select {1} to have the agent generate a plan.':'输入 {0} 并选择 {1}，让智能体生成规划。'};
@@ -723,7 +742,7 @@ ${engine}`,auth.executionContextId);assert.equal(await cdp.evaluate('!!globalThi
       assert.ok(returned.every(Boolean),'Unsupported screen must invalidate the scope and revalidate on return');
       await cdp.evaluate('globalThis.__AGZH_ENGINE_V1__.dispose()');
       assert.equal(await text(cdp,'#flash-inline'),'Type / and select plan to have the agent generate a plan.');
-    } finally { cdp?.close();await browser.send('Target.closeTarget',{targetId:target.targetId}); }
+    } finally { cdp?.close();await browserCommand('Target.closeTarget',{targetId:target.targetId}).catch(error => { chromeErrors += '\nTarget cleanup: ' + error.message; }); }
   });
   const resources = (await execute('/bin/ps', ['-p', String(backend.pid), '-o', 'rss=,%cpu=,time='])).stdout.trim();
   const finalStatus = await status();
@@ -736,11 +755,11 @@ ${engine}`,auth.executionContextId);assert.equal(await cdp.evaluate('!!globalThi
   await writeFile(join(evidenceDir, 'browser-results.json'), JSON.stringify({ date: new Date().toISOString(), scope: 'isolated headless Chrome fixture, not real Antigravity', browser: version.Browser, checks, updateDurationMs: updateDuration, backendResources: { ps: resources, statusRSSMB: finalStatus.rssMB }, rendererHeap: { initial: initialHeap, final: finalHeap, note: '整个测试页面的 JS 堆，包含测试操作，不能归因全部为翻译引擎；不是整个渲染进程 RSS' }, warnings: backendErrors }, null, 2));
   console.log(JSON.stringify({ passed: checks.length, updateDurationMs: updateDuration, backendResources: resources }));
 } catch (error) {
-  await writeFile(join(evidenceDir, 'browser-failure.json'), JSON.stringify({ checks, error: error.stack, backendErrors, chromeErrors }, null, 2));
+  await writeFile(join(evidenceDir, 'browser-failure.json'), JSON.stringify({ checks, error: error.stack, backendErrors, chromeErrors, browserEndpoint, chromeExit: { code: chrome?.exitCode, signal: chrome?.signalCode } }, null, 2));
   throw error;
 } finally {
   if (backend?.exitCode === null) { try { await command('stop'); } catch { backend.kill('SIGTERM'); } }
-  main?.close(); second?.close(); browser?.close(); chrome?.kill('SIGTERM');
+  main?.close(); second?.close(); chrome?.kill('SIGTERM');
   await new Promise(resolve => server.close(resolve));
   await new Promise(resolve => setTimeout(resolve, 500));
   await rm(temp, { recursive: true, force: true });

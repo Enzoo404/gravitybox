@@ -1,5 +1,5 @@
 import test from 'node:test';import assert from'node:assert/strict';import{mkdtemp,rm,mkdir}from'node:fs/promises';import{join}from'node:path';import{tmpdir}from'node:os';import{DatabaseSync}from'node:sqlite';import{UsageStatsManager,ProtobufWriter as W,calculateEstimatedUsd}from'../dist/usage.js';
-const fixture=async fn=>{const d=await mkdtemp(join(tmpdir(),'gb-proto-usage-'));try{await fn(d);}finally{await rm(d,{recursive:true,force:true});}};
+const fixture=async fn=>{const d=await mkdtemp(join(tmpdir(),'gb-proto-usage-'));try{await fn(d);}finally{await rm(d,{recursive:true,force:true,maxRetries:10,retryDelay:50});}};
 const time=()=>W.encodeLengthDelimited(9,W.encodeLengthDelimited(4,W.encodeVarintField(1,Math.floor(Date.now()/1000))));
 test('官方ModelUsageStats的模型枚举不计入Token；空用量记录不计为消费或未知日期',()=>fixture(async d=>{
  const dir=join(d,'antigravity','conversations');await mkdir(dir,{recursive:true});const db=new DatabaseSync(join(dir,'usage.db'));db.exec('CREATE TABLE gen_metadata(idx INTEGER PRIMARY KEY,data BLOB)');const insert=db.prepare('INSERT INTO gen_metadata VALUES(?,?)');const blob=fields=>W.encodeLengthDelimited(1,fields);

@@ -414,6 +414,7 @@ export class UsageStatsManager {
   private lastAggregationKey = '';
   private remotePricingCachePath: string;
   private remotePricingUrl: string;
+  private autoRemotePricingSync: boolean;
   private lastRemoteSyncAt = 0;
 
   constructor(options?: { geminiDir?: string; stateDir?: string; remotePricingUrl?: string; dataDirectoryName?: DataDirectoryName }) {
@@ -425,6 +426,7 @@ export class UsageStatsManager {
     this.pricingCachePath = join(stateDir, 'api_pricing.json');
     this.remotePricingCachePath = join(stateDir, 'remote_pricing.json');
     this.remotePricingUrl = options?.remotePricingUrl ?? process.env.GRAVITYBOX_PRICING_FEED_URL ?? 'https://raw.githubusercontent.com/Enzoo404/gravitybox/main/assets/pricing-feed.json';
+    this.autoRemotePricingSync = Boolean(options?.remotePricingUrl || (this.geminiDir === defaultGeminiDir && stateDir === defaultStateDir));
     if (this.geminiDir === defaultGeminiDir && stateDir === defaultStateDir) {
       const cacheTag = options?.dataDirectoryName ?? 'unified';
       this.persistCachePath = join(homedir(), 'Library', 'Caches', 'GravityBox', `usage-db-cache-${cacheTag}-v1.json`);
@@ -463,7 +465,7 @@ export class UsageStatsManager {
     } catch {}
   }
 
-  private savePersistentFileCache(): void {
+  private async savePersistentFileCache(): Promise<void> {
     if (!this.persistCachePath || !this.fileCacheDirty) return;
     this.fileCacheDirty = false;
     const entries: Record<string, any> = {};
@@ -471,7 +473,7 @@ export class UsageStatsManager {
       if (!v.hasError) entries[k] = v;
     }
     const targetPath = this.persistCachePath;
-    void atomicJson(targetPath, { version: 1, entries }, undefined, { durability: 'relaxed' }).catch(() => {
+    await atomicJson(targetPath, { version: 1, entries }, undefined, { durability: 'relaxed' }).catch(() => {
       this.fileCacheDirty = true;
     });
   }
@@ -1039,11 +1041,13 @@ export class UsageStatsManager {
       };
     }
 
-    this.savePersistentFileCache();
+    await this.savePersistentFileCache();
     const rawPricing = await this.getRawPricingTable();
     const now = Math.floor(Date.now() / 1000);
     const pricing = await this.getPricingTable(now);
-    void this.syncRemotePricing().catch(() => {});
+    if (this.autoRemotePricingSync) {
+      void this.syncRemotePricing().catch(() => {});
+    }
     const calKey = this.calendarKey();
     const aggKey = allCacheHits && failedDatabasesCount === 0
       ? `${calKey}|${this.lastDiscoveredDatabaseCount}|${dbPaths.map(p => { const c = this.fileCache.get(p); return c ? `${p}:${c.mtimeMs}:${c.size}:${c.walMtimeMs}:${c.walSize}:${c.hasError ? 1 : 0}` : p; }).join(';')}|${JSON.stringify(rawPricing)}|${this.pricingWarnings.join(',')}`
