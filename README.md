@@ -26,6 +26,27 @@
   </p>
 </div>
 
+<p align="center">
+  <a href="assets/screenshots/overview.png"><img src="assets/screenshots/overview.png" width="1100" alt="GravityBox 总览实机截图：账号配额、Token 用量、费用估算与活跃模型" /></a>
+  <br>
+  <sub>总览 · 账号配额、今日用量与模型消耗，一屏掌握。</sub>
+</p>
+
+<table>
+  <tr>
+    <th width="40%">多账号管理</th>
+    <th width="40%">用量与费用分析</th>
+    <th width="20%">菜单栏快捷面板</th>
+  </tr>
+  <tr>
+    <td align="center" valign="top"><a href="assets/screenshots/accounts.png"><img src="assets/screenshots/accounts.png" width="100%" alt="GravityBox 账号页实机截图：多账号配额与手动确认切换，身份信息已遮挡" /></a></td>
+    <td align="center" valign="top"><a href="assets/screenshots/usage.png"><img src="assets/screenshots/usage.png" width="100%" alt="GravityBox 用量页实机截图：Token 趋势、模型费用估算与缓存命中率" /></a></td>
+    <td align="center" valign="top"><a href="assets/screenshots/menubar.png"><img src="assets/screenshots/menubar.png" width="100%" alt="GravityBox 菜单栏快捷面板实机截图：用量、请求数与趋势速览" /></a></td>
+  </tr>
+</table>
+
+<p align="center"><sub>macOS 实机截图 · v1.0.0 · 邮箱与姓名已遮挡，系统共享提示已移除。点击图片查看原图；费用为 API 等效估算。</sub></p>
+
 ---
 
 ## 功能速览
