@@ -32,6 +32,9 @@ import { existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { loadDictionaryLayers, compareLayers } from '../dist/dictionary.js';
 import { SUPPORTED_BUNDLES, extractUiStrings } from '../dist/bundle.js';
+import { PROPER_NOUNS } from '../dist/coverage.js';
+import { appVersion as detectInstalledAppVersion, extractFromRunningApp } from './extract-ui-strings.mjs';
+export { PROPER_NOUNS };
 import { join, dirname, resolve, isAbsolute } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -158,11 +161,6 @@ export async function verifyBundleSource(uiStrings, { bundlePath, expectSha256, 
  *   - 已有通行中文译法的（URL→网址、Chrome DevTools→Chrome 开发者工具、GCP→Google Cloud Platform）
  *   - 中文里本就用缩写的（MCP/API 在中文句子中偶尔被完整展开，不算把专名译掉）
  */
-export const PROPER_NOUNS = [
-  'Antigravity', 'Gemini', 'GitHub', 'Git', 'MCP', 'OAuth', 'npm', 'Node.js', 'Python',
-  'Docker', 'Kubernetes', 'Puppeteer', 'Playwright', 'Jetski', 'Sidecar', 'Firebase',
-  'Flutter', 'Dart', 'Electron', 'LaTeX', 'Mermaid', 'Catppuccin', 'AGY', 'Google',
-];
 
 const normalized = text => text.replace(/\s+/g, ' ').trim();
 
@@ -262,9 +260,33 @@ async function main() {
   let version = option('--version');
   let uiPath = option('--strings');
   if (!uiPath) {
-    /* 未指定就取 ui-strings 目录里最新的那份，这样可以 `npm run i18n:pipeline` 一把跑完 */
+    /* 自动感知本机安装的最新 Antigravity 版本（如 2.29.x）：
+       若未指定 --version 且本机已安装更新版本，或指定了尚未提取的 --version，则自动尝试从运行中的实例提取并登记指纹。 */
     const dir = join(root, 'ui-strings');
-    const available = (await readdir(dir).catch(() => [])).filter(name => name.endsWith('.json')).sort(compareLayers);
+    let available = (await readdir(dir).catch(() => [])).filter(name => name.endsWith('.json')).sort(compareLayers);
+    const installedVersion = await detectInstalledAppVersion().catch(() => undefined);
+    const latestExtracted = available.length ? available[available.length - 1].replace(/\.json$/, '') : undefined;
+    const targetToExtract = version && !available.includes(`${version}.json`)
+      ? version
+      : (!version && installedVersion && (!latestExtracted || compareLayers(`${latestExtracted}.json`, `${installedVersion}.json`) < 0) && !available.includes(`${installedVersion}.json`))
+        ? installedVersion
+        : undefined;
+    if (targetToExtract && !args.includes('--no-auto-extract')) {
+      try {
+        const extracted = await extractFromRunningApp({ projectRoot: root, registerBundle: true });
+        if (extracted?.appVersion) {
+          SUPPORTED_BUNDLES.set(extracted.appVersion, extracted.bundleSha256);
+          available = (await readdir(dir).catch(() => [])).filter(name => name.endsWith('.json')).sort(compareLayers);
+          console.error(`[coverage-report] 已自动从运行中的 Antigravity ${extracted.appVersion} 提取界面串并纳入覆盖率门禁`);
+        }
+      } catch (err) {
+        if (version) {
+          console.error(`[coverage-report] 尝试自动提取 ${version} 失败（${err.message}）`);
+        } else {
+          console.error(`[coverage-report] 检测到本机 Antigravity ${targetToExtract} 尚未提取 ui-strings（${err.message}），当前回退验证已提取的最新版本 ${latestExtracted}`);
+        }
+      }
+    }
     if (!available.length) throw new Error(`ui-strings 目录里没有提取结果，请先运行 npm run i18n:extract`);
     const pick = version ? `${version}.json` : available[available.length - 1];
     if (!available.includes(pick)) throw new Error(`ui-strings/${pick} 不存在；现有：${available.join(', ')}`);

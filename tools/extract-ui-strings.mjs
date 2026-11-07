@@ -7,6 +7,7 @@ import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { extractUiStrings, isEnglishSource, isFragmentLiteral, CODE_ONLY_WORDS, fetchBuffer, computeBundleSha256 } from '../dist/bundle.js';
 import { discover, allowedTarget, verifyPageService } from '../dist/discovery.js';
+import { compareVersions } from './release-scope.mjs';
 export { isEnglishSource, isFragmentLiteral, CODE_ONLY_WORDS };
 const root = fileURLToPath(new URL('../', import.meta.url)), args = process.argv.slice(2);
 const option = (name, fallback) => { const i = args.indexOf(name); return i < 0 ? fallback : args[i + 1]; };
@@ -36,15 +37,78 @@ export async function readBundleFile(bundlePath) {
   return { source: absolute, text: decodeBundle(buffer, `--bundle ${absolute}`) };
 }
 
+/**
+ * 将已确认官方身份的新版本界面包指纹自动登记到 src/bundle.ts 的 SUPPORTED_BUNDLES 中。
+ * 这样当本机 Antigravity 升级到 2.29.x 或更高版本时，提取后即可无缝纳入覆盖率门禁与全量测试。
+ */
+export async function registerSupportedBundle(version, bundleSha256, projectRoot = root) {
+  if (typeof version !== 'string' || !/^\d+\.\d+\.\d+$/.test(version)) return false;
+  if (typeof bundleSha256 !== 'string' || !/^[0-9a-f]{64}$/.test(bundleSha256)) return false;
+  const bundleTsPath = join(projectRoot, 'src', 'bundle.ts');
+  let content;
+  try { content = await readFile(bundleTsPath, 'utf8'); } catch { return false; }
+  const mapRegex = /export const SUPPORTED_BUNDLES = new Map\(\[([\s\S]*?)\]\);/;
+  const match = content.match(mapRegex);
+  if (!match) return false;
+  const entries = new Map();
+  for (const row of match[1].matchAll(/\['([^']+)',\s*'([0-9a-f]{64})'\]/g)) {
+    entries.set(row[1], row[2]);
+  }
+  if (entries.get(version) === bundleSha256) return false;
+  entries.set(version, bundleSha256);
+  const sorted = [...entries.entries()].sort(([a], [b]) => compareVersions(a, b));
+  const formatted = sorted.map(([ver, sha]) => `  ['${ver}', '${sha}'],`).join('\n');
+  const updated = content.replace(mapRegex, `export const SUPPORTED_BUNDLES = new Map([\n${formatted}\n]);`);
+  await writeFile(bundleTsPath, updated, 'utf8');
+  return true;
+}
+
+/**
+ * 从当前运行中的官方 Antigravity 实例自动提取最新版本的界面串并落盘 ui-strings/<version>.json。
+ */
+export async function extractFromRunningApp({ app = APP, profile = PROFILE, base, outPath, registerBundle = true, projectRoot = root } = {}) {
+  const version = await appVersion(app);
+  if (!version || !/^\d+\.\d+\.\d+$/.test(version)) throw new Error('无法读取本机 Antigravity 版本号');
+  const endpoint = await discover(app, profile);
+  if (!endpoint || endpoint.appVersion !== version) throw new Error(`Antigravity (${version}) 未运行或调试端口未就绪`);
+  const targets = await (await fetch(`http://127.0.0.1:${endpoint.port}/json/list`, { signal: AbortSignal.timeout(3000), redirect: 'error' })).json();
+  const target = targets.find(t => allowedTarget(t));
+  const origin = base ?? (target && new URL(target.url).origin);
+  if (!origin || !await verifyPageService(origin + '/', app)) throw new Error('本机界面服务身份未确认');
+  const source = decodeBundle(await fetchBuffer(origin + '/main.js'), '本机界面包 main.js');
+  const bundleRelative = join('vendor', 'antigravity', version, 'main.js');
+  const bundleFile = join(projectRoot, bundleRelative);
+  await mkdir(dirname(bundleFile), { recursive: true });
+  await writeFile(bundleFile, source);
+  const strings = extractUiStrings(source), byKind = {};
+  for (const entry of strings) for (const kind of entry.kinds) byKind[kind] = (byKind[kind] ?? 0) + 1;
+  const bundleSha256 = computeBundleSha256(source);
+  const value = {
+    schema: 1,
+    appVersion: version,
+    source: bundleRelative,
+    bundleSha256,
+    bundleBytes: Buffer.byteLength(source),
+    extractedAt: new Date().toISOString(),
+    counts: { total: strings.length, ...byKind },
+    strings,
+  };
+  const out = outPath ?? join(projectRoot, 'ui-strings', `${version}.json`);
+  await mkdir(dirname(out), { recursive: true });
+  await writeFile(out, JSON.stringify(value, null, 1) + '\n');
+  const registered = registerBundle ? await registerSupportedBundle(version, bundleSha256, projectRoot) : false;
+  return { out, count: strings.length, appVersion: version, bundleSha256, registered, value };
+}
+
 async function main() {
   const version = option('--version') ?? await appVersion();
   if (!version || !/^\d+\.\d+\.\d+$/.test(version)) throw new Error('请明确指定目标应用版本');
-  const bundle = option('--bundle'); let source, sourceName;
+  const bundle = option('--bundle');
+  let source, sourceName;
   if (bundle) {
     /* 记录 source 用绝对路径：后续 coverage-report 的来源校验会按这个路径重算哈希。 */
     const loaded = await readBundleFile(bundle); source = loaded.text; sourceName = loaded.source;
-  }
-  else {
+  } else {
     const endpoint = await discover(APP, PROFILE);
     if (!endpoint || endpoint.appVersion !== version) throw new Error('应用未运行或版本不匹配；离线重跑请指定 --bundle');
     const targets = await (await fetch(`http://127.0.0.1:${endpoint.port}/json/list`, { signal: AbortSignal.timeout(3000), redirect: 'error' })).json();
@@ -59,9 +123,13 @@ async function main() {
   }
   const strings = extractUiStrings(source), byKind = {};
   for (const entry of strings) for (const kind of entry.kinds) byKind[kind] = (byKind[kind] ?? 0) + 1;
+  const bundleSha256 = computeBundleSha256(source);
   /* schema 保持不变；只保证 source 对 --bundle 路径是可回溯的绝对路径。 */
-  const value = { schema: 1, appVersion: version, source: sourceName, bundleSha256: computeBundleSha256(source), bundleBytes: Buffer.byteLength(source), extractedAt: new Date().toISOString(), counts: { total: strings.length, ...byKind }, strings };
+  const value = { schema: 1, appVersion: version, source: sourceName, bundleSha256, bundleBytes: Buffer.byteLength(source), extractedAt: new Date().toISOString(), counts: { total: strings.length, ...byKind }, strings };
   if (args.includes('--stdout')) { process.stdout.write(JSON.stringify(value, null, 1) + '\n'); return; }
-  const out = option('--out', join(root, 'ui-strings', `${version}.json`)); await mkdir(dirname(out), { recursive: true }); await writeFile(out, JSON.stringify(value, null, 1) + '\n'); console.log(JSON.stringify({ out, count: strings.length, appVersion: version }));
+  const out = option('--out', join(root, 'ui-strings', `${version}.json`)); await mkdir(dirname(out), { recursive: true }); await writeFile(out, JSON.stringify(value, null, 1) + '\n');
+  const shouldRegister = args.includes('--register-bundle') || (!bundle && !args.includes('--no-register-bundle'));
+  const registered = shouldRegister ? await registerSupportedBundle(version, bundleSha256, root) : false;
+  console.log(JSON.stringify({ out, count: strings.length, appVersion: version, ...(registered ? { registeredInBundleTs: true } : {}) }));
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main().catch(error => { console.error(error.message); process.exitCode = 1; });

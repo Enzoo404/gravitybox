@@ -28,24 +28,8 @@ import { join, dirname, basename } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { validateEntries } from '../dist/dictionary.js';
 import { atomicJson } from '../dist/files.js';
-import { preservedIdentifier } from '../dist/coverage.js';
-export const PROPER_NOUNS = [
-  'Antigravity', 'GravityBox', 'Gemini', 'GitHub', 'Git', 'MCP', 'OAuth', 'npm', 'Node.js', 'Python',
-  'Docker', 'Kubernetes', 'Puppeteer', 'Playwright', 'Jetski', 'Sidecar', 'Firebase',
-  'Flutter', 'Dart', 'Electron', 'LaTeX', 'Mermaid', 'Catppuccin', 'AGY', 'Google',
-];
-
-
-export const GLOSSARY_RULES = [
-  { en: /\bconversations?\b/i, zh: '对话', forbid: ['会话', '聊天'], note: 'conversation → 对话' },
-  { en: /\bchats?\b/i, zh: '对话', forbid: ['聊天'], note: 'chat → 对话' },
-  { en: /\btokens?\b/i, zh: 'Token', forbid: ['令牌', '标记'], note: 'token → Token' },
-  { en: /\ballow ?lists?\b/i, zh: '允许列表', forbid: ['白名单'], note: 'allowlist → 允许列表' },
-  { en: /\bdeny ?lists?\b/i, zh: '拒绝列表', forbid: ['黑名单'], note: 'denylist → 拒绝列表' },
-  { en: /\bcustomizations?\b/i, zh: '自定义', forbid: ['个性化', '定制'], note: 'customization → 自定义' },
-  { en: /\bplugins?\b/i, zh: '插件', forbid: [], note: 'plugin → 插件' },
-  { en: /\bextensions?\b/i, zh: '扩展', forbid: [], note: 'extension → 扩展' },
-];
+import { preservedIdentifier, PROPER_NOUNS, GLOSSARY_RULES } from '../dist/coverage.js';
+export { PROPER_NOUNS, GLOSSARY_RULES };
 
 const normalize = (text) => text.replace(/\s+/g, ' ').trim();
 const placeholderTokens = (text) => (text.match(/\{\{?\w+\}?\}|\$\d+|%[sd]/g) ?? []).sort().join('|');

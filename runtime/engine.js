@@ -74,7 +74,7 @@
      inside an entity container or a row with per-item actions. */
   const USER_CONTENT = '[data-agzh-user-content],[data-agzh-user-name]';
   const ENTITY_HREF = /^\/(?:c\/[0-9a-f-]{36}|customizations\/(?:plugins|skills|automations)\/[\w.-]+|marketplaces\/[\w.-]+\/plugins\/[\w.-]+|automations\/[\w.-]+|projects\/[\w.-]+|sidecars\/[\w.-]+)$/i;
-  const ENTITY_CONTAINER = '[data-agzh-user-content],[data-testid*="automation"],[data-testid*="workspace"],[data-testid*="project"],[data-testid*="skill"],[data-testid*="plugin"],[data-testid*="marketplace"],[data-testid*="session"]';
+  const ENTITY_CONTAINER = '[data-agzh-user-content],[data-testid="automation-card"],[data-testid="automation-row"],[data-testid="automation-item"],[data-testid="automation-list-item"],[data-testid*="workspace"],[data-testid*="project"],[data-testid*="skill"],[data-testid*="plugin"],[data-testid*="marketplace"],[data-testid*="session"]';
   const ENTITY_ROW = '[data-testid*="card"],[data-testid*="row"],li,[role="listitem"],[role="option"],[role="menuitem"],tr';
   const ROW_ACTIONS = '[data-testid*="actions"],[data-testid*="menu-trigger"],[aria-label*="More actions" i],[aria-label*="更多操作"],[aria-label="More options" i]';
   const USER_NAME_ROW = 'h1,h2,h3,h4,[data-testid*="name"],[data-testid*="title"]';
@@ -84,6 +84,7 @@
   }
   function userNamed(element) {
     if (!element || element.nodeType !== Node.ELEMENT_NODE) return false;
+    if (element.closest('[data-testid*="-toggle"],[data-testid*="-trigger"],[data-testid$="-button"],[data-testid$="-select"]')) return false;
     if (element.closest(USER_CONTENT)) return true;
     const anchor = element.closest('a[href]');
     if (anchor && ENTITY_HREF.test(entityAnchorPath(anchor))) return true;
@@ -105,7 +106,7 @@
   /* J03: third-party/product names are not interface copy. Entity links/cards are protected
      structurally (J01); this allowlist covers brand-only labels rendered as plain text/buttons so a
      dictionary hit can never turn "Gemini"/"GitHub" into Chinese. */
-  const BRAND_NAMES = new Set(['antigravity', 'gemini', 'claude', 'gpt', 'chatgpt', 'google', 'github', 'github copilot', 'copilot', 'chrome', 'chromium', 'firefox', 'safari', 'webkit', 'node.js', 'nodejs', 'npm', 'pnpm', 'yarn', 'deno', 'bun', 'electron', 'typescript', 'javascript', 'python', 'rust', 'golang', 'java', 'kotlin', 'swift', 'xcode', 'vscode', 'vs code', 'visual studio code', 'intellij idea', 'pycharm', 'webstorm', 'jetbrains', 'docker', 'kubernetes', 'postgresql', 'postgres', 'mysql', 'sqlite', 'redis', 'mongodb', 'react', 'vue', 'svelte', 'angular', 'next.js', 'vite', 'webpack', 'esbuild', 'tailwind', 'tailwind css', 'openai', 'anthropic', 'deepseek', 'mistral', 'llama', 'perplexity', 'notion', 'slack', 'linear', 'jira', 'figma', 'gitlab', 'bitbucket', 'vercel', 'cloudflare', 'firebase', 'supabase', 'prisma', 'playwright', 'xterm', 'monaco', 'markdown']);
+  const BRAND_NAMES = new Set(['antigravity', 'gemini', 'claude', 'gpt', 'chatgpt', 'google', 'github', 'github copilot', 'copilot', 'chrome', 'chromium', 'firefox', 'safari', 'webkit', 'node.js', 'nodejs', 'npm', 'pnpm', 'yarn', 'deno', 'bun', 'electron', 'typescript', 'javascript', 'python', 'rust', 'golang', 'java', 'kotlin', 'swift', 'xcode', 'vscode', 'vs code', 'visual studio code', 'intellij idea', 'pycharm', 'webstorm', 'jetbrains', 'docker', 'kubernetes', 'postgresql', 'postgres', 'mysql', 'sqlite', 'redis', 'mongodb', 'react', 'vue', 'svelte', 'angular', 'next.js', 'vite', 'webpack', 'esbuild', 'tailwind', 'tailwind css', 'openai', 'anthropic', 'deepseek', 'mistral', 'llama', 'perplexity', 'notion', 'slack', 'linear', 'jira', 'figma', 'gitlab', 'bitbucket', 'vercel', 'cloudflare', 'firebase', 'supabase', 'prisma', 'playwright', 'xterm', 'monaco', 'markdown', 'inter', 'google sans', 'google sans code', 'google sans text', 'jetbrains mono', 'fira code', 'fira mono', 'cascadia code', 'cascadia mono', 'sf mono', 'roboto mono', 'source code pro', 'consolas', 'menlo', 'courier new', 'ubuntu mono', 'inconsolata', 'hack', 'catppuccin', 'catppuccin frappe', 'catppuccin latte', 'catppuccin macchiato', 'catppuccin mocha', 'gruvbox', 'gruvbox material', 'gruvbox dark', 'gruvbox light', 'solarized', 'solarized light', 'solarized dark', 'one light', 'one dark', 'one dark pro', 'dracula', 'nord', 'monokai', 'monokai pro', 'monokai dimmed', 'tokyo night', 'ayu', 'ayu dark', 'ayu light', 'ayu mirage', 'quiet light', 'aoede', 'charon', 'fenrir', 'kore', 'leda', 'orus', 'puck', 'zephyr', 'project 4k', 'workspace_1', 'workspace_2', 'workspace_3']);
   function isBrandName(value) { return BRAND_NAMES.has(lower(normalize(value))); }
   /* J04 disclosure: templates only understand {0}/{1}… placeholders. printf-style (%s/%d/…) and
      ICU plural/select messages are not recognised (the runtime substitutes the number before the
@@ -209,7 +210,7 @@
   let lastMatchedKeys=[];
   const conservative=!!options.conservative;
   const restrictedAdaptiveRoute=()=>conservative&&/^\/(?:onboarding|oauth|auth|login|sign-in)(?:\/|$)/i.test(location.pathname);
-  const scopeRoute=(el)=>{const panel=el?.closest('[role="dialog"],[data-testid*="settings"],[data-testid*="preferences"]');if(panel&&((panel.getAttribute('data-testid')||'').match(/settings|preferences/)||/^(Settings|设置)$/.test(panel.querySelector('h1,[role="heading"]')?.textContent?.trim()??'')))return '/settings';return location.pathname==='/fixture'?'/fixture':/^\/customizations(?:\/installed)?$/.test(location.pathname)?location.pathname:location.pathname.startsWith('/settings')?'/settings':['/','/history','/sidecars','/automations'].includes(location.pathname)?location.pathname:'/other';};
+  const scopeRoute=(el)=>{if(inSystemSettings(el,scanCount))return '/settings';const panel=el?.closest('[role="dialog"],[data-testid*="settings"],[data-testid*="preferences"]');if(panel&&((panel.getAttribute('data-testid')||'').match(/settings|preferences/)||/^(Settings|设置)$/i.test(panel.getAttribute('aria-label')||'')||/^(Settings|设置)$/.test(panel.querySelector('h1,[role="heading"]')?.textContent?.trim()??'')))return '/settings';return location.pathname==='/fixture'?'/fixture':/^\/customizations(?:\/installed)?$/.test(location.pathname)?location.pathname:location.pathname.startsWith('/settings')?'/settings':location.pathname.startsWith('/automations')?'/automations':location.pathname.startsWith('/sidecars')?'/sidecars':['/','/history'].includes(location.pathname)?location.pathname:'/other';};
   const scopeKey=(key,kind,route=scopeRoute())=>`@ui:${route}|${kind}|${key}`;
   /* J02 SPA route guard. The bootstrap allow-list above is evaluated once per document, but the app
      is a SPA: in-app navigation keeps the same document and the same injected engine, so an
@@ -486,7 +487,7 @@
     if (isRelativeTimeBadge(element)) return true;
     if (modelUiLabel(element)) return true;
     if (isDialogPromptParagraph(element)) return !blocked(element, scan);
-    if(conservative&&(!element||!element.closest('button,[role="button"],[role="tab"],[role="menuitem"],[role="tooltip"],label,h1,h2,h3,h4,a[href],[role="navigation"],[data-testid*="card"],[data-testid="cascade-system-message-toolbar"],[contenteditable="true"][role="combobox"]+p,[data-select-popup],[role="menu"],[role="listbox"],[role="option"]'))&&!pluginDescription(element)&&!inSystemSettings(element,scan))return false;
+    if(conservative&&(!element||!element.closest('button,[role="button"],[role="tab"],[role="menuitem"],[role="tooltip"],label,h1,h2,h3,h4,a[href],[role="navigation"],[data-testid*="card"],[data-testid="cascade-system-message-toolbar"],[contenteditable="true"][role="combobox"]+p,[data-select-popup],[role="menu"],[role="listbox"],[role="option"],[data-testid*="empty"],[data-testid*="sidecar"],[data-testid*="trigger"],[data-testid*="modal"]'))&&!pluginDescription(element)&&!inSystemSettings(element,scan))return false;
     const cached = eligibleCache.get(element);
     if (cached !== undefined && cached.scan === scan) return cached.val;
     const isElig = !blocked(element, scan) && (Boolean(element.closest(UI)) || pluginDescription(element) || inSystemSettings(element,scan));
@@ -497,18 +498,21 @@
   function entryFor(key) {
     const entries = dictionary.entries;
     if (Object.hasOwn(entries, key)) return entries[key];
-    const folded = lower(key);
-    if (Object.hasOwn(entries, folded)) return entries[folded];
-    return foldedMap.get(folded);
+    return foldedMap.get(lower(key));
   }
 
+  const RE_DUR_H = /(\d+)\s*h\b/gi;
+  const RE_DUR_M = /(\d+)\s*m\b/gi;
+  const RE_DUR_S = /(\d+)\s*s\b/gi;
+  const RE_DUR_MS = /(\d+)\s*ms\b/gi;
+  const RE_WHITESPACE = /\s+/g;
   function formatDuration(d) {
     return d
-      .replace(/(\d+)\s*h\b/gi, '$1小时')
-      .replace(/(\d+)\s*m\b/gi, '$1分')
-      .replace(/(\d+)\s*s\b/gi, '$1秒')
-      .replace(/(\d+)\s*ms\b/gi, '$1毫秒')
-      .replace(/\s+/g, '');
+      .replace(RE_DUR_H, '$1小时')
+      .replace(RE_DUR_M, '$1分')
+      .replace(RE_DUR_S, '$1秒')
+      .replace(RE_DUR_MS, '$1毫秒')
+      .replace(RE_WHITESPACE, '');
   }
 
   const TEMPLATE_RULES = [
@@ -868,12 +872,551 @@
     {
       key: "ABFS is required to create ABFS workspaces. Please visit", pattern: /^ABFS is required to create ABFS workspaces\.\s*Please visit\s*$/i,
       replace: () => '创建 ABFS 工作区需要 ABFS，请访问'
+    },
+    // 11. 补充复合内联容器整句模板 (Inline-Group {0}/{1})
+    {
+      key: "Avoid uploading highly sensitive data and verify actions taken by your agent. Make sure you have the {0} to share data.",
+      pattern: /^Avoid uploading highly sensitive data and verify actions taken by your agent\.\s*Make sure you have the \{(\d+)\} to share data\.?$/i,
+      replace: (_, idx) => `请避免上传高度敏感数据，并核实智能体执行的操作。请确保您拥有 {${idx}} 以共享数据。`
+    },
+    {
+      key: "Avoid uploading highly sensitive data and verify actions taken by your agent. Make sure you have the {0}.",
+      pattern: /^Avoid uploading highly sensitive data and verify actions taken by your agent\.\s*Make sure you have the \{(\d+)\}\.?$/i,
+      replace: (_, idx) => `请避免上传高度敏感数据，并核实智能体执行的操作。请确保您拥有 {${idx}}。`
+    },
+    {
+      key: "By using this app, you agree to its {0} and {1}.",
+      pattern: /^By using this app,\s*you agree to its \{(\d+)\} and \{(\d+)\}\.?$/i,
+      replace: (_, a, b) => `使用此应用即表示您同意其 {${a}} 和 {${b}}。`
+    },
+    {
+      key: "By using this app, you agree to its {0}.",
+      pattern: /^By using this app,\s*you agree to its \{(\d+)\}\.?$/i,
+      replace: (_, a) => `使用此应用即表示您同意其 {${a}}。`
+    },
+    {
+      key: "Long pages like this one will be broken down into outlines and read as needed. Read more at our {0}.",
+      pattern: /^Long pages like this one will be broken down into outlines and read as needed\.\s*Read more at our \{(\d+)\}\.?$/i,
+      replace: (_, idx) => `像这样的长页面会被拆分为大纲并按需读取。详情请参阅我们的 {${idx}}。`
+    },
+    {
+      key: "Many external websites (such as Google Search, GitHub, or Wikipedia) restrict iframe embedding via {0} or {1}.",
+      pattern: /^Many external websites \(such as Google Search, GitHub, or Wikipedia\) restrict iframe embedding via \{(\d+)\} or \{(\d+)\}\.?$/i,
+      replace: (_, a, b) => `许多外部网站（例如 Google 搜索、GitHub 或 Wikipedia）会通过 {${a}} 或 {${b}} 限制 iframe 嵌入。`
+    },
+    {
+      key: "Many external websites (such as Google Search, GitHub, or Wikipedia) restrict iframe embedding via {0}.",
+      pattern: /^Many external websites \(such as Google Search, GitHub, or Wikipedia\) restrict iframe embedding via \{(\d+)\}\.?$/i,
+      replace: (_, a) => `许多外部网站（例如 Google 搜索、GitHub 或 Wikipedia）会通过 {${a}} 限制 iframe 嵌入。`
+    },
+    {
+      key: "Your feedback directly improves Gemini. See {0}.",
+      pattern: /^Your feedback directly improves Gemini\.\s*See \{(\d+)\}\.?$/i,
+      replace: (_, idx) => `您的反馈将直接帮助改进 Gemini。请参阅 {${idx}}。`
+    },
+    {
+      key: "For Antigravity Business consumption options, see {0}.",
+      pattern: /^For Antigravity Business consumption options,\s*see \{(\d+)\}\.?$/i,
+      replace: (_, idx) => `有关 Antigravity 商业版消费选项，请参阅 {${idx}}。`
+    },
+    {
+      key: "To switch accounts, sign out in the {0}.",
+      pattern: /^To switch accounts,\s*sign out in the \{(\d+)\}\.?$/i,
+      replace: (_, idx) => `若要切换账号，请在 {${idx}} 中退出登录。`
+    },
+    {
+      key: "Shared conversations live in your x20 user directory, so readers need {0} to view them.",
+      pattern: /^Shared conversations live in your x20 user directory,\s*so readers need \{(\d+)\} to view them\.?$/i,
+      replace: (_, idx) => `共享对话保存在您的 x20 用户目录中，因此读者需要 {${idx}} 权限才能查看。`
+    },
+    {
+      key: "Scan the code to open this device in Remote Control, or {0}.",
+      pattern: /^Scan the code to open this device in Remote Control,\s*or \{(\d+)\}\.?$/i,
+      replace: (_, idx) => `扫描二维码以在远程控制中打开此设备，或 {${idx}}。`
+    },
+    // 12. 补充多版本 UI 动态计数、状态后缀、工具调用、Git 与配额模板 (2.23.0 - 2.28.0)
+    {
+      key: "{count} accounts", pattern: /^(\d+)\s+accounts?$/i,
+      replace: (_, n) => `${n} 个账号`
+    },
+    {
+      key: "{count} attachments", pattern: /^(\d+)\s+attachments?$/i,
+      replace: (_, n) => `${n} 个附件`
+    },
+    {
+      key: "{count} blocked", pattern: /^(\d+)\s+blocked$/i,
+      replace: (_, n) => `已阻止 ${n} 项`
+    },
+    {
+      key: "{count} bytes", pattern: /^(\d+)\s+bytes?$/i,
+      replace: (_, n) => `${n} 字节`
+    },
+    {
+      key: "{count} chunks", pattern: /^(\d+)\s+chunks?$/i,
+      replace: (_, n) => `${n} 个分块`
+    },
+    {
+      key: "{count} comments", pattern: /^(\d+)\s+comments?$/i,
+      replace: (_, n) => `${n} 条评论`
+    },
+    {
+      key: "{count} demoted", pattern: /^(\d+)\s+demoted$/i,
+      replace: (_, n) => `已降级 ${n} 项`
+    },
+    {
+      key: "{count} excluded", pattern: /^(\d+)\s+excluded$/i,
+      replace: (_, n) => `已排除 ${n} 项`
+    },
+    {
+      key: "{count} fields", pattern: /^(\d+)\s+fields?$/i,
+      replace: (_, n) => `${n} 个字段`
+    },
+    {
+      key: "{count} Files With Changes", pattern: /^(\d+)\s+Files?\s+With\s+Changes$/i,
+      replace: (_, n) => `${n} 个文件有更改`
+    },
+    {
+      key: "{count} questions", pattern: /^(\d+)\s+questions?$/i,
+      replace: (_, n) => `${n} 个问题`
+    },
+    {
+      key: "{count} Side Questions", pattern: /^(\d+)\s+Side\s+Questions?$/i,
+      replace: (_, n) => `${n} 个旁路追问`
+    },
+    {
+      key: "{count} seconds", pattern: /^(\d+)\s+seconds?$/i,
+      replace: (_, n) => `${n} 秒`
+    },
+    {
+      key: "{count} tools", pattern: /^(\d+)\s+tools?$/i,
+      replace: (_, n) => `${n} 个工具`
+    },
+    {
+      key: "{count} turns", pattern: /^(\d+)\s+turns?$/i,
+      replace: (_, n) => `${n} 轮对话`
+    },
+    {
+      key: "{count} unresolved", pattern: /^(\d+)\s+unresolved$/i,
+      replace: (_, n) => `${n} 项未解决`
+    },
+    {
+      key: "{count} Background Processes Running", pattern: /^(\d+)\s+Background\s+Process(?:es)?\s+Running$/i,
+      replace: (_, n) => `${n} 个后台进程正在运行`
+    },
+    {
+      key: "(Steps {start}–{end})", pattern: /^\(Steps?\s+(\d+)[–-](\d+)\)$/i,
+      replace: (_, a, b) => `(第 ${a}–${b} 步)`
+    },
+    {
+      key: "Turns {start}–{end}", pattern: /^Turns?\s+(\d+)[–-](\d+)$/i,
+      replace: (_, a, b) => `第 ${a}–${b} 轮`
+    },
+    {
+      key: "Turn {current} of {total}", pattern: /^Turn\s+(\d+)\s+of\s+(\d+)$/i,
+      replace: (_, a, b) => `第 ${a} / ${b} 轮`
+    },
+    {
+      key: "Turn {index}", pattern: /^Turn\s+(\d+)$/i,
+      replace: (_, a) => `第 ${a} 轮`
+    },
+    {
+      key: "Question {current} of {total}", pattern: /^Question\s+(\d+)\s+of\s+(\d+)$/i,
+      replace: (_, a, b) => `第 ${a} / ${b} 个问题`
+    },
+    {
+      key: "Line {line}", pattern: /^Line\s+(\d+)$/i,
+      replace: (_, a) => `第 ${a} 行`
+    },
+    {
+      key: "Chunk {index}", pattern: /^Chunk\s+(\d+)$/i,
+      replace: (_, a) => `分块 ${a}`
+    },
+    {
+      key: "Page {page} failed to load", pattern: /^Page\s+(\d+)\s+failed\s+to\s+load$/i,
+      replace: (_, a) => `第 ${a} 页加载失败`
+    },
+    {
+      key: "Go to page {page}", pattern: /^Go\s+to\s+page\s+(\d+)$/i,
+      replace: (_, a) => `前往第 ${a} 页`
+    },
+    {
+      key: "Go to slide {slide}", pattern: /^Go\s+to\s+slide\s+(\d+)$/i,
+      replace: (_, a) => `前往第 ${a} 张幻灯片`
+    },
+    {
+      key: "Go to turn {current} of {total}", pattern: /^Go\s+to\s+turn\s+(\d+)\s+of\s+(\d+)$/i,
+      replace: (_, a, b) => `前往第 ${a} / ${b} 轮`
+    },
+    {
+      key: "Playback speed {rate}x", pattern: /^Playback\s+speed\s+([\d.]+)x$/i,
+      replace: (_, r) => `播放速度 ${r}x`
+    },
+    {
+      key: "Zoom {percent}%, reset to fit", pattern: /^Zoom\s+(\d+)%,\s*reset\s+to\s+fit$/i,
+      replace: (_, p) => `缩放 ${p}%，点击重置为适合窗口`
+    },
+    {
+      key: "Still thinking, {seconds} seconds", pattern: /^Still\s+thinking,\s*(\d+)\s+seconds?$/i,
+      replace: (_, s) => `仍在思考，已用时 ${s} 秒`
+    },
+    {
+      key: "Waiting for command completion (up to {seconds} seconds)", pattern: /^Waiting\s+for\s+command\s+completion\s*\(up\s+to\s+(\d+)\s+seconds?\)$/i,
+      replace: (_, s) => `正在等待命令完成（最多 ${s} 秒）`
+    },
+    {
+      key: "{name} (Default)", pattern: /^(.+?)\s+\(Default\)$/i,
+      replace: (_, name) => `${entryFor(name) || name}（默认）`
+    },
+    {
+      key: "{name} (Archived)", pattern: /^(.+?)\s+\(Archived\)$/i,
+      replace: (_, name) => `${entryFor(name) || name}（已归档）`
+    },
+    {
+      key: "{name} (Experimental)", pattern: /^(.+?)\s+\(Experimental\)$/i,
+      replace: (_, name) => `${entryFor(name) || name}（实验性）`
+    },
+    {
+      key: "{name} (disabled by admin)", pattern: /^(.+?)\s+\(disabled\s+by\s+admin\)$/i,
+      replace: (_, name) => `${entryFor(name) || name}（已被管理员禁用）`
+    },
+    {
+      key: "{name} [Remote]", pattern: /^(.+?)\s+\[Remote\]$/i,
+      replace: (_, name) => `${name} [远程]`
+    },
+    {
+      key: "{name}, setup required", pattern: /^(.+?),\s*setup\s+required$/i,
+      replace: (_, name) => `${name}（需要配置）`
+    },
+    {
+      key: "{name} · Context window", pattern: /^(.+?)\s*·\s*Context\s+window$/i,
+      replace: (_, name) => `${name} · 上下文窗口`
+    },
+    {
+      key: "{name}: Expired", pattern: /^(.+?):\s+Expired$/i,
+      replace: (_, name) => `${name}：已过期`
+    },
+    {
+      key: "{name}: Invalid", pattern: /^(.+?):\s+Invalid$/i,
+      replace: (_, name) => `${name}：无效`
+    },
+    {
+      key: "{name}: Unknown", pattern: /^(.+?):\s+Unknown$/i,
+      replace: (_, name) => `${name}：未知`
+    },
+    {
+      key: "Viewed {file}:{start}-{end}", pattern: /^Viewed\s+(.+?):(\d+)-(\d+)$/i,
+      replace: (_, f, a, b) => `已查看 ${f}:${a}-${b}`
+    },
+    {
+      key: "Listed directory {path}", pattern: /^Listed\s+directory\s+(.+)$/i,
+      replace: (_, p) => `已列出目录 ${p}`
+    },
+    {
+      key: "Searched for files: {query}", pattern: /^Searched\s+for\s+files:\s*(.+)$/i,
+      replace: (_, q) => `已搜索文件：${q}`
+    },
+    {
+      key: "Opened browser: {url}", pattern: /^Opened\s+browser:\s*(.+)$/i,
+      replace: (_, u) => `已打开浏览器：${u}`
+    },
+    {
+      key: "Read URL: {url}", pattern: /^Read\s+URL:\s*(.+)$/i,
+      replace: (_, u) => `已读取 URL：${u}`
+    },
+    {
+      key: "Typed '{text}' in Browser", pattern: /^Typed\s+'(.+)'\s+in\s+Browser$/i,
+      replace: (_, t) => `已在浏览器中输入 '${t}'`
+    },
+    {
+      key: "Typing '{text}' in Browser", pattern: /^Typing\s+'(.+)'\s+in\s+Browser$/i,
+      replace: (_, t) => `正在浏览器中输入 '${t}'`
+    },
+    {
+      key: "Ran command: {summary} (`{command}`)", pattern: /^Ran\s+command:\s*(.+?)\s+\(`(.+)`\)$/i,
+      replace: (_, s, c) => `已运行命令：${s} (\`${c}\`)`
+    },
+    {
+      key: "Ran command: `{command}`", pattern: /^Ran\s+command:\s*`(.+)`$/i,
+      replace: (_, c) => `已运行命令：\`${c}\``
+    },
+    {
+      key: "Used MCP tool: {tool}", pattern: /^Used\s+MCP\s+tool:\s*(.+)$/i,
+      replace: (_, t) => `已使用 MCP 工具：${t}`
+    },
+    {
+      key: "Used tool: {tool}", pattern: /^Used\s+tool:\s*(.+)$/i,
+      replace: (_, t) => `已使用工具：${t}`
+    },
+    {
+      key: "Invoked subagent: {name}", pattern: /^Invoked\s+subagent:\s*(.+)$/i,
+      replace: (_, n) => `已调用子智能体：${n}`
+    },
+    {
+      key: "Open Subagent: {name}", pattern: /^Open\s+Subagent:\s*(.+)$/i,
+      replace: (_, n) => `打开子智能体：${n}`
+    },
+    {
+      key: "Sending {input} to command", pattern: /^Sending\s+(.+?)\s+to\s+command$/i,
+      replace: (_, x) => `正在向命令发送 ${x}`
+    },
+    {
+      key: "Sent {input} to command", pattern: /^Sent\s+(.+?)\s+to\s+command$/i,
+      replace: (_, x) => `已向命令发送 ${x}`
+    },
+    {
+      key: "Suggested sending {input} to command", pattern: /^Suggested\s+sending\s+(.+?)\s+to\s+command$/i,
+      replace: (_, x) => `建议向命令发送 ${x}`
+    },
+    {
+      key: "Rejected sending {input} to command", pattern: /^Rejected\s+sending\s+(.+?)\s+to\s+command$/i,
+      replace: (_, x) => `已拒绝向命令发送 ${x}`
+    },
+    {
+      key: "Error sending {input} to command", pattern: /^Error\s+sending\s+(.+?)\s+to\s+command$/i,
+      replace: (_, x) => `向命令发送 ${x} 时出错`
+    },
+    {
+      key: "Exited with code {code}.", pattern: /^Exited\s+with\s+code\s+(\d+)\.?$/i,
+      replace: (_, c) => `已退出，退出码：${c}。`
+    },
+    {
+      key: "Committed to {branch}.", pattern: /^Committed\s+to\s+(.+?)\.?$/i,
+      replace: (_, b) => `已提交至 ${b}。`
+    },
+    {
+      key: "Amended commit on {branch}.", pattern: /^Amended\s+commit\s+on\s+(.+?)\.?$/i,
+      replace: (_, b) => `已在 ${b} 上修正提交。`
+    },
+    {
+      key: "Push {count} commits to {branch}", pattern: /^Push\s+(\d+)\s+commits?\s+to\s+(.+)$/i,
+      replace: (_, n, b) => `推送 ${n} 个提交至 ${b}`
+    },
+    {
+      key: "Pushed {count} commits to {branch}.", pattern: /^Pushed\s+(\d+)\s+commits?\s+to\s+(.+?)\.?$/i,
+      replace: (_, n, b) => `已推送 ${n} 个提交至 ${b}。`
+    },
+    {
+      key: "Pushed to {branch}.", pattern: /^Pushed\s+to\s+(.+?)\.?$/i,
+      replace: (_, b) => `已推送至 ${b}。`
+    },
+    {
+      key: "Publish {branch} to origin", pattern: /^Publish\s+(.+?)\s+to\s+origin$/i,
+      replace: (_, b) => `将 ${b} 发布到远端 origin`
+    },
+    {
+      key: "Published {branch} to origin.", pattern: /^Published\s+(.+?)\s+to\s+origin\.?$/i,
+      replace: (_, b) => `已将 ${b} 发布到远端 origin。`
+    },
+    {
+      key: "All changes since {ref}", pattern: /^All\s+changes\s+since\s+(.+)$/i,
+      replace: (_, r) => `自 ${r} 以来的所有更改`
+    },
+    {
+      key: "Delete workspace {name}", pattern: /^Delete\s+workspace\s+(.+)$/i,
+      replace: (_, n) => `删除工作区 ${n}`
+    },
+    {
+      key: "Deleted workspace {name}", pattern: /^Deleted\s+workspace\s+(.+)$/i,
+      replace: (_, n) => `已删除工作区 ${n}`
+    },
+    {
+      key: "Remount workspace {name}", pattern: /^Remount\s+workspace\s+(.+)$/i,
+      replace: (_, n) => `重新挂载工作区 ${n}`
+    },
+    {
+      key: "Remounted workspace {name}", pattern: /^Remounted\s+workspace\s+(.+)$/i,
+      replace: (_, n) => `已重新挂载工作区 ${n}`
+    },
+    {
+      key: "Unmount workspace {name}", pattern: /^Unmount\s+workspace\s+(.+)$/i,
+      replace: (_, n) => `卸载工作区 ${n}`
+    },
+    {
+      key: "Unmounted workspace {name}", pattern: /^Unmounted\s+workspace\s+(.+)$/i,
+      replace: (_, n) => `已卸载工作区 ${n}`
+    },
+    {
+      key: "Creating workspace \"{name}\"...", pattern: /^Creating\s+workspace\s+"(.+)"\.\.\.$/i,
+      replace: (_, n) => `正在创建工作区“${n}”...`
+    },
+    {
+      key: "Creating ABFS workspace {name}...", pattern: /^Creating\s+ABFS\s+workspace\s+(.+)\.\.\.$/i,
+      replace: (_, n) => `正在创建 ABFS 工作区 ${n}...`
+    },
+    {
+      key: "ABFS workspace {name} created and selected.", pattern: /^ABFS\s+workspace\s+(.+?)\s+created\s+and\s+selected\.?$/i,
+      replace: (_, n) => `已创建并选中 ABFS 工作区 ${n}。`
+    },
+    {
+      key: "Move to Group: {name}", pattern: /^Move\s+to\s+Group:\s*(.+)$/i,
+      replace: (_, n) => `移动到分组：${n}`
+    },
+    {
+      key: "Moved conversation {name}", pattern: /^Moved\s+conversation\s+(.+)$/i,
+      replace: (_, n) => `已移动对话 ${n}`
+    },
+    {
+      key: "Agent needs permission to execute JavaScript on {host}", pattern: /^Agent\s+needs\s+permission\s+to\s+execute\s+JavaScript\s+on\s+(.+)$/i,
+      replace: (_, h) => `智能体需要权限才能在 ${h} 上执行 JavaScript`
+    },
+    {
+      key: "Agent needs permission to act on {host}", pattern: /^Agent\s+needs\s+permission\s+to\s+act\s+on\s+(.+)$/i,
+      replace: (_, h) => `智能体需要权限才能在 ${h} 上执行操作`
+    },
+    {
+      key: "Yes, and always allow '{target}' in this conversation", pattern: /^Yes,\s*and\s+always\s+allow\s+'(.+)'\s+in\s+this\s+conversation$/i,
+      replace: (_, t) => `是，并在此对话中始终允许 '${t}'`
+    },
+    {
+      key: "Yes, and always allow '{target}' in this workspace", pattern: /^Yes,\s*and\s+always\s+allow\s+'(.+)'\s+in\s+this\s+workspace$/i,
+      replace: (_, t) => `是，并在此工作区中始终允许 '${t}'`
+    },
+    {
+      key: "Yes, allow {target} in this conversation", pattern: /^Yes,\s*allow\s+(.+?)\s+in\s+this\s+conversation$/i,
+      replace: (_, t) => `是，在此对话中允许 ${t}`
+    },
+    {
+      key: "Yes, always allow {target}", pattern: /^Yes,\s*always\s+allow\s+(.+)$/i,
+      replace: (_, t) => `是，始终允许 ${t}`
+    },
+    {
+      key: "Yes, save rule for '{target}' globally", pattern: /^Yes,\s*save\s+rule\s+for\s+'(.+)'\s+globally$/i,
+      replace: (_, t) => `是，在全局保存 '${t}' 的规则`
+    },
+    {
+      key: "Yes, save rule for '{target}' in this conversation", pattern: /^Yes,\s*save\s+rule\s+for\s+'(.+)'\s+in\s+this\s+conversation$/i,
+      replace: (_, t) => `是，在此对话中保存 '${t}' 的规则`
+    },
+    {
+      key: "Yes, save rule for '{target}' in this workspace", pattern: /^Yes,\s*save\s+rule\s+for\s+'(.+)'\s+in\s+this\s+workspace$/i,
+      replace: (_, t) => `是，在此工作区中保存 '${t}' 的规则`
+    },
+    {
+      key: "Save rule to always allow {target}?", pattern: /^Save\s+rule\s+to\s+always\s+allow\s+(.+?)\?$/i,
+      replace: (_, t) => `是否保存规则以始终允许 ${t}？`
+    },
+    {
+      key: "Review permissions for {target}", pattern: /^Review\s+permissions\s+for\s+(.+)$/i,
+      replace: (_, t) => `审查 ${t} 的权限`
+    },
+    {
+      key: "Requires manual confirmation: {reason}", pattern: /^Requires\s+manual\s+confirmation:\s*(.+)$/i,
+      replace: (_, r) => `需要手动确认：${r}`
+    },
+    {
+      key: "Conflicts with your configured Ask permission: {rule}", pattern: /^Conflicts\s+with\s+your\s+configured\s+Ask\s+permission:\s*(.+)$/i,
+      replace: (_, r) => `与您配置的“询问”权限冲突：${r}`
+    },
+    {
+      key: "Available AI Credits: {credits}", pattern: /^Available\s+AI\s+Credits:\s*(.+)$/i,
+      replace: (_, c) => `可用 AI 额度：${c}`
+    },
+    {
+      key: "Your plan's baseline quota will refresh on {date}.", pattern: /^Your\s+plan's\s+baseline\s+quota\s+will\s+refresh\s+on\s+(.+?)\.?$/i,
+      replace: (_, d) => `您套餐的基础配额将于 ${d} 刷新。`
+    },
+    {
+      key: "Your quota for {model} has been reached. Switch to another available model to continue.",
+      pattern: /^Your\s+quota\s+for\s+(.+?)\s+has\s+been\s+reached\.\s*Switch\s+to\s+another\s+available\s+model\s+to\s+continue\.?$/i,
+      replace: (_, m) => `您的 ${m} 配额已达上限。请切换到其他可用模型以继续。`
+    },
+    {
+      key: "Your quota for {model} will reset on {date}. Switch to another available model to continue.",
+      pattern: /^Your\s+quota\s+for\s+(.+?)\s+will\s+reset\s+on\s+(.+?)\.\s*Switch\s+to\s+another\s+available\s+model\s+to\s+continue\.?$/i,
+      replace: (_, m, d) => `您的 ${m} 配额将于 ${d} 重置。请切换到其他可用模型以继续。`
+    },
+    {
+      key: "You need {credits} AI Credits to send messages. To continue using {model} now, purchase more AI Credits.",
+      pattern: /^You\s+need\s+(.+?)\s+AI\s+Credits\s+to\s+send\s+messages\.\s*To\s+continue\s+using\s+(.+?)\s+now,\s*purchase\s+more\s+AI\s+Credits\.?$/i,
+      replace: (_, c, m) => `您需要 ${c} AI 额度才能发送消息。若要立即继续使用 ${m}，请购买更多 AI 额度。`
+    },
+    {
+      key: "Model unavailable, retrying in {seconds}s{dots}", pattern: /^Model\s+unavailable,\s*retrying\s+in\s+(\d+)s(.*)$/i,
+      replace: (_, s, rest) => `模型不可用，将在 ${s} 秒后重试${rest}`
+    },
+    {
+      key: "Exceeded the customization token budget ({tokens} tokens) and was excluded from context.",
+      pattern: /^Exceeded\s+the\s+customization\s+token\s+budget\s*\((.+?)\s+tokens?\)\s*and\s+was\s+excluded\s+from\s+context\.?$/i,
+      replace: (_, t) => `已超出自定义项 Token 预算（${t} 个 Token），已从上下文中排除。`
+    },
+    {
+      key: "Exceeded the rules token budget. Full rule content ({tokens} tokens) was replaced with a lightweight file-path pointer in context.",
+      pattern: /^Exceeded\s+the\s+rules\s+token\s+budget\.\s*Full\s+rule\s+content\s*\((.+?)\s+tokens?\)\s*was\s+replaced\s+with\s+a\s+lightweight\s+file-path\s+pointer\s+in\s+context\.?$/i,
+      replace: (_, t) => `已超出规则 Token 预算。完整规则内容（${t} 个 Token）在上下文中已替换为轻量级文件路径指针。`
+    },
+    {
+      key: "All tools in this MCP server ({tokens} tokens) exceeded the customization budget and were excluded from context.",
+      pattern: /^All\s+tools\s+in\s+this\s+MCP\s+server\s*\((.+?)\s+tokens?\)\s*exceeded\s+the\s+customization\s+budget\s+and\s+were\s+excluded\s+from\s+context\.?$/i,
+      replace: (_, t) => `此 MCP 服务器中的所有工具（${t} 个 Token）均已超出自定义项预算，已从上下文中排除。`
+    },
+    {
+      key: "{count} tools in this MCP server ({tokens} tokens) exceeded the customization budget and were excluded from context.",
+      pattern: /^(\d+)\s+tools?\s+in\s+this\s+MCP\s+server\s*\((.+?)\s+tokens?\)\s*exceeded\s+the\s+customization\s+budget\s+and\s+were\s+excluded\s+from\s+context\.?$/i,
+      replace: (_, n, t) => `此 MCP 服务器中的 ${n} 个工具（${t} 个 Token）已超出自定义项预算，已从上下文中排除。`
+    },
+    {
+      key: "{count} rules exceeded the rules budget and were demoted from full inline content to a file-path pointer.",
+      pattern: /^(\d+)\s+rules?\s+exceeded\s+the\s+rules\s+budget\s+and\s+(?:was|were)\s+demoted\s+from\s+full\s+inline\s+content\s+to\s+a\s+file-path\s+pointer\.?$/i,
+      replace: (_, n) => `${n} 条规则已超出规则预算，已从完整内联内容降级为文件路径指针。`
+    },
+    {
+      key: "Unused capacity: {tokens} tokens", pattern: /^Unused\s+capacity:\s*(.+?)\s+tokens?$/i,
+      replace: (_, t) => `未使用的容量：${t} 个 Token`
+    },
+    {
+      key: "Add ({count})", pattern: /^Add\s+\((\d+)\)$/i,
+      replace: (_, n) => `添加 (${n})`
+    },
+    {
+      key: "Add all · {count}", pattern: /^Add\s+all\s*·\s*(\d+)$/i,
+      replace: (_, n) => `全部添加 · ${n}`
+    },
+    {
+      key: "Comment ({count})", pattern: /^Comment\s+\((\d+)\)$/i,
+      replace: (_, n) => `评论 (${n})`
+    },
+    {
+      key: "Comment on page {page}", pattern: /^Comment\s+on\s+page\s+(\d+)$/i,
+      replace: (_, p) => `在第 ${p} 页添加评论`
+    },
+    {
+      key: "See all ({count})", pattern: /^See\s+all\s+\((\d+)\)$/i,
+      replace: (_, n) => `查看全部 (${n})`
+    },
+    {
+      key: "Send all ({count})", pattern: /^Send\s+all\s+\((\d+)\)$/i,
+      replace: (_, n) => `全部发送 (${n})`
+    },
+    {
+      key: "Reset {count} overrides", pattern: /^Reset\s+(\d+)\s+overrides?$/i,
+      replace: (_, n) => `重置 ${n} 项覆盖配置`
+    },
+    {
+      key: "View {count} side questions", pattern: /^View\s+(\d+)\s+side\s+questions?$/i,
+      replace: (_, n) => `查看 ${n} 个旁路追问`
+    },
+    {
+      key: "Open {name} skill", pattern: /^Open\s+(.+?)\s+skill$/i,
+      replace: (_, n) => `打开 ${n} 技能`
+    },
+    {
+      key: "Open the {name} plugin", pattern: /^Open\s+the\s+(.+?)\s+plugin$/i,
+      replace: (_, n) => `打开 ${n} 插件`
     }
   ];
 
+  for (const rule of TEMPLATE_RULES) {
+    rule.inlineOnly = rule.key.includes('{0}');
+  }
   function matchTemplate(key) {
-    for (const rule of TEMPLATE_RULES) {
-      if (rule.pattern.test(key)) { lastMatchedKeys=[rule.key]; return key.replace(rule.pattern, rule.replace); }
+    const hasInlineSlot = key.includes('{0}');
+    for (let i = 0; i < TEMPLATE_RULES.length; i++) {
+      const rule = TEMPLATE_RULES[i];
+      if (rule.inlineOnly && !hasInlineSlot) continue;
+      if (rule.pattern.test(key)) {
+        lastMatchedKeys = [rule.key];
+        return key.replace(rule.pattern, rule.replace);
+      }
     }
     return undefined;
   }
@@ -888,11 +1431,20 @@
       return original;
     }
     if (isBrandName(key)) return original;
-    let value = undefined;
-    const scoped=el?scopeKey(key,kind||inferKind(el),scopeRoute(el)):null;
+    const route=el?scopeRoute(el):null;
+    const scoped=el?scopeKey(key,kind||inferKind(el),route):null;
     const pluginScoped=el&&pluginDescription(el)?scopeKey(key,'description','/customizations'):null;
-    const contextual=(scoped&&dictionary.entries[scoped])??(pluginScoped&&dictionary.entries[pluginScoped]);
+    let contextual=(scoped&&dictionary.entries[scoped])??(pluginScoped&&dictionary.entries[pluginScoped]);
+    if(contextual===undefined&&scoped){
+      const lowerScoped = scopeKey(lower(key),kind||inferKind(el),route);
+      contextual=dictionary.entries[lowerScoped];
+    }
+    if(contextual===undefined&&el&&route){
+      contextual=dictionary.entries[`@ui:${route}|label|${key}`]??dictionary.entries[`@ui:${route}|heading|${key}`]??dictionary.entries[`@ui:${route}|text|${key}`]??dictionary.entries[`@ui:${route}|option|${key}`]
+        ??dictionary.entries[`@ui:${route}|label|${lower(key)}`]??dictionary.entries[`@ui:${route}|heading|${lower(key)}`]??dictionary.entries[`@ui:${route}|text|${lower(key)}`]??dictionary.entries[`@ui:${route}|option|${lower(key)}`];
+    }
     if(typeof contextual==='string'){lastMatchedKeys=[key];return original.match(/^\s*/)[0]+contextual+original.match(/\s*$/)[0];}
+    let value = undefined;
     if(conservative){value=entryFor(key);if(value!==undefined)lastMatchedKeys=[key];else value=matchTemplate(key);return value===undefined?original:original.match(/^\s*/)[0]+value+original.match(/\s*$/)[0];}
 
     // P1-2: 含数字的文案优先匹配模板，避免词典中的硬编码覆盖通用模板
@@ -1007,11 +1559,13 @@
     if (children.length < 2 || children.length > 20) return false;
     let hasText = false;
     let hasInline = false;
+    let allText = true;
     for (let i = 0; i < children.length; i++) {
       const c = children[i];
       if (c.nodeType === Node.TEXT_NODE) {
         if (normalize(c.nodeValue || '')) hasText = true;
       } else if (c.nodeType === Node.ELEMENT_NODE) {
+        allText = false;
         if (!INLINE_TAGS.has(c.tagName)) return false;
         if (c.querySelector('div, p, ul, ol, li, table, form, section, article')) return false;
         hasInline = true;
@@ -1019,7 +1573,7 @@
         return false;
       }
     }
-    return hasText && hasInline;
+    return (hasText && hasInline) || (allText && children.length >= 2 && hasText);
   }
 
   function invalidateInlineGroup(el) {
@@ -1129,7 +1683,7 @@
     unsupportedInlineGroupSet.delete(el);
   }
   function tryTranslateInlineGroup(el, scan = 0, queue = waiting) {
-    if(conservative&&!inSystemSettings(el,scan))return false;
+    if (conservative && !inSystemSettings(el, scan) && !el.closest('[data-testid*="empty"],[data-testid*="sidecar"],[data-testid*="modal"],[data-testid*="card"],[role="region"]')) return false;
     if (!isInlineGroupContainer(el, scan)) { clearInlineGroupUnsupported(el); return false; }
     const recorded = inlineGroups.get(el);
     if (recorded?.some(node => {
@@ -1137,12 +1691,23 @@
       return !slot || slot.group !== el || slot.groupParent !== node.parentElement || (getValue(node, '') !== slot.last && getValue(node, '') !== slot.original);
     })) invalidateInlineGroup(el);
     const { rawTemplate, inlineElements, slotsMap } = groupTemplate(el);
-    if (!inlineElements.length) return false;
     const norm = normalize(rawTemplate);
     if (!norm) return false;
     const zh = translation(norm, el);
     const groupKeys = [...lastMatchedKeys];
     if (zh === norm || !/[\u3400-\u9fff]/.test(zh)) { clearInlineGroupUnsupported(el); return false; }
+    if (!inlineElements.length) {
+      const items = slotsMap.get(0) || [];
+      if (items.length <= 1) return false;
+      clearInlineGroupUnsupported(el);
+      inlineGroups.set(el, items.map(item => item.node));
+      inlineGroupContainers.add(el);
+      for (let k = 0; k < items.length; k++) writeGroupSlot(items[k].node, el, k === 0 ? zh : '', items[k].original, groupKeys);
+      auditRecord(norm, zh, el, 'template', groupKeys);
+      if (languageMode === 'zh') el.dataset.agzhLoc = '1';
+      else delete el.dataset.agzhLoc;
+      return true;
+    }
     const normPlaceholders = placeholderTokens(norm), zhPlaceholders = placeholderTokens(zh);
     /* Conservative J04 correction: never rearrange React-owned inline nodes and never move inline
        text into a plain-text run. Only a same-order translation whose non-empty runs all own an

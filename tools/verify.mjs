@@ -19,6 +19,16 @@ const argv = process.argv.slice(2);
 async function main() {
   /* 先做参数格式/重复校验，避免跑完构建才发现 CLI 写错。 */
   const earlyTarget = parseTargetAppVersionArg(argv);
+  if (!argv.includes('--no-auto-extract')) {
+    try {
+      const { appVersion: detectInstalledAppVersion, extractFromRunningApp } = await import('./extract-ui-strings.mjs');
+      const installed = await detectInstalledAppVersion();
+      if (installed && /^\d+\.\d+\.\d+$/.test(installed) && !existsSync(join(root, 'ui-strings', `${installed}.json`))) {
+        const res = await extractFromRunningApp({ projectRoot: root, registerBundle: true });
+        process.stdout.write(`[verify] 检测到本机新版本 Antigravity ${res.appVersion}，已自动提取 ui-strings/${res.appVersion}.json 并登记官方指纹\n`);
+      }
+    } catch { /* Antigravity 未运行时保持离线验证已收录版本 */ }
+  }
   const initialDigest = await sourceDigest(root);
   const version = JSON.parse(await readFile(join(root, 'package.json'))).version;
   const out = join(root, '质检报告', `${version}-改造验收`); await mkdir(out, { recursive: true });

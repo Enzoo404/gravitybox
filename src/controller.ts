@@ -364,15 +364,29 @@ export class Controller {
       this.trustedCandidates = missing.filter(isSafeCandidate).map(key=>({key,kind:extractedKind(extracted.find(e=>e.text===key)?.kinds),source:'static'}));
       this.status.newStringsCount = this.trustedCandidates.length;
 
-      if (missing.length > 0 && this.options.stateDir) {
+      if (this.options.stateDir) {
         const reportsDir = join(this.options.stateDir, 'reports');
         await mkdir(reportsDir, { recursive: true });
-        const pendingPath = join(reportsDir, `pending-${appVersion}.json`);
-        const pendingPayload = createPendingList(appVersion, sha, this.trustedCandidates.map(e=>e.key));
-        await atomicJson(pendingPath, pendingPayload);
-        this.status.pendingListPath = pendingPath;
-
-
+        if (!this.verifiedBundle()) {
+          const byKind: Record<string, number> = {};
+          for (const entry of extracted) for (const kind of entry.kinds) byKind[kind] = (byKind[kind] ?? 0) + 1;
+          await atomicJson(join(reportsDir, `ui-strings-${appVersion}.json`), {
+            schema: 1,
+            appVersion,
+            source: 'runtime-loopback',
+            bundleSha256: sha,
+            bundleBytes: Buffer.byteLength(source),
+            extractedAt: new Date().toISOString(),
+            counts: { total: extracted.length, ...byKind },
+            strings: extracted,
+          }).catch(() => {});
+        }
+        if (missing.length > 0) {
+          const pendingPath = join(reportsDir, `pending-${appVersion}.json`);
+          const pendingPayload = createPendingList(appVersion, sha, this.trustedCandidates.map(e=>e.key));
+          await atomicJson(pendingPath, pendingPayload);
+          this.status.pendingListPath = pendingPath;
+        }
       }
 
       const isVerified = this.verifiedBundle();

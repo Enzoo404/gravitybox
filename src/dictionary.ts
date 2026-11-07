@@ -314,16 +314,23 @@ export function compareLayers(a: string, b: string): number {
   }
   return na.localeCompare(nb);
 }
+const PLACEHOLDER_TOKEN_RE = /\{\{?\w+\}?\}|\$\d+|%[sd]/g;
+const placeholderSignature = (s: string): string =>
+  (s.includes('{') || s.includes('$') || s.includes('%'))
+    ? (s.match(PLACEHOLDER_TOKEN_RE)?.sort().join('|') ?? '')
+    : '';
+
 export function validateEntries(data: unknown, file = '词典'): Record<string, string> {
   if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error(`${file} 必须是 JSON 对象`);
   const entries: Record<string, string> = Object.create(null);
   for (const [key, value] of Object.entries(data)) {
     if (typeof value !== 'string') throw new Error(`${file} 中存在非文本译文`);
     const normalized = normalize(key);
-    if (!normalized || normalized.length > 2000 || value.length > 4000 || ['__proto__', 'constructor', 'prototype'].includes(normalized)) throw new Error(`${file} 中存在无效词条`);
+    if (!normalized || normalized.length > 2000 || value.length > 4000 || normalized === '__proto__' || normalized === 'constructor' || normalized === 'prototype') {
+      throw new Error(`${file} 中存在无效词条`);
+    }
     if (Object.hasOwn(entries, normalized)) throw new Error(`${file} 中存在规范化后重复词条`);
-    const tokens = (s: string) => s.match(/\{\{?\w+\}?\}|\$\d+|%[sd]/g)?.sort().join('|') ?? '';
-    if (tokens(key) !== tokens(value)) throw new Error(`${file} 的占位符不匹配`);
+    if (placeholderSignature(key) !== placeholderSignature(value)) throw new Error(`${file} 的占位符不匹配`);
     entries[normalized] = value;
   }
   return entries;
