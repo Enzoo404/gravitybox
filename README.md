@@ -17,6 +17,7 @@
   </p>
 
   <p>
+    <a href="#界面预览">界面预览</a> ·
     <a href="#功能速览">功能速览</a> ·
     <a href="#安装与快速上手">安装与上手</a> ·
     <a href="#功能详解">功能详解</a> ·
@@ -26,10 +27,32 @@
   </p>
 </div>
 
+---
+
+## 界面预览
+
 <p align="center">
-  <a href="assets/screenshots/overview.png"><img src="assets/screenshots/overview.png" width="960" alt="GravityBox 总览实机截图：账号配额、Token 用量、费用估算与活跃模型" /></a>
+  <a href="assets/screenshots/overview.png"><img src="assets/screenshots/overview.png" width="960" alt="GravityBox 主窗口总览" /></a>
   <br>
-  <sub>主窗口总览 · 账号配额、今日用量与模型消耗一屏掌握（点击查看高清原图，身份信息已脱敏）</sub>
+  <sub>主窗口总览 · 账号配额、今日用量与模型消耗一屏掌握</sub>
+</p>
+
+<p align="center">
+  <a href="assets/screenshots/accounts.png"><img src="assets/screenshots/accounts.png" width="960" alt="GravityBox 多账号管理" /></a>
+  <br>
+  <sub>多账号管理 · 实时对比备用账号额度，一键安全切换与快照回滚</sub>
+</p>
+
+<p align="center">
+  <a href="assets/screenshots/usage.png"><img src="assets/screenshots/usage.png" width="960" alt="GravityBox 用量统计与费用分析" /></a>
+  <br>
+  <sub>用量与费用 · 24 小时时段消耗趋势、模型费用占比与逐条明细检索</sub>
+</p>
+
+<p align="center">
+  <a href="assets/screenshots/menubar.png"><img src="assets/screenshots/menubar.png" width="380" alt="GravityBox 菜单栏快捷面板" /></a>
+  <br>
+  <sub>菜单栏快捷面板 · 点击状态栏图标即刻呼出，速览配额与用量趋势</sub>
 </p>
 
 ---
@@ -52,12 +75,6 @@ GravityBox 是为 [Google Antigravity](https://antigravity.google) 打造的 mac
 
 - **菜单栏快捷面板**：常驻屏幕右上角状态栏，包含 **「用量」「配额」「账号」** 三个标签页与汉化开关。编码时无需切换窗口，即可速览剩余额度、展开对比备用账号或一键切号。
 - **主窗口工作台**：左侧为毛玻璃导航栏（带底部「打开 Antigravity」快捷启动按钮），右侧分为 **「总览 (`⌘1`)」「账号 (`⌘2`)」「用量 (`⌘3`)」「设置 (`⌘4`)」** 四个主页面，适合查看完整图表、管理多账号与执行缓存清理。
-
-<p align="center">
-  <a href="assets/screenshots/menubar.png"><img src="assets/screenshots/menubar.png" width="360" alt="GravityBox 菜单栏快捷面板实机截图" /></a>
-  <br>
-  <sub>菜单栏快捷面板 · 点击状态栏图标即可呼出，速览配额与用量趋势（点击查看高清原图）</sub>
-</p>
 
 ---
 
@@ -125,22 +142,10 @@ GRAVITYBOX_GOOGLE_CLIENT_SECRET=your_client_secret
 - **7 天恢复点回滚**：每次切换自动生成快照恢复点，遇到异常可在账号页顶部横幅中一键「撤销并恢复原账号」；
 - **智能切换推荐**：开启后可设定推荐排序方式（「配额充裕优先」或「按顺序轮询」，均优先推荐 ULTRA / PRO 账号）、监测模型范围、触发阈值（默认 `10%`）与候选准入下限（默认 `30%`），在额度不足时自动标出最佳备用账号。
 
-<p align="center">
-  <a href="assets/screenshots/accounts.png"><img src="assets/screenshots/accounts.png" width="960" alt="GravityBox 多账号管理实机截图" /></a>
-  <br>
-  <sub>多账号管理 · 实时对比各账号额度，一键安全切换并保留 7 天快照回滚点（点击查看高清原图）</sub>
-</p>
-
 ### 4. Token 用量统计与 API 费用估算
 - **多维可视化看板**：支持按 **「今日」「近 7 天」「近 30 天」「全部」** 统计请求总数、输入 Token、缓存读取 Token、缓存写入 Token、输出 Token 及缓存命中率，提供时段/按日趋势柱状图与模型费用占比环图；
 - **逐条请求明细与导出**：在「用量」页点击「请求明细…」可按时间倒序查看每次调用的模型、时间与四类 Token 消耗，支持按模型名搜索、翻页与导出 JSON 报告；
 - **时间感知计费模型**：内置主流 Gemini、Claude、GPT 模型价格表（[`assets/model-catalog.json`](./assets/model-catalog.json)），支持限时优惠价与标准正式价的生效时间段自动匹配，历史调用按发生时的有效单价计算。
-
-<p align="center">
-  <a href="assets/screenshots/usage.png"><img src="assets/screenshots/usage.png" width="960" alt="GravityBox 用量统计与费用估算实机截图" /></a>
-  <br>
-  <sub>Token 用量统计 · 时段消耗柱状图、API 费用模型占比与逐条明细检索（点击查看高清原图）</sub>
-</p>
 
 ### 5. 缓存维护与系统联动
 - **三分类扫描与核心保护**：在「设置 -> 存储与维护 -> 管理缓存…」中，将本地文件严格划分为三类：
