@@ -10,6 +10,11 @@ on:
         description: '已存在的版本标签（如 v1.0.1）；仅构建草稿，不公开发布'
         required: true
         type: string
+      inspect_only:
+        description: '只读检查现有草稿（从 main 运行，不构建、不上传、不公开）'
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -19,8 +24,32 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  inspect-draft:
+    name: Inspect Existing Draft (Read Only)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.inspect_only }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      RELEASE_TAG: ${{ inputs.tag }}
+    steps:
+      - name: Require Main Controller
+        shell: bash
+        run: '[[ "$GITHUB_REF" == refs/heads/main ]] || { echo "请从 main 运行只读检查" >&2; exit 1; }'
+      - name: Checkout Controller & Tags
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Inspect Uploaded Draft Metadata
+        run: node tools/release-control.mjs inspect
+
   build-draft:
     name: Verify & Prepare Draft DMG
+    if: ${{ github.event_name == 'push' || !inputs.inspect_only }}
     runs-on: macos-latest
     timeout-minutes: 25
     permissions:
@@ -72,6 +101,9 @@ jobs:
             --draft --verify-tag --title "GravityBox $RELEASE_TAG" --generate-notes
           echo '草稿已生成。下载并验收此 DMG 后，通过 Publish Accepted Release 手动发布；不要重新构建。' >> "$GITHUB_STEP_SUMMARY"
           cat "$DMG.sha256" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify Uploaded Draft Metadata
+        run: node tools/release-control.mjs inspect
 
       - name: Preserve Verification Reports
         if: always()
