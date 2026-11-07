@@ -158,7 +158,8 @@ export class AccountSwitchService {
   private assertSupported() {}
   private async guardStopped() {
     const candidatePrefixes = Array.from(
-      new Set([this.target.appPath, ...allApplicationTargets().map(t => t.appPath)]),
+      // Insiders shares official credentials: block switching while it runs, without managing it.
+      new Set([this.target.appPath, ...allApplicationTargets().map(t => t.appPath), '/Applications/Antigravity - Insiders.app']),
     ).map(p => p + '/Contents/');
     const running = this.options.isRunning ? await this.options.isRunning() :
       (await run('/bin/ps', ['-ax', '-o', 'args='])).stdout.split('\n').some(line => {

@@ -1212,10 +1212,7 @@ export class AccountsManager {
   }
 
   private channelAccount(account: Account): Account {
-    if (!account.quota && account.insiders_quota) {
-      account.quota = account.insiders_quota;
-      account.quota_refresh_error = account.insiders_quota_refresh_error ?? null;
-    }
+    // Retain retired fields on disk, but never present Insiders quota as stable quota.
     return account;
   }
 

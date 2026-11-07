@@ -104,7 +104,6 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     static var applicationChannel = "stable"
     static var selectedTarget: DesktopApplicationTarget { DesktopApplicationTarget(channel: applicationChannel) }
     var targetApplication: DesktopApplicationTarget { Self.selectedTarget }
-    var changingApplication = false
     weak var launchApplicationButton: SidebarLaunchButton?
     let state: URL
     init(state: URL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/GravityBox")) { self.state = state; super.init() }
@@ -133,7 +132,7 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         Self.applicationChannel = effectiveChannel
         bridge = BackendBridge(resources: resources, state: state)
         bridge.onExit = { [weak self] message in
-            guard let self, !self.quitting, !self.changingApplication else { return }
+            guard let self, !self.quitting else { return }
             self.reachable = false; self.failPendingQuotaRefresh(message); self.updateViews()
         }
         if configuration.value.navigationVersion != 5 {
@@ -1191,72 +1190,6 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     @objc func showUsage() { selectPage(2) }
     @objc func showSettings() { selectPage(3) }
     @objc func toggleTranslation() { perform(["command": statusValue.mode == "paused" ? "resume" : "pause"]) { [weak self] _ in self?.refresh() } }
-    func selectApplicationChannel(_ requestedChannel: String) {
-        let channel = DesktopApplicationTarget.effectiveChannel(configured: requestedChannel)
-        guard ["stable", "insiders"].contains(channel), channel != configuration.value.applicationChannel else {
-            preferencesController?.update()
-            return
-        }
-        guard !changingApplication, !accountSwitchInFlight, !quotaRefreshing, pendingAccountTaskId == nil,
-              !taskRows.contains(where: { $0["state"] as? String == "running" }),
-              usageInFlightByPeriod.values.allSatisfy({ !$0 }) else {
-            preferencesController?.update()
-            showMessage("请等待当前读取或操作完成，再切换目标应用。", error: true); return
-        }
-        let previous = configuration.value.applicationChannel
-        configuration.value.applicationChannel = channel
-        do { try configuration.save() }
-        catch { configuration.value.applicationChannel = previous; preferencesController?.update(); showMessage(error.localizedDescription, error: true); return }
-        changingApplication = true; reachable = false
-        timer?.invalidate(); quotaRefreshTimer?.invalidate(); quotaRefreshPollTimer?.invalidate()
-        closeMenuPopover()
-        preferencesController?.update()
-        let finishSwitch: () -> Void = { [weak self] in
-            guard let self else { return }
-            Self.applicationChannel = channel
-            self.changingApplication = false; self.refreshInFlight = false
-            self.cachedAccounts = []; self.activeAccountId = ""; self.statusValue = LiveStatus()
-            self.taskRows = []; self.lastTaskRevision = -1; self.accountListInFlight = false
-            self.accountListGeneration += 1; self.accountListWaiters.removeAll()
-            self.accountListPendingNotifyPage = false
-            self.cachedUsageReportsByPeriod.removeAll(); self.usageLastFetchTimeByPeriod.removeAll()
-            self.usageInFlightByPeriod.removeAll(); self.usageGenerationByPeriod.removeAll()
-            self.usagePendingForceByPeriod.removeAll(); self.usageManualRefreshPeriods.removeAll()
-            self.usageFetchErrorsByPeriod.removeAll(); self.usageWaitersByPeriod.removeAll()
-            self.singleAccountRefreshErrors.removeAll()
-            self.overview = nil; self.accountsPage = nil; self.usagePage = nil; self.cachePage = nil
-            self.preferencesController = nil
-            self.pageHost.subviews.forEach { $0.removeFromSuperview() }
-            self.launchApplicationButton?.title = "打开 Antigravity"
-            self.menuPanelController = nil
-            self.recoveryAttempts = 0; self.nextRecoveryAt = .distantPast
-            self.suppressLifecycleAutoQuitUntil = Date().addingTimeInterval(5)
-            self.installAntigravityLifecycleObserver(); self.syncLifecycleAgentRegistration()
-            self.selectPage(self.currentPage)
-            self.configureRefreshTimer(); self.configureQuotaRefreshTimer(); self.refresh()
-        }
-        bridge.send(["command": "set_application_channel", "channel": channel]) { [weak self] hotResult in
-            guard let self else { return }
-            if case .success = hotResult {
-                finishSwitch()
-                return
-            }
-            self.bridge.restart { [weak self] result in
-                guard let self else { return }
-                if case .failure(let error) = result {
-                    self.configuration.value.applicationChannel = previous
-                    try? self.configuration.save()
-                    self.changingApplication = false; self.refreshInFlight = false; self.accountListInFlight = false
-                    self.configureRefreshTimer(); self.configureQuotaRefreshTimer()
-                    self.preferencesController?.update()
-                    self.showMessage(error.localizedDescription, error: true)
-                    self.bridge.launch(); return
-                }
-                finishSwitch()
-            }
-        }
-    }
-
     @objc func openAntigravity() {
         #if NATIVE_UI_TEST
         openedApplications += 1; return
@@ -1311,7 +1244,7 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             self.antigravityWasRunning = false
             guard wasRunning,
                   self.configuration?.value.syncAntigravityLifecycle == true,
-                  !self.quitting, !self.changingApplication,
+                  !self.quitting,
                   Date() >= self.suppressLifecycleAutoQuitUntil else { return }
             self.stopBackendAndQuit()
         }
@@ -1477,7 +1410,7 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             checkAntigravityExitedAndQuitIfNeeded()
         }
         #endif
-        guard !refreshInFlight, !quitting, !changingApplication else { return }; refreshInFlight = true
+        guard !refreshInFlight, !quitting else { return }; refreshInFlight = true
         if let started = quotaRefreshStartedAt, Date().timeIntervalSince(started) > 45 { failPendingQuotaRefresh("刷新超时，请重试；保留上次配额") }
         let needTasks = taskPollOnly || pendingAccountTaskId != nil || quotaRefreshing
         let includeAccounts = !taskPollOnly && (menuTracking || (contentVisible && currentPage <= 1))
@@ -1674,9 +1607,7 @@ private enum AntigravityLifecycleAgent {
             return false
         }
         cachedConfigMtime = mtime
-        let channel = raw["applicationChannel"] as? String ?? "stable"
-        guard ["stable", "insiders"].contains(channel) else { cachedSyncEnabled = false; return false }
-        Assistant.applicationChannel = DesktopApplicationTarget.effectiveChannel(configured: channel)
+        Assistant.applicationChannel = "stable"
         cachedSyncEnabled = (raw["syncAntigravityLifecycle"] as? Bool == true)
         return cachedSyncEnabled
     }

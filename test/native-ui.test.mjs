@@ -19,7 +19,7 @@ test('当前四页原生布局、菜单完整身份、部分计价与真实切�
   const result=await run(binary,[join(temp,'state'),output],{maxBuffer:2e6,env:{...process.env,GRAVITYBOX_UI_RESOURCES:join(root,'assets')}});
   await writeFile(join(output,'render.log'),result.stdout+result.stderr);
   const report=JSON.parse(await readFile(join(output,'native-ui-results.json')));
-  assert.equal(report.insidersSelectionPassed,true);assert.equal(report.nativeLayouts,24);assert.equal(report.menuCaptures,4);assert.equal(report.safeSwitchSharedFlowPassed,true);assert.equal(report.emailWidthPassed,true);
+  assert.equal(report.stableOnlySelectionPassed,true);assert.equal(report.nativeLayouts,24);assert.equal(report.menuCaptures,4);assert.equal(report.safeSwitchSharedFlowPassed,true);assert.equal(report.emailWidthPassed,true);
   for(const name of report.captures){const data=await readFile(join(output,name));assert.equal(data.subarray(1,4).toString(),'PNG');assert.ok(data.length>10000);}
   for(const sheet of ['light-maintenance-sheet.png','dark-maintenance-sheet.png']){const data=await readFile(join(output,sheet));assert.equal(data.subarray(1,4).toString(),'PNG');assert.ok(data.length>10000);}
  }catch(error){await writeFile(join(output,'failure.log'),String(error.stdout??'')+String(error.stderr??'')+String(error));throw error;}

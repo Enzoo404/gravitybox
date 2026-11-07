@@ -8,6 +8,8 @@ import { createConnection } from 'node:net';
 import { once } from 'node:events';
 import {
   applicationChannel,
+  savedApplicationChannel,
+  allApplicationTargets,
   applicationTarget,
   channelStateDirectory,
   detectInstalledChannels,
@@ -33,44 +35,42 @@ const account = {
   last_used: 1,
 };
 
-test('Antigravity 与 Antigravity - Insiders 统一对外显示 Antigravity 且全功能默认开启', () => {
+test('仅正式版可作为运行目标，旧持久配置可迁移而显式 Insiders 请求失败', () => {
   assert.equal(applicationChannel(undefined), 'stable');
+  assert.equal(savedApplicationChannel('insiders'), 'stable');
   assert.throws(() => applicationChannel('preview'));
-  const stableTarget = applicationTarget('stable', '/synthetic-home');
-  const insidersTarget = applicationTarget('insiders', '/synthetic-home');
-  assert.equal(stableTarget.label, 'Antigravity');
-  assert.equal(insidersTarget.label, 'Antigravity');
-  assert.equal(stableTarget.supportsAccountSwitch, true);
-  assert.equal(insidersTarget.supportsAccountSwitch, true);
-  assert.equal(insidersTarget.bundleId, 'com.google.antigravity.insiders');
-  assert.equal(insidersTarget.executable, 'Antigravity - Insiders');
-  assert.equal(insidersTarget.profile, '/synthetic-home/Library/Application Support/Antigravity - Insiders');
-  assert.equal(targetForApp(insidersTarget.appPath).channel, 'insiders');
+  assert.throws(() => applicationChannel('insiders'), /仅支持/);
+  assert.throws(() => applicationTarget('insiders'), /仅支持/);
+  assert.throws(() => targetForApp('/Applications/Antigravity - Insiders.app'), /仅支持/);
+  assert.throws(() => applicationTarget('stable', undefined, { profile: '/tmp/Antigravity - Insiders' }), /仅支持/);
+  const stable = applicationTarget('stable', '/synthetic-home');
+  assert.equal(stable.bundleId, 'com.google.antigravity');
+  assert.equal(stable.profile, '/synthetic-home/Library/Application Support/Antigravity');
   assert.equal(channelStateDirectory('/state', 'stable'), '/state');
-  assert.equal(channelStateDirectory('/state', 'insiders'), '/state');
+  assert.equal(allApplicationTargets().length, 1);
 });
 
-test('单应用自动回落、双应用并存识别与 WCV 架构无感全功能兼容', async t => {
+test('只发现正式版，不向仅安装的 Insiders 回落；保留正式版 WCV 架构兼容', async t => {
   const appsDir = await temporary(t);
   await mkdir(join(appsDir, 'Antigravity.app', 'Contents', 'Resources'), { recursive: true });
-  const onlyStable = detectInstalledChannels('insiders', appsDir);
+  const onlyStable = detectInstalledChannels('stable', appsDir);
   assert.equal(onlyStable.bothInstalled, false);
   assert.deepEqual(onlyStable.channels, ['stable']);
   assert.equal(onlyStable.effectiveChannel, 'stable');
 
   await mkdir(join(appsDir, 'Antigravity - Insiders.app', 'Contents', 'Resources'), { recursive: true });
-  const both = detectInstalledChannels('insiders', appsDir);
-  assert.equal(both.bothInstalled, true);
-  assert.deepEqual(both.channels, ['stable', 'insiders']);
-  assert.equal(both.effectiveChannel, 'insiders');
+  const both = detectInstalledChannels('stable', appsDir);
+  assert.equal(both.bothInstalled, false);
+  assert.deepEqual(both.channels, ['stable']);
+  assert.equal(both.effectiveChannel, 'stable');
 
   await rm(join(appsDir, 'Antigravity.app'), { recursive: true, force: true });
   const onlyInsiders = detectInstalledChannels('stable', appsDir);
   assert.equal(onlyInsiders.bothInstalled, false);
-  assert.deepEqual(onlyInsiders.channels, ['insiders']);
-  assert.equal(onlyInsiders.effectiveChannel, 'insiders');
+  assert.deepEqual(onlyInsiders.channels, []);
+  assert.equal(onlyInsiders.effectiveChannel, 'stable');
 
-  // Antigravity 2.29+ / Insiders WCV-Hub architecture maintains full feature support including account switch
+  // Stable 2.29 uses WCV as well; removing Insiders must not remove this support.
   const futureStableApp = join(appsDir, 'Antigravity.app');
   await mkdir(join(futureStableApp, 'Contents', 'Resources'), { recursive: true });
   const pkgJson = Buffer.from(JSON.stringify({ version: '2.29.0', productName: 'Antigravity' }), 'utf8');
@@ -99,7 +99,7 @@ test('单应用自动回落、双应用并存识别与 WCV 架构无感全功能
   assert.equal(compareLayers('2.28.0.json', '1.0.20261103010115.json') < 0, true);
 });
 
-test('默认聚合发现 antigravity 与 antigravity-insiders 会话库，严格排除备份、IDE 及符号链接', async t => {
+test('仅统计正式版会话库，排除 Insiders、备份、IDE 和符号链接', async t => {
   const root = await temporary(t);
   for (const name of ['antigravity', 'antigravity-insiders', 'antigravity-backup', 'antigravity-ide']) {
     await mkdir(join(root, name, 'conversations'), { recursive: true });
@@ -108,7 +108,7 @@ test('默认聚合发现 antigravity 与 antigravity-insiders 会话库，严格
   }
   await symlink(join(root, 'antigravity-backup', 'conversations', 'same.db'), join(root, 'antigravity-insiders', 'conversations', 'linked.db'));
 
-  // Default manager aggregates both antigravity and antigravity-insiders
+  // Default discovery must never count Insiders data.
   const unifiedManager = new UsageStatsManager({ geminiDir: root, stateDir: root });
   const unifiedPaths = await unifiedManager.discoverDatabaseFiles();
   assert.deepEqual(
@@ -116,37 +116,35 @@ test('默认聚合发现 antigravity 与 antigravity-insiders 会话库，严格
     [
       join(root, 'antigravity', 'conversations', 'same.db'),
       join(root, 'antigravity', 'token_usage_archive.db'),
-      join(root, 'antigravity-insiders', 'conversations', 'same.db'),
-      join(root, 'antigravity-insiders', 'token_usage_archive.db'),
     ].sort(),
   );
 
   // Explicit single-directory filter still works when specified
-  for (const name of ['antigravity', 'antigravity-insiders']) {
+  for (const name of ['antigravity']) {
     const manager = new UsageStatsManager({ geminiDir: root, stateDir: root, dataDirectoryName: name });
     const paths = await manager.discoverDatabaseFiles();
     assert.deepEqual(paths.sort(), [join(root, name, 'conversations', 'same.db'), join(root, name, 'token_usage_archive.db')].sort());
   }
 });
 
-test('Antigravity 与 Antigravity - Insiders 共享统一账号池、配额与无 state.vscdb 下的切号与回滚', async t => {
+test('正式版 WCV 无 state.vscdb 时仍支持保存、切号和回滚', async t => {
   const state = await temporary(t);
   const profileDir = await temporary(t);
   const stable = new AccountsManager(state);
-  const insiders = new AccountsManager(state, { target: applicationTarget('insiders') });
+  const manager = new AccountsManager(state, { target: applicationTarget('stable') });
 
   await stable.saveAccount({ ...account, quota: quota('PRO') });
-  const fromInsiders = await insiders.getAccount(account.id);
+  const fromInsiders = await manager.getAccount(account.id);
   assert.equal(fromInsiders.quota.subscription_tier, 'PRO');
 
-  // Switch account and rollback on Insiders / WCV 2.29+ profile where state.vscdb does NOT exist
+  // Switch account and rollback on stable WCV 2.29+ profile where state.vscdb does NOT exist
   const keychain = new MockKeychainAdapter();
   await keychain.writePassword('gemini', 'antigravity', 'go-keyring-base64:previous-session');
-  const switchService = new AccountSwitchService(insiders, {
+  const switchService = new AccountSwitchService(manager, {
     stateDir: state,
     profile: profileDir,
     externalDir: join(state, 'external'),
-    channel: 'insiders',
+    channel: 'stable',
     keychain,
     isRunning: async () => false,
   });
@@ -161,9 +159,9 @@ test('Antigravity 与 Antigravity - Insiders 共享统一账号池、配额与�
   assert.match(rolledBack.message, /已恢复切换前的账号记录/);
   assert.equal(await keychain.readPassword('gemini', 'antigravity'), 'go-keyring-base64:previous-session');
 
-  // Re-switch and verify saveCurrentAccount from Keychain in Insiders mode
+  // Re-switch and verify saveCurrentAccount from Keychain in stable mode
   await switchService.switchAccount(account.id);
-  const captured = await insiders.saveCurrentAccount({
+  const captured = await manager.saveCurrentAccount({
     keychain,
     homeDir: profileDir,
     appSupportDir: profileDir,
@@ -171,17 +169,30 @@ test('Antigravity 与 Antigravity - Insiders 共享统一账号池、配额与�
   assert.equal(captured.email, account.email);
 });
 
-test('语言服务命令行自动匹配正式版或 Insiders，且保留对应版本与 hub 身份', () => {
-  const target = applicationTarget('insiders');
-  const version = '1.0.20261103010115';
+test('语言服务只匹配正式版并保留 WCV hub 身份，拒绝 Insiders 进程', () => {
+  const target = applicationTarget('stable');
+  const version = '2.29.0';
   const command = target.appPath + '/Contents/Resources/bin/language_server --cloud_code_endpoint https://daily-cloudcode-pa.googleapis.com --subclient_type hub --override_ide_version ' + version;
-  assert.equal(matchingTargetForLanguageServerCommand(command)?.channel, 'insiders');
-  assert.equal(cloudProviderContextFromCommand(command, version), null);
+  assert.equal(matchingTargetForLanguageServerCommand(command)?.channel, 'stable');
   const context = cloudProviderContextFromCommand(command, version, target);
-  assert.equal(cloudProviderContextFromCommand(command + ' --app_data_dir antigravity', version, target), null);
+  assert.equal(cloudProviderContextFromCommand(command + ' --app_data_dir antigravity-insiders', version, target), null);
   assert.equal(context.userAgent, 'antigravity/hub/' + version);
   assert.equal(validCachedCloudProviderContext(context, version, target), true);
-  assert.equal(validCachedCloudProviderContext(context, '2.28.2', applicationTarget()), false);
+  const unsupported = command.replace('Antigravity.app', 'Antigravity - Insiders.app');
+  assert.equal(matchingTargetForLanguageServerCommand(unsupported), null);
+  assert.equal(cloudProviderContextFromCommand(unsupported, version), null);
+});
+
+test('历史 Insiders 配额原样保留但不作为正式版配额展示', async t => {
+  const state = await temporary(t);
+  const manager = new AccountsManager(state);
+  await manager.saveAccount({ ...account, insiders_quota: quota('ULTRA') });
+  const loaded = await manager.getAccount(account.id);
+  assert.equal(loaded.quota ?? null, null);
+  assert.equal(loaded.insiders_quota.subscription_tier, 'ULTRA');
+  assert.throws(() => new UsageStatsManager({ stateDir: state, dataDirectoryName: 'antigravity-insiders' }), /仅统计/);
+  const usage = new UsageStatsManager({ stateDir: state });
+  assert.throws(() => usage.setDataDirectoryName('antigravity-insiders'), /仅统计/);
 });
 
 function request(socket, command) {
@@ -194,10 +205,10 @@ function request(socket, command) {
   });
 }
 
-test('IPC 在正式版与 Insiders 下均对外统一显示 Antigravity 并开放全部账号功能', { timeout: 15000 }, async t => {
+test('IPC 将旧 Insiders 配置备份后迁移到正式版，拒绝通道切换', { timeout: 15000 }, async t => {
   const state = await temporary(t);
   await mkdir(join(state, 'profile'));
-  await writeFile(join(state, 'config.json'), JSON.stringify({ applicationChannel: 'insiders' }));
+  await writeFile(join(state, 'config.json'), JSON.stringify({ applicationChannel: 'insiders', futureSetting: 'preserve' }));
   const child = spawn(
     process.execPath,
     ['dist/main.js', '--state-dir', state, '--profile', join(state, 'profile'), '--gemini-dir', join(state, 'gemini')],
@@ -219,6 +230,16 @@ test('IPC 在正式版与 Insiders 下均对外统一显示 Antigravity 并开�
   assert.equal(status.status.accountSwitchSupported, true);
   assert.equal(status.status.applicationLabel, 'Antigravity');
 
+  assert.equal(status.status.applicationChannel, 'stable');
+  assert.equal(status.status.bothApplicationsInstalled, false);
+  const persisted = JSON.parse(await readFile(join(state, 'config.json'), 'utf8'));
+  assert.equal(persisted.applicationChannel, 'stable');
+  assert.equal(persisted.futureSetting, 'preserve');
+  const backup = JSON.parse(await readFile(join(state, 'config-before-stable-only.json'), 'utf8'));
+  assert.equal(backup.applicationChannel, 'insiders');
+  const rejected = await request(socket, { command: 'set_application_channel', channel: 'insiders' });
+  assert.equal(rejected.ok, false);
+  assert.match(rejected.error, /仅支持/);
   const beforePid = status.status.pid;
   const switched = await request(socket, { command: 'set_application_channel', channel: 'stable' });
   assert.equal(switched.ok, true);

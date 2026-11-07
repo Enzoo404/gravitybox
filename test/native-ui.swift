@@ -452,8 +452,11 @@ import Cocoa
         Assistant.applicationChannel = "insiders"
         assistant.configuration.value.applicationChannel = "insiders"
         check(assistant.targetApplication.label == "Antigravity" && assistant.targetApplication.name == "Antigravity", "Unified target label and name must always be Antigravity")
-        check(assistant.targetApplication.supportsAccountSwitch == true, "Both Antigravity and Insiders must support account switching")
-        let insidersSettings = PreferencesController(app: assistant)
+        check(assistant.targetApplication.supportsAccountSwitch == true, "Stable Antigravity must support account switching")
+        check(assistant.targetApplication.channel == "stable", "Legacy channel cannot redirect native target")
+        check(assistant.targetApplication.bundleIdentifier == "com.google.antigravity", "Native target must be stable")
+        check(DesktopApplicationTarget.installedChannels() == ["stable"], "Insiders must not be discoverable")
+        let stableSettings = PreferencesController(app: assistant)
         func allTextValues(_ v: NSView) -> [String] {
             var values: [String] = []
             if let tf = v as? NSTextField { values.append(tf.stringValue) }
@@ -462,10 +465,10 @@ import Cocoa
             for sub in v.subviews { values.append(contentsOf: allTextValues(sub)) }
             return values
         }
-        check(!allTextValues(insidersSettings.view).contains { $0.localizedCaseInsensitiveContains("Insiders") || $0.contains("目标应用") }, "Settings UI must not display target application switcher or Insiders text")
-        check(insidersSettings.checkUpdateBtn.title == "检查更新", "About row must replace 关于 GravityBox with 检查更新 button")
-        check(!allTextValues(insidersSettings.view).contains("关于 GravityBox"), "Settings UI must not contain 关于 GravityBox button")
-        check(insidersSettings.aboutSubtitleLabel.isHidden && insidersSettings.aboutSubtitleLabel.stringValue.isEmpty, "About row subtitle must stay hidden when no update is available")
+        check(!allTextValues(stableSettings.view).contains { $0.localizedCaseInsensitiveContains("Insiders") || $0.contains("目标应用") }, "Settings UI must not display target application switcher or Insiders text")
+        check(stableSettings.checkUpdateBtn.title == "检查更新", "About row must replace 关于 GravityBox with 检查更新 button")
+        check(!allTextValues(stableSettings.view).contains("关于 GravityBox"), "Settings UI must not contain 关于 GravityBox button")
+        check(stableSettings.aboutSubtitleLabel.isHidden && stableSettings.aboutSubtitleLabel.stringValue.isEmpty, "About row subtitle must stay hidden when no update is available")
         assistant.updateManager.simulateRelease(AppReleaseInfo(
             version: "1.1.0",
             tagName: "v1.1.0",
@@ -476,10 +479,10 @@ import Cocoa
             dmgURL: nil,
             sha256URL: nil
         ))
-        insidersSettings.refreshUpdateRowState()
-        check(!insidersSettings.aboutSubtitleLabel.isHidden && insidersSettings.aboutSubtitleLabel.stringValue == "发现新版本 v1.1.0，可立即升级", "About row must display exact update subtitle when update is available")
-        insidersSettings.showUpdateSheet(); pump()
-        if let updateSheet = insidersSettings.updateSheet {
+        stableSettings.refreshUpdateRowState()
+        check(!stableSettings.aboutSubtitleLabel.isHidden && stableSettings.aboutSubtitleLabel.stringValue == "发现新版本 v1.1.0，可立即升级", "About row must display exact update subtitle when update is available")
+        stableSettings.showUpdateSheet(); pump()
+        if let updateSheet = stableSettings.updateSheet {
             check(updateSheet.primaryBtn.title == "立即更新", "Update sheet must display 立即更新 button when release is available")
             check(updateSheet.changelogTextView.string.contains("新增 GitHub Release 检查更新"), "Update sheet must display GitHub Release changelog")
             check(updateSheet.autoUpdateSwitch.state == .off, "Auto update switch in sheet footer must default to off")
@@ -492,31 +495,34 @@ import Cocoa
             updateSheet.closeSheet(); pump()
         }
         assistant.updateManager.simulateRelease(nil)
-        insidersSettings.refreshUpdateRowState()
-        check(insidersSettings.aboutSubtitleLabel.isHidden, "Clearing available release must hide about row subtitle again")
-        let insidersAccounts = AccountsPage(app: assistant)
-        insidersAccounts.updateAutoSwitchState()
-        check(insidersAccounts.autoSwitchToggle.isEnabled && insidersAccounts.configButton.isEnabled, "All account switch controls must remain enabled across both apps")
-        check(!allTextValues(insidersAccounts.view).contains { $0.localizedCaseInsensitiveContains("Insiders") }, "Accounts UI must not mention Insiders")
-        let insidersAdd = AddAccountSheet(app: assistant) {}
-        check(insidersAdd.currentButton.isEnabled, "Save current account must remain enabled across both apps")
-        insidersAdd.busy(false)
-        check(insidersAdd.currentButton.isEnabled, "Leaving busy state must keep save current account enabled")
-        check(!allTextValues(insidersAdd.window.contentView!).contains { $0.localizedCaseInsensitiveContains("Insiders") }, "AddAccountSheet UI must not mention Insiders")
+        stableSettings.refreshUpdateRowState()
+        check(stableSettings.aboutSubtitleLabel.isHidden, "Clearing available release must hide about row subtitle again")
+        let stableAccounts = AccountsPage(app: assistant)
+        stableAccounts.updateAutoSwitchState()
+        check(stableAccounts.autoSwitchToggle.isEnabled && stableAccounts.configButton.isEnabled, "All account switch controls must remain enabled for stable Antigravity")
+        check(!allTextValues(stableAccounts.view).contains { $0.localizedCaseInsensitiveContains("Insiders") }, "Accounts UI must not mention Insiders")
+        let stableAdd = AddAccountSheet(app: assistant) {}
+        check(stableAdd.currentButton.isEnabled, "Save current account must remain enabled for stable Antigravity")
+        stableAdd.busy(false)
+        check(stableAdd.currentButton.isEnabled, "Leaving busy state must keep save current account enabled")
+        check(!allTextValues(stableAdd.window.contentView!).contains { $0.localizedCaseInsensitiveContains("Insiders") }, "AddAccountSheet UI must not mention Insiders")
         assistant.pageHost.subviews.forEach { $0.removeFromSuperview() }
-        assistant.preferencesController = insidersSettings
+        assistant.preferencesController = stableSettings
         assistant.currentPage = -1
         assistant.selectPage(3); window.setContentSize(NSSize(width: 1060, height: 760)); pump()
-        try capture(window.contentView!, output.appendingPathComponent("insiders-settings.png"))
+        try capture(window.contentView!, output.appendingPathComponent("stable-settings.png"))
 
         DesktopApplicationTarget.installedChannelsOverride = ["stable"]
         check(DesktopApplicationTarget.bothInstalled == false, "Single-app mode must report bothInstalled == false")
         check(DesktopApplicationTarget.effectiveChannel(configured: "insiders") == "stable", "Single-app mode must auto-fallback to sole installed app")
+        DesktopApplicationTarget.installedChannelsOverride = ["insiders"]
+        check(DesktopApplicationTarget.installedChannels().isEmpty, "Insiders alone is not a supported installation")
+        check(DesktopApplicationTarget.preferredLaunchPath() == "/Applications/Antigravity.app", "Launch must not fall back to Insiders")
         DesktopApplicationTarget.installedChannelsOverride = nil
 
         Assistant.applicationChannel = "stable"
         assistant.configuration.value.applicationChannel = "stable"
-        let result:[String:Any] = ["insidersSelectionPassed":true,"nativeLayouts":captures.count,"captures":captures,"menuCaptures":4,"safeSwitchSharedFlowPassed":true,"emailWidthPassed":true,"partialPricingPassed":true,"scope":"isolated synthetic AppKit fixture; not installed-app acceptance"]
+        let result:[String:Any] = ["stableOnlySelectionPassed":true,"nativeLayouts":captures.count,"captures":captures,"menuCaptures":4,"safeSwitchSharedFlowPassed":true,"emailWidthPassed":true,"partialPricingPassed":true,"scope":"isolated synthetic AppKit fixture; not installed-app acceptance"]
         try JSONSerialization.data(withJSONObject:result,options:[.prettyPrinted,.sortedKeys]).write(to:output.appendingPathComponent("native-ui-results.json"))
         window.orderOut(nil)
         print("24 current-page native layouts and 4 menu states; fixture checks passed")
