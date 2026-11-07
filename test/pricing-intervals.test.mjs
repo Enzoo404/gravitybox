@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { resolvePricingForTimestamp, UsageStatsManager, calculateEstimatedUsd } from '../dist/usage.js';
 import { MODEL_PRICES } from '../dist/model-catalog.js';
 
@@ -75,7 +78,9 @@ test('远程价格同步：优雅处理无网络或非法响应，绝不抛错�
   assert.ok(typeof result.error === 'string');
 });
 
-test('远程价格同步：请求头包含规范 User-Agent (GravityBox/1.0.0)', async () => {
+test('远程价格同步：请求头报告当前构建版本，测试缓存与日常数据隔离', async () => {
+  const temp = await mkdtemp(join(tmpdir(), 'gravitybox-pricing-version-'));
+  const { version } = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
   let capturedUserAgent = '';
   const server = createServer((req, res) => {
     capturedUserAgent = req.headers['user-agent'] ?? '';
@@ -85,11 +90,12 @@ test('远程价格同步：请求头包含规范 User-Agent (GravityBox/1.0.0)',
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const port = server.address().port;
   try {
-    const manager = new UsageStatsManager({ remotePricingUrl: `http://127.0.0.1:${port}/feed.json` });
+    const manager = new UsageStatsManager({ stateDir: temp, geminiDir: join(temp, 'gemini'), remotePricingUrl: `http://127.0.0.1:${port}/feed.json` });
     const result = await manager.syncRemotePricing(undefined, true);
     assert.equal(result.synced, true);
-    assert.equal(capturedUserAgent, 'GravityBox/1.0.0');
+    assert.equal(capturedUserAgent, `GravityBox/${version}`);
   } finally {
     await new Promise(resolve => server.close(resolve));
+    await rm(temp, { recursive: true, force: true });
   }
 });
