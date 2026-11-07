@@ -12,6 +12,7 @@
 - **Updater**：修复应用内点击“立即更新”时因模态 Sheet 挂载及后台串行队列阻塞导致的死锁卡顿，增加超时强杀与内核硬退出双重保底。
 - **Updater**：更新脚本脱离父进程组独立运行，并增加 5 秒等待上限与 kill -9 强杀兜底，防止进程被系统连带终止。
 - **Updater**：修复开机跟随启动守护进程（`--lifecycle-agent`）被误判为主程序导致更新后不自动重启的问题。
+- **Lifecycle**：移除后台常驻守护进程向 AppKit 窗口系统注册交互策略的代码，修复主程序退出后因常驻实例被 LaunchServices 锁死导致 Finder 提示“已不能再打开”（错误码 -600）。
 - **Updater**：格式化更新日志展示，自动剥离 Markdown 反引号代码块与标题标记；修复更新弹窗关闭按钮锁死及损坏 DMG 重复使用的问题。
 - **Core**：退出前立即落盘待保存的防抖配置；修复账号列表并发拉取时偶现漏刷新视图；消除请求明细 Sheet 窗口释放相关的内存安全隐患。
 
@@ -59,6 +60,7 @@
 ### Fixed
 - **Native UI**：保持菜单栏状态图标在不同翻译开关状态下的不透明度一致（`b9921e8`，已包含于 1.0.0）。
 
-[Unreleased]: https://github.com/Enzoo404/gravitybox/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/Enzoo404/gravitybox/compare/v1.0.2...HEAD
+[1.0.2]: https://github.com/Enzoo404/gravitybox/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/Enzoo404/gravitybox/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/Enzoo404/gravitybox/releases/tag/v1.0.0
