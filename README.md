@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/master-1024.png" width="116" height="116" alt="GravityBox Logo" />
+  <img src="assets/master-1024.png" width="80" height="80" alt="GravityBox Logo" />
 
   <h1>GravityBox</h1>
 
@@ -17,7 +17,6 @@
   </p>
 
   <p>
-    <a href="#界面预览">界面预览</a> ·
     <a href="#功能速览">功能速览</a> ·
     <a href="#安装与快速上手">安装与上手</a> ·
     <a href="#功能详解">功能详解</a> ·
@@ -27,33 +26,35 @@
   </p>
 </div>
 
----
-
-## 界面预览
-
 <p align="center">
-  <a href="assets/screenshots/overview.png"><img src="assets/screenshots/overview.png" width="960" alt="GravityBox 主窗口总览" /></a>
-  <br>
-  <sub>主窗口总览 · 账号配额、今日用量与模型消耗一屏掌握</sub>
+  <a href="assets/screenshots/hero.png"><img src="assets/screenshots/hero.png" width="1280" alt="GravityBox 原生 macOS 工作台与菜单栏面板：配额、Token 用量和费用估算一览" /></a>
 </p>
 
 <p align="center">
-  <a href="assets/screenshots/accounts.png"><img src="assets/screenshots/accounts.png" width="960" alt="GravityBox 多账号管理" /></a>
-  <br>
-  <sub>多账号管理 · 实时对比备用账号额度，一键安全切换与快照回滚</sub>
+  <strong>一屏掌握配额与用量，编码时也能随手查看。</strong><br>
+  <a href="https://github.com/Enzoo404/gravitybox/releases/latest">下载 macOS 版</a> ·
+  <a href="#安装与快速上手">快速上手</a> ·
+  <a href="#从源码构建">从源码构建</a>
 </p>
 
-<p align="center">
-  <a href="assets/screenshots/usage.png"><img src="assets/screenshots/usage.png" width="960" alt="GravityBox 用量统计与费用分析" /></a>
-  <br>
-  <sub>用量与费用 · 24 小时时段消耗趋势、模型费用占比与逐条明细检索</sub>
-</p>
+<details>
+<summary><strong>查看 4 张完整实机截图：总览 · 账号 · 用量 · 菜单栏</strong></summary>
 
-<p align="center">
-  <a href="assets/screenshots/menubar.png"><img src="assets/screenshots/menubar.png" width="380" alt="GravityBox 菜单栏快捷面板" /></a>
-  <br>
-  <sub>菜单栏快捷面板 · 点击状态栏图标即刻呼出，速览配额与用量趋势</sub>
-</p>
+<p><strong>总览</strong> · 剩余配额、重置倒计时与今日模型消耗。</p>
+<p align="center"><a href="assets/screenshots/overview.png"><img src="assets/screenshots/overview.png" width="1000" alt="总览页：五条模型配额、今日用量与活跃模型，身份信息已遮挡" /></a></p>
+
+<p><strong>账号</strong> · 对比当前与备用账号的配额，集中管理多个账号。</p>
+<p align="center"><a href="assets/screenshots/accounts.png"><img src="assets/screenshots/accounts.png" width="1000" alt="账号页：当前与备用账号的配额卡片，姓名和邮箱已遮挡" /></a></p>
+
+<p><strong>用量</strong> · Token 趋势、模型费用占比与缓存命中率。</p>
+<p align="center"><a href="assets/screenshots/usage.png"><img src="assets/screenshots/usage.png" width="1000" alt="用量页：Token 柱状图、API 等效费用环图与缓存命中率" /></a></p>
+
+<p><strong>菜单栏快捷面板</strong> · 不离开当前工作窗口，随手查看用量与趋势。</p>
+<p align="center"><a href="assets/screenshots/menubar.png"><img src="assets/screenshots/menubar.png" width="422" alt="菜单栏面板：用量摘要、今日趋势和模型用量" /></a></p>
+
+</details>
+
+<p align="center"><sub>GravityBox v1.0.0 · macOS 实机截图，身份信息已脱敏。首图由总览与菜单栏截图排版合成；费用为 API 等效估算。<a href="assets/screenshots/README.md">截图说明</a></sub></p>
 
 ---
 
