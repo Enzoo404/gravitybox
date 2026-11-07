@@ -46,7 +46,7 @@ jobs:
           [[ "$ACCEPTANCE_CONFIRMED" == true ]] || { echo '需要先完成安装、升级和数据保留验收' >&2; exit 1; }
 
       - name: Checkout Release Controller
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
