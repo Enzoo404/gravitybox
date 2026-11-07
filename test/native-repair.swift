@@ -15,10 +15,16 @@ import Cocoa
   let saved=try JSONSerialization.jsonObject(with:Data(contentsOf:file)) as! [String:Any]
   precondition((saved["profiles"] as? [String:Any])?["custom"] as? Int == 17);precondition(saved["futureField"] as? String == "preserve");precondition(saved["autoCompleteAuthorizedHost"] as? String == "https://synthetic.invalid")
   precondition(saved["selectedProfile"] as? String == "gemini")
-  store.value.applicationChannel = "insiders"; try store.save()
+  var legacy = saved; legacy["applicationChannel"] = "insiders"
+  try JSONSerialization.data(withJSONObject: legacy).write(to: file)
   let reloaded = try ConfigurationStore(state: root)
-  precondition(reloaded.value.applicationChannel == "insiders")
-  precondition(DesktopApplicationTarget(channel: "insiders").path == "/Applications/Antigravity - Insiders.app")
+  precondition(reloaded.value.applicationChannel == "stable")
+  let migrated = try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as! [String:Any]
+  precondition(migrated["applicationChannel"] as? String == "stable")
+  precondition(migrated["futureField"] as? String == "preserve")
+  let backup = try JSONSerialization.jsonObject(with: Data(contentsOf: root.appendingPathComponent("config-before-stable-only.json"))) as! [String:Any]
+  precondition(backup["applicationChannel"] as? String == "insiders")
+  precondition(DesktopApplicationTarget(channel: "insiders").path == "/Applications/Antigravity.app")
   let invalid = Data("{\"schema\":2,\"applicationChannel\":\"other\"}".utf8)
   try invalid.write(to: file); var invalidRejected = false
   do { _ = try ConfigurationStore(state: root) } catch { invalidRejected = true }

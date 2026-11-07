@@ -3,79 +3,33 @@ import Cocoa
 struct DesktopApplicationTarget {
     static var applicationsDirectory = "/Applications"
     static var installedChannelsOverride: [String]? = nil
-    static var lastRunningBundlePath: String? = nil
 
-    static var allTargets: [DesktopApplicationTarget] {
-        [DesktopApplicationTarget(channel: "stable"), DesktopApplicationTarget(channel: "insiders")]
-    }
+    static var allTargets: [DesktopApplicationTarget] { [DesktopApplicationTarget()] }
 
     static func installedChannels() -> [String] {
-        if let override = installedChannelsOverride { return override }
-        let fm = FileManager.default
-        var channels: [String] = []
-        if fm.fileExists(atPath: (applicationsDirectory as NSString).appendingPathComponent("Antigravity.app")) {
-            channels.append("stable")
-        }
-        if fm.fileExists(atPath: (applicationsDirectory as NSString).appendingPathComponent("Antigravity - Insiders.app")) {
-            channels.append("insiders")
-        }
-        return channels
+        if let override = installedChannelsOverride { return override.filter { $0 == "stable" } }
+        return FileManager.default.fileExists(atPath: DesktopApplicationTarget().path) ? ["stable"] : []
     }
 
-    static var bothInstalled: Bool {
-        let channels = installedChannels()
-        return channels.contains("stable") && channels.contains("insiders")
-    }
+    static var bothInstalled: Bool { false }
+    static func effectiveChannel(configured: String) -> String { "stable" }
 
-    static func effectiveChannel(configured: String) -> String {
-        let channels = installedChannels()
-        if channels.count == 1, let sole = channels.first {
-            return sole
-        }
-        if channels.count > 1, !channels.contains(configured), let first = channels.first {
-            return first
-        }
-        return ["stable", "insiders"].contains(configured) ? configured : "stable"
-    }
-
-    let channel: String
-    var insiders: Bool { channel == "insiders" }
-    var bundleName: String { insiders ? "Antigravity - Insiders" : "Antigravity" }
+    // Accept the old initializer shape for configuration migration, never select another app.
+    init(channel: String = "stable") {}
+    var channel: String { "stable" }
+    var bundleName: String { "Antigravity" }
     var name: String { "Antigravity" }
     var label: String { "Antigravity" }
-    var path: String { (Self.applicationsDirectory as NSString).appendingPathComponent("\(bundleName).app") }
-    var bundleIdentifier: String { insiders ? "com.google.antigravity.insiders" : "com.google.antigravity" }
+    var path: String { (Self.applicationsDirectory as NSString).appendingPathComponent("Antigravity.app") }
+    var bundleIdentifier: String { "com.google.antigravity" }
     var supportsAccountSwitch: Bool { true }
 
-    func matches(_ app: NSRunningApplication) -> Bool {
-        Self.matchesAny(app)
-    }
-
+    func matches(_ app: NSRunningApplication) -> Bool { matchesStrict(app) }
     func matchesStrict(_ app: NSRunningApplication) -> Bool {
         app.bundleIdentifier == bundleIdentifier && app.bundleURL?.standardizedFileURL.path == URL(fileURLWithPath: path).standardizedFileURL.path
     }
-
-    static func matchesAny(_ app: NSRunningApplication) -> Bool {
-        for target in allTargets where target.matchesStrict(app) {
-            lastRunningBundlePath = target.path
-            return true
-        }
-        return false
-    }
-
-    static func preferredLaunchPath(fallbackChannel: String = "stable") -> String {
-        for app in NSWorkspace.shared.runningApplications {
-            for target in allTargets where target.matchesStrict(app) {
-                lastRunningBundlePath = target.path
-                return target.path
-            }
-        }
-        if let last = lastRunningBundlePath, FileManager.default.fileExists(atPath: last) {
-            return last
-        }
-        let channel = effectiveChannel(configured: fallbackChannel)
-        return DesktopApplicationTarget(channel: channel).path
-    }
+    static func matchesAny(_ app: NSRunningApplication) -> Bool { DesktopApplicationTarget().matchesStrict(app) }
+    static func preferredLaunchPath(fallbackChannel: String = "stable") -> String { DesktopApplicationTarget().path }
 }
 
 struct AppConfiguration: Codable {
@@ -108,7 +62,7 @@ struct AppConfiguration: Codable {
         autoUpdateEnabled = (try? container.decode(Bool.self, forKey: .autoUpdateEnabled)) ?? false
         if let channel = try container.decodeIfPresent(String.self, forKey: .applicationChannel) {
             guard ["stable", "insiders"].contains(channel) else { throw BackendFailure(message: "应用版本选择无效，原配置已保留。") }
-            applicationChannel = channel
+            applicationChannel = "stable"
         }
         menuSelectedTab = max(0, min(2, (try? container.decode(Int.self, forKey: .menuSelectedTab)) ?? 0))
         menuUsagePeriod = max(0, min(3, (try? container.decode(Int.self, forKey: .menuUsagePeriod)) ?? 0))
@@ -159,6 +113,15 @@ final class ConfigurationStore {
             retainedDocument = raw
             if let current = try? JSONDecoder().decode(AppConfiguration.self, from: data) {
                 value = current
+                if raw["applicationChannel"] as? String == "insiders" {
+                    let backup = state.appendingPathComponent("config-before-stable-only.json")
+                    if !fm.fileExists(atPath: backup.path) {
+                        guard fm.createFile(atPath: backup.path, contents: data, attributes: [.posixPermissions: 0o600]) else {
+                            throw BackendFailure(message: "旧配置备份失败，原文件已保留。")
+                        }
+                    }
+                    try save()
+                }
                 return
             }
             value = AppConfiguration()
@@ -166,6 +129,7 @@ final class ConfigurationStore {
         } else { throw BackendFailure(message: "配置文件格式损坏，已保留原文件。") }
     }
     func save() throws {
+        value.applicationChannel = "stable"
         let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let encoded = try encoder.encode(value)
         // Merge with the latest disk document so navigation never removes retired or external fields.

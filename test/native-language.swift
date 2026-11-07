@@ -4,6 +4,8 @@ import Cocoa
   let domain="local.gravitybox.fixture."+UUID().uuidString,preferences=UserDefaults(suiteName:domain)!
   let state=FileManager.default.temporaryDirectory.appendingPathComponent("gravity-language-"+UUID().uuidString);try FileManager.default.createDirectory(at:state,withIntermediateDirectories:true)
   defer{preferences.removePersistentDomain(forName:domain);preferences.synchronize();try? FileManager.default.removeItem(at:state)}
+  try Data("{\"applicationChannel\":\"insiders\"}".utf8).write(to: state.appendingPathComponent("config.json"))
+  precondition(MenuLanguagePreferences(state: state).domain == "com.google.antigravity", "Legacy config must not select Insiders language preferences")
   let store=MenuLanguagePreferences(state:state,domain:domain)
   try store.enable();precondition(store.isChinese);precondition(store.canRestore);try store.restore();precondition(store.current==nil);precondition(!store.canRestore)
   preferences.set(["en-GB","fr"],forKey:"AppleLanguages");preferences.synchronize();try store.enable();try store.enable();try store.restore();precondition(store.current as? [String]==["en-GB","fr"])

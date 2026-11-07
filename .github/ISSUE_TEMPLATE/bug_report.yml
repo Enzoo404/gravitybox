@@ -56,7 +56,6 @@ body:
         - 正式版 (Stable - 2.28.0)
         - 正式版 (Stable - 2.24.0 ~ 2.27.0)
         - 正式版 (Stable - 其他版本)
-        - Insiders 预览版
     validations:
       required: true
 

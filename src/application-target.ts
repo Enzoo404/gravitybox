@@ -2,10 +2,10 @@ import { existsSync, openSync, readSync, closeSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 
-export type ApplicationChannel = 'stable' | 'insiders';
+export type ApplicationChannel = 'stable';
 export type ApplicationArchitecture = 'legacy-hub' | 'wcv-hub';
 
-export const ALLOWED_DATA_DIRECTORY_NAMES = ['antigravity', 'antigravity-insiders'] as const;
+export const ALLOWED_DATA_DIRECTORY_NAMES = ['antigravity'] as const;
 export type DataDirectoryName = (typeof ALLOWED_DATA_DIRECTORY_NAMES)[number];
 
 export interface InstalledChannelsInfo {
@@ -24,28 +24,22 @@ export interface BundleCapabilities {
 
 const capabilityCache = new Map<string, { value: BundleCapabilities; expiresAt: number }>();
 
-/**
- * Inspects an installed Antigravity bundle's `app.asar` header and `package.json`
- * to determine its runtime architecture (`wcv-hub` vs `legacy-hub`) and conversation
- * data directory name (`antigravity` vs `antigravity-insiders`).
- * Both Antigravity (2.29+) and Antigravity - Insiders share the same CompositeTokenStorage
- * (`gemini/antigravity` Keychain + `~/.gemini/jetski-standalone-oauth-token`) and support
- * all GravityBox features including account switching.
- */
+/** Inspect the supported stable bundle without changing the official application. */
 export function probeBundleCapabilities(
   appPath: string,
-  fallbackChannel: ApplicationChannel = basename(appPath) === 'Antigravity - Insiders.app' ? 'insiders' : 'stable',
+  channel: ApplicationChannel = 'stable',
 ): BundleCapabilities {
+  applicationChannel(channel);
+  assertStablePaths(appPath);
   const now = Date.now();
   const cached = capabilityCache.get(appPath);
   if (cached && cached.expiresAt > now) return cached.value;
 
-  const isInsidersBundleName = fallbackChannel === 'insiders' || basename(appPath) === 'Antigravity - Insiders.app';
   const fallback: BundleCapabilities = {
     architecture: 'wcv-hub',
     version: '',
-    productName: isInsidersBundleName ? 'Antigravity - Insiders' : 'Antigravity',
-    dataDirectoryName: isInsidersBundleName ? 'antigravity-insiders' : 'antigravity',
+    productName: 'Antigravity',
+    dataDirectoryName: 'antigravity',
     supportsAccountSwitch: true,
   };
 
@@ -86,13 +80,10 @@ export function probeBundleCapabilities(
       }
     }
 
-    const isDateVersion = /^1\.0\.\d{8,}/.test(version);
-    const architecture: ApplicationArchitecture = (hasWcvArchitecture || isDateVersion || isInsidersBundleName)
+    const architecture: ApplicationArchitecture = hasWcvArchitecture
       ? 'wcv-hub'
       : 'legacy-hub';
-    const rawDataDir = productName.toLowerCase().replace(/\s+/g, '');
-    const dataDirectoryName: DataDirectoryName =
-      rawDataDir === 'antigravity-insiders' || isInsidersBundleName ? 'antigravity-insiders' : 'antigravity';
+    const dataDirectoryName: DataDirectoryName = 'antigravity';
 
     const resolved: BundleCapabilities = {
       architecture,
@@ -114,30 +105,31 @@ export function probeBundleCapabilities(
 
 export function applicationChannel(value: unknown): ApplicationChannel {
   if (value === undefined || value === 'stable') return 'stable';
-  if (value === 'insiders') return 'insiders';
+  if (value === 'insiders') throw new Error('GravityBox 仅支持 Antigravity 正式版');
   throw new Error('应用版本选择无效');
+}
+
+/** Only persisted legacy configuration is migrated; explicit channel requests are rejected. */
+export function savedApplicationChannel(value: unknown): ApplicationChannel {
+  return value === 'insiders' ? 'stable' : applicationChannel(value);
+}
+
+function assertStablePaths(appPath: string, profile?: string): void {
+  if (basename(appPath) === 'Antigravity - Insiders.app' ||
+      (profile && basename(profile) === 'Antigravity - Insiders')) {
+    throw new Error('GravityBox 仅支持 Antigravity 正式版');
+  }
 }
 
 export function detectInstalledChannels(
   preferredChannel: ApplicationChannel = 'stable',
   applicationsDir = '/Applications',
 ): InstalledChannelsInfo {
-  const stableInstalled = existsSync(join(applicationsDir, 'Antigravity.app'));
-  const insidersInstalled = existsSync(join(applicationsDir, 'Antigravity - Insiders.app'));
-  const channels: ApplicationChannel[] = [];
-  if (stableInstalled) channels.push('stable');
-  if (insidersInstalled) channels.push('insiders');
-
-  let effectiveChannel: ApplicationChannel = preferredChannel;
-  if (channels.length === 1) {
-    effectiveChannel = channels[0]!;
-  } else if (channels.length > 1 && !channels.includes(preferredChannel)) {
-    effectiveChannel = channels[0]!;
-  }
+  applicationChannel(preferredChannel);
   return {
-    channels: channels.length > 0 ? channels : [preferredChannel],
-    bothInstalled: stableInstalled && insidersInstalled,
-    effectiveChannel,
+    channels: existsSync(join(applicationsDir, 'Antigravity.app')) ? ['stable'] : [],
+    bothInstalled: false,
+    effectiveChannel: 'stable',
   };
 }
 
@@ -147,16 +139,17 @@ export function applicationTarget(
   home = homedir(),
   options?: { appPath?: string; profile?: string; applicationsDir?: string },
 ) {
-  const insiders = channel === 'insiders';
-  const name = insiders ? 'Antigravity - Insiders' : 'Antigravity';
+  applicationChannel(channel);
+  const name = 'Antigravity';
   const applicationsDir = options?.applicationsDir ?? '/Applications';
   const appPath = options?.appPath ?? join(applicationsDir, `${name}.app`);
+  assertStablePaths(appPath, options?.profile);
   const capabilities = probeBundleCapabilities(appPath, channel);
   return {
     channel,
     name,
     label: 'Antigravity',
-    bundleId: insiders ? 'com.google.antigravity.insiders' : 'com.google.antigravity',
+    bundleId: 'com.google.antigravity',
     appPath,
     executable: name,
     profile: options?.profile ?? join(home, 'Library', 'Application Support', name),
@@ -171,7 +164,6 @@ export type ApplicationTarget = ReturnType<typeof applicationTarget>;
 export function allApplicationTargets(home = homedir(), applicationsDir = '/Applications'): ApplicationTarget[] {
   return [
     applicationTarget('stable', home, { applicationsDir }),
-    applicationTarget('insiders', home, { applicationsDir }),
   ];
 }
 
@@ -181,8 +173,7 @@ export function resolveDefaultTarget(home = homedir(), applicationsDir = '/Appli
 }
 
 export function targetForApp(appPath: string, home = homedir()): ApplicationTarget {
-  const channel: ApplicationChannel = basename(appPath) === 'Antigravity - Insiders.app' ? 'insiders' : 'stable';
-  return applicationTarget(channel, home, { appPath });
+  return applicationTarget('stable', home, { appPath });
 }
 
 export function matchingTargetForLanguageServerCommand(

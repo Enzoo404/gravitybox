@@ -105,7 +105,7 @@ test('切号事务同步SQLite、钥匙串与两端索引，保留其他数据�
   const readback = new AccountsManager(join(f.root, 'readback'));
   const saved = await readback.saveCurrentAccount({ homeDir: f.root, appSupportDir, keychain: new MockKeychainAdapter() });
   assert.equal(saved.email, f.b.email); assert.equal(saved.token.refresh_token, f.b.token.refresh_token);
-  const journal = join(f.stateDir, 'account-switch-journal.json'); assert.equal((await stat(journal)).mode & 0o777, 0o600);
+  const journal = join(f.stateDir, 'account-switch-journal-stable.json'); assert.equal((await stat(journal)).mode & 0o777, 0o600);
   await service.rollback();
   assert.equal(await f.keychain.readPassword('gemini', 'antigravity'), 'old-keychain'); assert.equal(await readFile(join(f.stateDir, 'accounts.json'), 'utf8'), original.index); assert.equal(await readFile(join(f.externalDir, 'accounts.json'), 'utf8'), original.external);
   assert.deepEqual((await rows(f)).filter(r => r.key !== 'antigravityUnifiedStateSync.oauthToken'), before);

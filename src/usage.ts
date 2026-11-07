@@ -422,6 +422,7 @@ export class UsageStatsManager {
     const defaultGeminiDir = join(homedir(), '.gemini');
     const defaultStateDir = join(homedir(), 'Library', 'Application Support', 'GravityBox');
     this.geminiDir = options?.geminiDir ?? defaultGeminiDir;
+    if (options?.dataDirectoryName && !ALLOWED_DATA_DIRECTORY_NAMES.includes(options.dataDirectoryName)) throw new Error('仅统计 Antigravity 正式版用量');
     this.dataDirectoryNames = options?.dataDirectoryName ? [options.dataDirectoryName] : ALLOWED_DATA_DIRECTORY_NAMES;
     const stateDir = options?.stateDir ?? defaultStateDir;
     this.pricingCachePath = join(stateDir, 'api_pricing.json');
@@ -429,12 +430,13 @@ export class UsageStatsManager {
     this.remotePricingUrl = options?.remotePricingUrl ?? process.env.GRAVITYBOX_PRICING_FEED_URL ?? 'https://raw.githubusercontent.com/Enzoo404/gravitybox/main/assets/pricing-feed.json';
     this.autoRemotePricingSync = Boolean(options?.remotePricingUrl || (this.geminiDir === defaultGeminiDir && stateDir === defaultStateDir));
     if (this.geminiDir === defaultGeminiDir && stateDir === defaultStateDir) {
-      const cacheTag = options?.dataDirectoryName ?? 'unified';
+      const cacheTag = options?.dataDirectoryName ?? 'antigravity';
       this.persistCachePath = join(homedir(), 'Library', 'Caches', 'GravityBox', `usage-db-cache-${cacheTag}-v1.json`);
     }
   }
 
   setDataDirectoryName(name?: DataDirectoryName): void {
+    if (name && !ALLOWED_DATA_DIRECTORY_NAMES.includes(name)) throw new Error('仅统计 Antigravity 正式版用量');
     const nextNames = name ? [name] : ALLOWED_DATA_DIRECTORY_NAMES;
     if (this.dataDirectoryNames.join(',') === nextNames.join(',')) return;
     this.cancelRead();
@@ -445,7 +447,7 @@ export class UsageStatsManager {
     const defaultGeminiDir = join(homedir(), '.gemini');
     const defaultStateDir = join(homedir(), 'Library', 'Application Support', 'GravityBox');
     if (this.geminiDir === defaultGeminiDir && this.pricingCachePath === join(defaultStateDir, 'api_pricing.json')) {
-      const cacheTag = name ?? 'unified';
+      const cacheTag = name ?? 'antigravity';
       this.persistCachePath = join(homedir(), 'Library', 'Caches', 'GravityBox', `usage-db-cache-${cacheTag}-v1.json`);
       this.persistLoaded = false;
     }

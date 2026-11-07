@@ -670,7 +670,7 @@ final class PreferencesController: NSObject {
         super.init()
         translationSwitch.controlSize = .small
         translationSwitch.state = app.statusValue.enabled ? .on : .off
-        translationSwitch.isEnabled = !app.changingApplication && app.reachable && app.statusValue.mode != "unsupported"
+        translationSwitch.isEnabled = app.reachable && app.statusValue.mode != "unsupported"
         translationSwitch.target = self; translationSwitch.action = #selector(toggleTranslation); translationSwitch.setAccessibilityLabel("界面汉化")
 
         login.controlSize = .small
@@ -792,7 +792,7 @@ final class PreferencesController: NSObject {
 
     func update() {
         translationSwitch.state = app.statusValue.enabled ? .on : .off
-        translationSwitch.isEnabled = !app.changingApplication && app.reachable && app.statusValue.mode != "unsupported"
+        translationSwitch.isEnabled = app.reachable && app.statusValue.mode != "unsupported"
         syncLifecycleSwitch.state = app.configuration.value.syncAntigravityLifecycle ? .on : .off
         refresh.selectItem(at: Self.refreshIntervals.firstIndex(of: app.configuration.value.quotaRefreshMinutes) ?? 0)
         refreshUpdateRowState()

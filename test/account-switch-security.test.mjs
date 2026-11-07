@@ -113,7 +113,7 @@ test('S3 凭据安全: 撤销切号 (rollback) 完成后自动清除敏感凭据
 
     await service.switchAccount(acc.id);
 
-    const journalFile = join(env.stateDir, 'account-switch-journal.json');
+    const journalFile = join(env.stateDir, 'account-switch-journal-stable.json');
     let jData = JSON.parse(await readFile(journalFile, 'utf8'));
     assert.equal(jData.status, 'complete');
     assert.ok(jData.keychainBefore);

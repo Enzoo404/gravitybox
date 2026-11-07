@@ -1,10 +1,10 @@
-import { ALLOWED_DATA_DIRECTORY_NAMES, allApplicationTargets, applicationChannel, applicationTarget, channelStateDirectory, detectInstalledChannels, type ApplicationChannel, type ApplicationTarget } from './application-target.js';
+import { ALLOWED_DATA_DIRECTORY_NAMES, allApplicationTargets, applicationChannel, savedApplicationChannel, applicationTarget, channelStateDirectory, detectInstalledChannels, type ApplicationChannel, type ApplicationTarget } from './application-target.js';
 import { GoogleAccountLogin } from './account-oauth.js';
 import { AccountSwitchService } from './account-switch.js';
 import { AccountsManager, computeAccountRevision, projectAccountForIpc } from './accounts.js';
 import { UsageStatsManager, priceStatus } from './usage.js';
 import { CacheMaintenance } from './maintenance.js';
-import { mkdir, lstat, chmod, unlink, readFile, readdir } from 'node:fs/promises';
+import { mkdir, lstat, chmod, unlink, readFile, readdir, writeFile } from 'node:fs/promises';
 import { realpathSync, readFileSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -51,7 +51,7 @@ catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw ne
 const explicitChannelArg = option('--channel');
 const explicitAppArg = option('--app');
 const explicitProfileArg = option('--profile');
-const requestedChannel = applicationChannel(explicitChannelArg ?? configuredChannel);
+const requestedChannel = explicitChannelArg !== undefined ? applicationChannel(explicitChannelArg) : savedApplicationChannel(configuredChannel);
 const initialInstallInfo = detectInstalledChannels(requestedChannel);
 let channel: ApplicationChannel = (explicitChannelArg || explicitAppArg || explicitProfileArg)
   ? requestedChannel
@@ -332,6 +332,17 @@ async function run() {
   await chmod(stateDir, 0o700);
   backendLease = await acquireProcessLease(join(stateDir, 'backend.lock'), 0);
   process.once('exit', () => backendLease?.releaseSync());
+  // Preserve the original config once before migrating the retired channel.
+  if (configuredChannel === 'insiders') {
+    const configPath = join(stateDir, 'config.json');
+    const original = await readFile(configPath, 'utf8');
+    const document = JSON.parse(original);
+    if (document.applicationChannel === 'insiders') {
+      await writeFile(join(stateDir, 'config-before-stable-only.json'), original, { mode: 0o600, flag: 'wx' })
+        .catch(error => { if (error.code !== 'EEXIST') throw error; });
+      await atomicJson(configPath, { ...document, applicationChannel: 'stable' });
+    }
+  }
   try {
     const info = await lstat(socketPath);
     if (!info.isSocket() || info.uid !== process.getuid?.()) throw new Error('控制接口身份不匹配');
@@ -432,47 +443,12 @@ async function run() {
       }
       const command = parsed.command;
       if (command === 'set_application_channel') {
-        commandChain = commandChain.catch(() => {}).then(async () => {
-          try {
-            const requested = applicationChannel(parsed.channel);
-            const nextInfo = detectInstalledChannels(requested);
-            const nextChannel: ApplicationChannel = (explicitChannelArg || explicitAppArg || explicitProfileArg)
-              ? requested
-              : nextInfo.effectiveChannel;
-            const nextSelected = applicationTarget(nextChannel);
-            const nextAppPath = explicitAppArg ?? nextSelected.appPath;
-            const nextProfile = explicitProfileArg ?? nextSelected.profile;
-            const nextTarget = applicationTarget(nextChannel, undefined, { appPath: nextAppPath, profile: nextProfile });
-            const nextChannelStateDir = channelStateDirectory(stateDir, nextChannel);
-            await mkdir(nextChannelStateDir, { recursive: true, mode: 0o700 });
-            let existingCfg: Record<string, unknown> = {};
-            try { existingCfg = JSON.parse(await readFile(join(stateDir, 'config.json'), 'utf8')); } catch {}
-            await atomicJson(join(stateDir, 'config.json'), { ...existingCfg, applicationChannel: nextChannel });
-            channel = nextChannel;
-            selectedTarget = nextSelected;
-            appPath = nextAppPath;
-            profile = nextProfile;
-            target = nextTarget;
-            channelStateDir = nextChannelStateDir;
-            liveProbeCachedAt = 0;
-            liveProbeCachedValue = null;
-            accountsManager.setTarget(target);
-            switchService.setTarget(target);
-            usageManager.setDataDirectoryName(undefined);
-            cacheMaintenance.setTarget(profile, { stateDir: channelStateDir, geminiDir, appPath });
-            await controller.switchTarget(appPath, profile, channelStateDir);
-            reply({
-              ok: true,
-              applicationChannel: channel,
-              applicationLabel: target.label,
-              accountSwitchSupported: target.supportsAccountSwitch,
-              bothApplicationsInstalled: nextInfo.bothInstalled,
-              availableChannels: nextInfo.channels,
-            });
-          } catch (error) {
-            reply({ ok: false, error: sanitizeErrorMessage(error) });
-          }
-        });
+        try {
+          applicationChannel(parsed.channel);
+          reply({ ok: true, applicationChannel: 'stable', applicationLabel: target.label,
+            accountSwitchSupported: target.supportsAccountSwitch,
+            bothApplicationsInstalled: false, availableChannels: detectInstalledChannels().channels });
+        } catch (error) { reply({ ok: false, error: sanitizeErrorMessage(error) }); }
         return;
       }
       if(command==='usage_cancel'){reply({ok:true,cancelled:usageManager.cancelRead()});return;}
@@ -661,7 +637,7 @@ async function run() {
             });
             let pendingSwitch = false;
             try {
-              const journalPath = join(channelStateDir, 'account-switch-journal.json');
+              const journalPath = join(channelStateDir, 'account-switch-journal-stable.json');
               const journal = JSON.parse(await readFile(journalPath, 'utf8'));
               if (journal && !['complete', 'rolled-back', 'cleared'].includes(journal.status)) {
                 pendingSwitch = true;
