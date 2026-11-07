@@ -1721,8 +1721,6 @@ private enum AntigravityLifecycleAgent {
     }
 
     static func run() -> Never {
-        _ = NSApplication.shared
-        NSApp.setActivationPolicy(.prohibited)
         if !isSyncEnabled() { exit(0) }
         var wasRunning = Assistant.isAntigravityRunning()
         let nc = NSWorkspace.shared.notificationCenter
