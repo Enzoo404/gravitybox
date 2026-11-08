@@ -207,7 +207,7 @@ export class Controller {
     const key = `${page.origin}${page.pathname}:${this.options.dictionary.version}:${this.verifiedBundle()}`;
     const cached = this.bootCache.get(key);
     if (cached) return cached;
-    const source = `delete globalThis.__AGZH_ATTACH_DEEP_SCAN__;globalThis.__AGZH_BOOT__=${JSON.stringify({ origin: page.origin, path: page.pathname, dictionary: this.options.dictionary, conservative:!this.verifiedBundle(),runtimeId:this.runtimeId,shortcutEnabled:this.options.shortcutEnabled!==false })};\n${this.engine}`;
+    const source = `delete globalThis.__AGZH_ATTACH_DEEP_SCAN__;globalThis.__AGZH_BOOT__=${JSON.stringify({ origin: page.origin, path: page.pathname, dictionary: this.options.dictionary, conservative:!this.verifiedBundle(),runtimeId:this.runtimeId,shortcutEnabled:this.options.shortcutEnabled!==false,shellValidated:true })};\n${this.engine}`;
     if (this.bootCache.size < 4) this.bootCache.set(key, source);
     return source;
   }
@@ -318,7 +318,7 @@ export class Controller {
       }
       if(!this.verifiedBundle()){
         if(/^\/(?:onboarding|oauth|auth|login|sign-in)(?:\/|$)/i.test(new URL(frame.url).pathname))throw new Error('未验证的登录或引导页面已跳过');
-        const contract=await session.cdp.evaluate(`(async()=>{for(let i=0;i<30;i++){if(!!document.body&&((!!document.querySelector('[aria-label="Sidebar"],[aria-label="侧边栏"]')&&!!document.querySelector('[data-testid="model-selector-trigger"],a[href="/history"],a[href="/customizations"]'))||(/^\\/(?:settings(?:\\/[^?#]*)?|settings-standalone)$/.test(location.pathname)&&!!document.querySelector('[data-testid="settings-root"],[data-testid="settings-dialog"]')&&!!document.querySelector('[role="tablist"],nav,[role="navigation"]'))||(location.pathname==='/terminal-standalone'&&!!document.querySelector('[data-testid="terminal-toolbar"]')&&!!document.querySelector('.xterm,.monaco-editor'))))return true;await new Promise(r=>setTimeout(r,100));}return false;})()`,session.contextId);
+        const contract=await session.cdp.evaluate(`(async()=>{for(let i=0;i<30;i++){if(!!document.body&&((!!document.querySelector('[aria-label*="Sidebar" i],[aria-label*="侧边栏"],[data-testid*="sidebar" i],[data-testid="agent-input-box"]')&&!!document.querySelector('[data-testid="model-selector-trigger"],a[href="/history"],a[href="/customizations"],[data-testid="agent-input-box"],textarea,input'))||(/^\\/(?:settings(?:\\/[^?#]*)?|settings-standalone)$/.test(location.pathname)&&!!document.querySelector('[role="dialog"][aria-label="Settings"],[role="dialog"][aria-label="设置"],[data-testid*="settings"]')&&!!document.querySelector('[role="tablist"],nav,[role="navigation"]'))||(location.pathname==='/terminal-standalone'&&!!document.querySelector('.xterm,.monaco-editor,[data-testid*="terminal"]'))))return true;await new Promise(r=>setTimeout(r,100));}return false;})()`,session.contextId);
         if(!contract)throw new Error('新版页面结构尚未识别，已跳过该窗口');
       }
       if(this.paused||this.stopped||session.detaching)return;
@@ -329,7 +329,12 @@ export class Controller {
         else await session.cdp.evaluate(`globalThis.__AGZH_ENGINE_V1__.update(${JSON.stringify(this.options.dictionary)})`, session.contextId);
       }
       else{if(previous?.active)await session.cdp.evaluate('globalThis.__AGZH_ENGINE_V1__.dispose()',session.contextId);await session.cdp.evaluate(this.boot(session.url),session.contextId);if(this.options.fixture&&previous?.active&&previous.languageMode==='en')await session.cdp.evaluate('globalThis.__AGZH_ENGINE_V1__.toggleLanguage("en")',session.contextId);}
-      const state = await session.cdp.evaluate('globalThis.__AGZH_ENGINE_V1__?.state()', session.contextId);
+      let state: any;
+      for (let i = 0; i < 10; i++) {
+        state = await session.cdp.evaluate('globalThis.__AGZH_ENGINE_V1__?.state()', session.contextId);
+        if (state?.version === this.options.dictionary.version) break;
+        await new Promise(r => setTimeout(r, 100));
+      }
       if (state?.version !== this.options.dictionary.version) throw new Error('窗口词典版本未确认');
       session.languageMode=state.languageMode??'zh';
     });
@@ -427,8 +432,13 @@ export class Controller {
     try {
       await session.updateChain.catch(() => {});
       if (session.registration) await session.cdp.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: session.registration });
-      const tree=await session.cdp.send('Page.getFrameTree');const world=await session.cdp.send('Page.createIsolatedWorld',{frameId:tree.frameTree.frame.id,worldName:WORLD});
-      await session.cdp.evaluate('(globalThis.__AGZH_PENDING_BOOT__?.cancel(),globalThis.__AGZH_ENGINE_V1__?.dispose())',world.executionContextId);
+      let ctxId = session.contextId;
+      if (ctxId === undefined) {
+        const tree = await session.cdp.send('Page.getFrameTree');
+        const world = await session.cdp.send('Page.createIsolatedWorld', { frameId: tree.frameTree.frame.id, worldName: WORLD });
+        ctxId = world.executionContextId;
+      }
+      await session.cdp.evaluate('(globalThis.__AGZH_PENDING_BOOT__?.cancel(),globalThis.__AGZH_ENGINE_V1__?.dispose())', ctxId);
     } catch { restorationFailed = true; }
     session.cdp.close();
     if (restorationFailed) this.status.errors.push('窗口已失联，无法确认恢复英文');
@@ -444,8 +454,15 @@ export class Controller {
   }
   async resume() {
     this.paused = false;
-    if (this.browser) await this.sync();
-    else { clearTimeout(this.reconnection); await this.tryConnect(); }
+    try {
+      if (this.browser) await this.sync();
+      else { clearTimeout(this.reconnection); await this.tryConnect(); }
+    } catch {
+      this.browser?.close();
+      this.browser = undefined;
+      clearTimeout(this.reconnection);
+      await this.tryConnect();
+    }
   }
   async configureShortcut(enabled: boolean) {
     this.options.shortcutEnabled=enabled; this.bootCache.clear();

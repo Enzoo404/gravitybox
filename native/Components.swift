@@ -656,26 +656,65 @@ func accessibleDangerColor() -> NSColor {
 final class PillBadge: NSView {
     override var allowsVibrancy: Bool { false }
     let label = text("", size: 11, weight: .semibold)
-    var emphasized = false { didSet { label.textColor = emphasized ? .white : readablePillTint(tint); needsDisplay = true } }
-    var tint: NSColor { didSet { needsDisplay = true; label.textColor = readablePillTint(tint) } }
+    var emphasized = false { didSet { updateLabelTextColor(); needsDisplay = true } }
+    var tint: NSColor { didSet { updateLabelTextColor(); needsDisplay = true } }
     var title: String { get { label.stringValue } set { label.stringValue = newValue; toolTip = newValue; setAccessibilityLabel(newValue); invalidateIntrinsicContentSize(); needsDisplay = true } }
+
+    static func isNeutralOrInactiveTint(_ color: NSColor, in appearance: NSAppearance) -> Bool {
+        if color === Design.inactivePill || color === Design.secondary || color == .secondaryLabelColor || color == .systemGray {
+            return true
+        }
+        let srgb = gbResolvedSRGB(color, appearance)
+        let maxC = max(srgb.redComponent, max(srgb.greenComponent, srgb.blueComponent))
+        let minC = min(srgb.redComponent, min(srgb.greenComponent, srgb.blueComponent))
+        return (maxC - minC) < 0.08
+    }
+
+    private func updateLabelTextColor() {
+        if emphasized {
+            label.textColor = .white
+            return
+        }
+        let currentTint = tint
+        label.textColor = NSColor(name: nil) { appearance in
+            if Self.isNeutralOrInactiveTint(currentTint, in: appearance) {
+                return gbResolvedSRGB(Design.inactivePill, appearance)
+            }
+            return gbResolvedSRGB(readablePillTint(currentTint), appearance)
+        }
+    }
+
     init(_ title: String, color: NSColor) {
         tint = color; super.init(frame: .zero)
-        label.setAccessibilityElement(false); label.stringValue = title; label.textColor = readablePillTint(color); label.lineBreakMode = .byTruncatingTail
+        label.setAccessibilityElement(false); label.stringValue = title; updateLabelTextColor(); label.lineBreakMode = .byTruncatingTail
         addSubview(label); label.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8), label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8), label.topAnchor.constraint(equalTo: topAnchor, constant: 2.5), label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -2.5)])
         setAccessibilityElement(true); setAccessibilityRole(.staticText); setAccessibilityLabel(title)
     }
     required init?(coder: NSCoder) { fatalError() }
     override var intrinsicContentSize: NSSize { NSSize(width: label.intrinsicContentSize.width + 16, height: label.intrinsicContentSize.height + 5) }
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateLabelTextColor()
+        needsDisplay = true
+    }
     override func draw(_ rect: NSRect) {
         let radius = bounds.height / 2
         let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: radius, yRadius: radius)
+        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        if !emphasized && Self.isNeutralOrInactiveTint(tint, in: effectiveAppearance) {
+            Design.inactivePillFill.setFill()
+            path.fill()
+            Design.inactivePillBorder.setStroke()
+            path.lineWidth = 0.75
+            path.stroke()
+            return
+        }
         let display: NSColor = emphasized ? .white : readablePillTint(tint)
-        display.withAlphaComponent(0.14).setFill()
+        display.withAlphaComponent(isDark ? 0.18 : 0.12).setFill()
         path.fill()
-        display.withAlphaComponent(0.32).setStroke()
-        path.lineWidth = 1
+        display.withAlphaComponent(isDark ? 0.34 : 0.24).setStroke()
+        path.lineWidth = 0.8
         path.stroke()
     }
 }

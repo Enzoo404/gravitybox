@@ -4,7 +4,7 @@
   const options = globalThis.__AGZH_BOOT__;
   if (!options || location.origin !== options.origin) return;
   if (options.path === '/fixture' && location.pathname !== '/fixture') return;
-  const allowedPath=location.pathname==='/'||/^\/(?:history|sidecars|customizations|automations|settings|settings-standalone|terminal-standalone|new-project|onboarding|multi|artifact|s)(?:\/.*)?$/i.test(location.pathname)||/^\/c\/[0-9a-f-]{36}$/i.test(location.pathname)||/^\/(?:forked|view|battle)\/.*$/i.test(location.pathname)||(options.path==='/fixture'&&location.pathname==='/fixture');
+  const allowedPath=location.pathname==='/'||/^\/(?:history|sidecars|customizations|automations|settings|settings-standalone|terminal-standalone|new-project|onboarding|multi|artifact|s|chatski-connect)(?:\/.*)?$/i.test(location.pathname)||/^\/c(?:\/|\/(?:[0-9a-f-]{36}|_new)(?:\/.*)?)?$/i.test(location.pathname)||/^\/(?:forked|view|battle)\/.*$/i.test(location.pathname)||(options.path==='/fixture'&&location.pathname==='/fixture');
   if(!allowedPath)return;
   if(options.conservative&&/^\/(?:onboarding|oauth|auth|login|sign-in)(?:\/|$)/i.test(location.pathname))return;
   // Recognize the actual system-settings shell, then admit only its content pane.
@@ -46,7 +46,7 @@
     return null;
   }
   if(options.conservative&&options.path!=='/fixture'&&!options.shellValidated){
-    const ready=()=>!!document.body&&(!!systemSettingsPane()||(!!document.querySelector('[aria-label="Sidebar"],[aria-label="侧边栏"]')&&!!document.querySelector('[data-testid="model-selector-trigger"],a[href="/history"],a[href="/customizations"]'))||(/^\/(?:settings(?:\/[^?#]*)?|settings-standalone)$/.test(location.pathname)&&!!document.querySelector('[data-testid="settings-root"],[data-testid="settings-dialog"]')&&!!document.querySelector('[role="tablist"],nav,[role="navigation"]'))||(location.pathname==='/terminal-standalone'&&!!document.querySelector('[data-testid="terminal-toolbar"]')&&!!document.querySelector('.xterm,.monaco-editor')));
+    const ready=()=>!!document.body&&(!!systemSettingsPane()||(!!document.querySelector('[aria-label*="Sidebar" i],[aria-label*="侧边栏"],[data-testid*="sidebar" i],[data-testid="agent-input-box"]')&&!!document.querySelector('[data-testid="model-selector-trigger"],a[href="/history"],a[href="/customizations"],[data-testid="agent-input-box"],textarea,input'))||(/^\/(?:settings(?:\/[^?#]*)?|settings-standalone)$/.test(location.pathname)&&!!document.querySelector('[role="dialog"][aria-label="Settings"],[role="dialog"][aria-label="设置"],[data-testid*="settings"]')&&!!document.querySelector('[role="tablist"],nav,[role="navigation"]'))||(location.pathname==='/terminal-standalone'&&!!document.querySelector('.xterm,.monaco-editor,[data-testid*="terminal"]')));
     if(!ready()){
       globalThis.__AGZH_PENDING_BOOT__?.cancel();let stopped=false;const watcher=new MutationObserver(()=>{if(!stopped&&ready()){cancel();options.shellValidated=true;bootstrapRuntime();}});const timeout=setTimeout(()=>cancel(),5000);
       function cancel(){stopped=true;watcher.disconnect();clearTimeout(timeout);delete globalThis.__AGZH_PENDING_BOOT__;}
@@ -73,7 +73,7 @@
      (buttons, tabs, command menus) remain translatable: a `[role="menuitem"]` only counts as a name
      inside an entity container or a row with per-item actions. */
   const USER_CONTENT = '[data-agzh-user-content],[data-agzh-user-name]';
-  const ENTITY_HREF = /^\/(?:c\/[0-9a-f-]{36}|customizations\/(?:plugins|skills|automations)\/[\w.-]+|marketplaces\/[\w.-]+\/plugins\/[\w.-]+|automations\/[\w.-]+|projects\/[\w.-]+|sidecars\/[\w.-]+)$/i;
+  const ENTITY_HREF = /^\/(?:c(?:\/|\/(?:[0-9a-f-]{36}|_new)(?:\/.*)?)?|customizations\/(?:plugins|skills|automations)\/[\w.-]+|marketplaces\/[\w.-]+\/plugins\/[\w.-]+|automations\/[\w.-]+|projects\/[\w.-]+|sidecars\/[\w.-]+)$/i;
   const ENTITY_CONTAINER = '[data-agzh-user-content],[data-testid="automation-card"],[data-testid="automation-row"],[data-testid="automation-item"],[data-testid="automation-list-item"],[data-testid*="workspace"],[data-testid*="project"],[data-testid*="skill"],[data-testid*="plugin"],[data-testid*="marketplace"],[data-testid*="session"]';
   const ENTITY_ROW = '[data-testid*="card"],[data-testid*="row"],li,[role="listitem"],[role="option"],[role="menuitem"],tr';
   const ROW_ACTIONS = '[data-testid*="actions"],[data-testid*="menu-trigger"],[aria-label*="More actions" i],[aria-label*="更多操作"],[aria-label="More options" i]';
@@ -219,7 +219,7 @@
      (the controller calls it after navigatedWithinDocument) and by a light poll. Outside the list
      the engine suspends, restores every translation it owns to English and drops its queue; when
      the route comes back the document is rescanned and Chinese is re-applied. */
-  const ALLOWED_ROUTE = /^(?:\/|\/(?:history|sidecars|customizations|automations|settings|settings-standalone|terminal-standalone|new-project|onboarding|multi|artifact|s)(?:\/.*)?|\/c\/[0-9a-f-]{36}|\/(?:forked|view|battle)\/.*)$/i;
+  const ALLOWED_ROUTE = /^(?:\/|\/(?:history|sidecars|customizations|automations|settings|settings-standalone|terminal-standalone|new-project|onboarding|multi|artifact|s|chatski-connect)(?:\/.*)?|\/c(?:\/|\/(?:[0-9a-f-]{36}|_new)(?:\/.*)?)?|\/(?:forked|view|battle)\/.*)$/i;
   const RESTRICTED_ROUTE = /^\/(?:onboarding|oauth|auth|login|sign-in)(?:\/|$)/i;
   let routeExcluded = false;
   let routeTimer = null;

@@ -82,6 +82,17 @@ enum Design {
         ctx.restoreGState()
     }
     static let blue = color(0x0064DC, 0x0A84FF)
+    static let inactivePill = color(0x4A638C, 0x8CA6D6)
+    static let inactivePillFill = NSColor(name: nil) {
+        $0.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(srgbRed: 0.34, green: 0.52, blue: 0.84, alpha: 0.14)
+            : NSColor(srgbRed: 0.918, green: 0.942, blue: 0.982, alpha: 0.95)
+    }
+    static let inactivePillBorder = NSColor(name: nil) {
+        $0.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(srgbRed: 0.46, green: 0.66, blue: 0.96, alpha: 0.22)
+            : NSColor(srgbRed: 0.24, green: 0.45, blue: 0.78, alpha: 0.18)
+    }
     static let popoverCardBackground = NSColor(name: nil) { $0.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? NSColor.white.withAlphaComponent(0.07) : NSColor.white.withAlphaComponent(0.76) }
     static let popoverCardBorder = NSColor(name: nil) { $0.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? NSColor.white.withAlphaComponent(0.095) : NSColor.black.withAlphaComponent(0.07) }
     static let popoverFooterBackground = NSColor(name: nil) { $0.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? NSColor.white.withAlphaComponent(0.04) : NSColor.black.withAlphaComponent(0.025) }

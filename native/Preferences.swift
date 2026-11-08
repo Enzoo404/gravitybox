@@ -480,9 +480,11 @@ final class AppUpdateManager {
 
 final class UpdateSheetController: NSObject, NSWindowDelegate {
     unowned let app: Assistant
-    let sheet = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 328), styleMask: [.titled], backing: .buffered, defer: false)
-    let statusHeadline = text("正在检查 GitHub Release 最新版本…", size: 11.5, color: Design.secondary, wrap: true)
-    let changelogHeading = text("版本说明", size: 11.5, weight: .semibold, color: Design.secondary)
+    let sheet = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 304), styleMask: [.titled], backing: .buffered, defer: false)
+    let statusHeadline = text("正在检查 GitHub Release 最新版本…", size: 11.5, weight: .medium, color: Design.secondary, wrap: true)
+    let statusIconView = symbol("checkmark.seal.fill", size: 13, color: Design.blue)
+    let changelogHeading = text("版本说明", size: 12, weight: .semibold, color: .labelColor)
+    let stateBadge = pillBadge("检查中", color: Design.inactivePill)
     let changelogTextView = NSTextView()
     let autoUpdateSwitch = NSSwitch()
     let spinner = NSProgressIndicator()
@@ -503,14 +505,14 @@ final class UpdateSheetController: NSObject, NSWindowDelegate {
 
         let iconBox = NSBox()
         iconBox.boxType = .custom
-        iconBox.cornerRadius = 10
-        iconBox.fillColor = NSColor.white.withAlphaComponent(0.06)
-        iconBox.borderWidth = 0.5
-        iconBox.borderColor = NSColor.white.withAlphaComponent(0.12)
+        iconBox.cornerRadius = 10.5
+        iconBox.fillColor = Design.inactivePillFill
+        iconBox.borderWidth = 0.75
+        iconBox.borderColor = Design.inactivePillBorder
         iconBox.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            iconBox.widthAnchor.constraint(equalToConstant: 40),
-            iconBox.heightAnchor.constraint(equalToConstant: 40)
+            iconBox.widthAnchor.constraint(equalToConstant: 42),
+            iconBox.heightAnchor.constraint(equalToConstant: 42)
         ])
         if let mark = Design.brandMarkImage() {
             let imgView = NSImageView(image: mark)
@@ -518,8 +520,8 @@ final class UpdateSheetController: NSObject, NSWindowDelegate {
             imgView.translatesAutoresizingMaskIntoConstraints = false
             iconBox.addSubview(imgView)
             NSLayoutConstraint.activate([
-                imgView.widthAnchor.constraint(equalToConstant: 24),
-                imgView.heightAnchor.constraint(equalToConstant: 24),
+                imgView.widthAnchor.constraint(equalToConstant: 25),
+                imgView.heightAnchor.constraint(equalToConstant: 25),
                 imgView.centerXAnchor.constraint(equalTo: iconBox.centerXAnchor),
                 imgView.centerYAnchor.constraint(equalTo: iconBox.centerYAnchor)
             ])
@@ -529,22 +531,34 @@ final class UpdateSheetController: NSObject, NSWindowDelegate {
         let buildStr = app.updateManager.currentBuildDisplay
         let titleLabel = text("GravityBox", size: 15.5, weight: .bold, color: .labelColor)
         let verPill = pillBadge("v\(ver)", color: Design.blue)
-        let buildLabel = text("构建 \(buildStr)", size: 11, color: Design.secondary)
-        let titleRow = horizontal([titleLabel, verPill, buildLabel, flexibleSpace()], spacing: 6)
+        let buildPill = pillBadge("构建 \(buildStr)", color: Design.inactivePill)
+        let titleRow = horizontal([titleLabel, verPill, buildPill, flexibleSpace()], spacing: 6)
         titleRow.alignment = .centerY
 
-        let headerMeta = vertical([titleRow, statusHeadline], spacing: 3)
+        statusHeadline.maximumNumberOfLines = 1
+        statusHeadline.lineBreakMode = .byTruncatingTail
+        let headerMeta = vertical([titleRow, statusHeadline], spacing: 4)
         headerMeta.alignment = .leading
+        headerMeta.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         let githubBtn = button("GitHub ↗", target: self, action: #selector(openGitHubReleases))
         let headerRow = horizontal([iconBox, headerMeta, flexibleSpace(), githubBtn], spacing: 12)
         headerRow.alignment = .centerY
+
+        statusIconView.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 12.5, weight: .semibold)
+        for c in statusIconView.constraints where c.firstAttribute == .width || c.firstAttribute == .height {
+            c.constant = 16
+        }
+        stateBadge.setContentCompressionResistancePriority(.required, for: .horizontal)
+        let notesHeaderRow = horizontal([statusIconView, changelogHeading, flexibleSpace(), stateBadge], spacing: 6)
+        notesHeaderRow.alignment = .centerY
 
         changelogTextView.isEditable = false
         changelogTextView.isSelectable = true
         changelogTextView.drawsBackground = false
         changelogTextView.font = .systemFont(ofSize: 12)
         changelogTextView.textColor = .labelColor
-        changelogTextView.textContainerInset = NSSize(width: 2, height: 4)
+        changelogTextView.textContainerInset = NSSize(width: 0, height: 2)
+        changelogTextView.textContainer?.lineFragmentPadding = 0
         changelogTextView.isVerticallyResizable = true
         changelogTextView.isHorizontallyResizable = false
         changelogTextView.autoresizingMask = [.width]
@@ -557,13 +571,15 @@ final class UpdateSheetController: NSObject, NSWindowDelegate {
         scroll.borderType = .noBorder
         scroll.documentView = changelogTextView
         scroll.translatesAutoresizingMaskIntoConstraints = false
-        scroll.heightAnchor.constraint(equalToConstant: 142).isActive = true
+        scroll.heightAnchor.constraint(equalToConstant: 108).isActive = true
 
-        let notesStack = vertical([changelogHeading, scroll], spacing: 6)
-        fillWidth(changelogHeading, in: notesStack)
+        let notesDivider = divider()
+        let notesStack = vertical([notesHeaderRow, notesDivider, scroll], spacing: 8)
+        fillWidth(notesHeaderRow, in: notesStack)
+        fillWidth(notesDivider, in: notesStack)
         fillWidth(scroll, in: notesStack)
-        let notesCard = group([notesStack], inset: 12)
-        notesCard.cornerRadius = 10
+        let notesCard = group([notesStack], inset: 13)
+        notesCard.cornerRadius = 12
 
         autoUpdateSwitch.controlSize = .small
         autoUpdateSwitch.state = app.configuration.value.autoUpdateEnabled ? .on : .off
@@ -614,6 +630,27 @@ final class UpdateSheetController: NSObject, NSWindowDelegate {
         renderState()
     }
 
+    private func setNotesContent(_ content: String) {
+        changelogTextView.string = content
+        guard let storage = changelogTextView.textStorage else { return }
+        let fullRange = NSRange(location: 0, length: storage.length)
+        guard fullRange.length > 0 else { return }
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineSpacing = 4.0
+        paragraph.paragraphSpacing = 5.0
+        storage.setAttributes([
+            .font: NSFont.systemFont(ofSize: 12, weight: .regular),
+            .foregroundColor: Design.primary.withAlphaComponent(0.88),
+            .paragraphStyle: paragraph
+        ], range: fullRange)
+    }
+
+    private func setStatusIcon(_ symbolName: String, tint: NSColor) {
+        statusIconView.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)
+        statusIconView.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 12.5, weight: .semibold)
+        statusIconView.contentTintColor = tint
+    }
+
     func show(in parent: NSWindow) {
         autoUpdateSwitch.state = app.configuration.value.autoUpdateEnabled ? .on : .off
         renderState()
@@ -636,8 +673,11 @@ final class UpdateSheetController: NSObject, NSWindowDelegate {
         case .idle, .checking:
             statusHeadline.stringValue = "正在连接 GitHub Releases 检查更新…"
             statusHeadline.textColor = Design.secondary
+            setStatusIcon("arrow.triangle.2.circlepath", tint: Design.blue)
             changelogHeading.stringValue = "版本说明"
-            changelogTextView.string = "当前版本：GravityBox v\(ver)（构建 \(buildStr)）\n正在获取 GitHub Release 最新版本信息，请稍候…"
+            stateBadge.title = "正在检查"
+            stateBadge.tint = Design.inactivePill
+            setNotesContent("• 当前运行版本：GravityBox v\(ver)（构建 \(buildStr)）\n• 正在同步 GitHub Release 最新版本信息，请稍候…")
             spinner.isHidden = false
             spinner.startAnimation(nil)
             closeBtn.title = "关闭"
@@ -645,10 +685,13 @@ final class UpdateSheetController: NSObject, NSWindowDelegate {
             primaryBtn.title = "检查中…"
             primaryBtn.isEnabled = false
         case .upToDate:
-            statusHeadline.stringValue = "当前使用的是最新版本"
+            statusHeadline.stringValue = "已同步 GitHub Releases 官方更新通道"
             statusHeadline.textColor = Design.secondary
+            setStatusIcon("checkmark.seal.fill", tint: .systemGreen)
             changelogHeading.stringValue = "当前版本状态"
-            changelogTextView.string = "当前已是最新版本，暂无可用更新。\n\n开启「自动更新」后，有新版本发布时将自动提醒您升级。"
+            stateBadge.title = "已是最新"
+            stateBadge.tint = .systemGreen
+            setNotesContent("• 当前运行版本 GravityBox v\(ver)（构建 \(buildStr)）已是最新发布版本。\n• 开启下方「自动更新」后，后台将自动检测新版本并预下载更新包。")
             spinner.stopAnimation(nil)
             spinner.isHidden = true
             closeBtn.title = "完成"
@@ -658,8 +701,11 @@ final class UpdateSheetController: NSObject, NSWindowDelegate {
         case .updateAvailable(let release):
             statusHeadline.stringValue = "发现新版本 v\(release.version)（发布于 \(release.publishedDate)）"
             statusHeadline.textColor = Design.blue
-            changelogHeading.stringValue = "\(release.tagName) 更新日志 (GitHub Release)"
-            changelogTextView.string = AppUpdateManager.formatReleaseNotes(release.changelog)
+            setStatusIcon("sparkles", tint: Design.blue)
+            changelogHeading.stringValue = "\(release.tagName) 更新日志"
+            stateBadge.title = "可升级"
+            stateBadge.tint = Design.blue
+            setNotesContent(AppUpdateManager.formatReleaseNotes(release.changelog))
             spinner.stopAnimation(nil)
             spinner.isHidden = true
             closeBtn.title = "稍后"
@@ -669,8 +715,11 @@ final class UpdateSheetController: NSObject, NSWindowDelegate {
         case .downloading(let release):
             statusHeadline.stringValue = "正在下载并校验 GravityBox v\(release.version)…"
             statusHeadline.textColor = Design.blue
-            changelogHeading.stringValue = "\(release.tagName) 更新日志 (GitHub Release)"
-            changelogTextView.string = AppUpdateManager.formatReleaseNotes(release.changelog)
+            setStatusIcon("arrow.down.circle.fill", tint: Design.blue)
+            changelogHeading.stringValue = "\(release.tagName) 更新日志"
+            stateBadge.title = "下载校验中"
+            stateBadge.tint = Design.blue
+            setNotesContent(AppUpdateManager.formatReleaseNotes(release.changelog))
             spinner.isHidden = false
             spinner.startAnimation(nil)
             closeBtn.title = "后台下载"
@@ -678,10 +727,13 @@ final class UpdateSheetController: NSObject, NSWindowDelegate {
             primaryBtn.title = "下载中…"
             primaryBtn.isEnabled = false
         case .readyToInstall(let release, _):
-            statusHeadline.stringValue = "新版本 v\(release.version) 已下载并通过 SHA-256 校验"
+            statusHeadline.stringValue = "新版本 v\(release.version) 已就绪，可立即覆盖安装"
             statusHeadline.textColor = Design.blue
-            changelogHeading.stringValue = "\(release.tagName) 更新日志 (GitHub Release)"
-            changelogTextView.string = AppUpdateManager.formatReleaseNotes(release.changelog)
+            setStatusIcon("checkmark.shield.fill", tint: .systemGreen)
+            changelogHeading.stringValue = "\(release.tagName) 更新日志"
+            stateBadge.title = "SHA-256 已校验"
+            stateBadge.tint = .systemGreen
+            setNotesContent(AppUpdateManager.formatReleaseNotes(release.changelog))
             spinner.stopAnimation(nil)
             spinner.isHidden = true
             closeBtn.title = "稍后"
@@ -691,8 +743,11 @@ final class UpdateSheetController: NSObject, NSWindowDelegate {
         case .installing(let release):
             statusHeadline.stringValue = "正在安装 GravityBox v\(release.version) 并准备重启…"
             statusHeadline.textColor = Design.blue
-            changelogHeading.stringValue = "\(release.tagName) 更新日志 (GitHub Release)"
-            changelogTextView.string = AppUpdateManager.formatReleaseNotes(release.changelog)
+            setStatusIcon("gearshape.2.fill", tint: Design.blue)
+            changelogHeading.stringValue = "\(release.tagName) 更新日志"
+            stateBadge.title = "正在安装"
+            stateBadge.tint = Design.blue
+            setNotesContent(AppUpdateManager.formatReleaseNotes(release.changelog))
             spinner.isHidden = false
             spinner.startAnimation(nil)
             closeBtn.title = "稍后"
@@ -702,8 +757,11 @@ final class UpdateSheetController: NSObject, NSWindowDelegate {
         case .failed(let message):
             statusHeadline.stringValue = message
             statusHeadline.textColor = accessibleDangerColor()
+            setStatusIcon("exclamationmark.triangle.fill", tint: accessibleWarningColor())
             changelogHeading.stringValue = "检查结果"
-            changelogTextView.string = "未能完成在线更新：\(message)\n\n您可以点击右上角「GitHub ↗」直接查看或下载最新 Release 安装包。"
+            stateBadge.title = "更新受阻"
+            stateBadge.tint = .systemOrange
+            setNotesContent("• 未能完成在线更新：\(message)\n• 您可以点击右上角「GitHub ↗」直接查看或下载最新 Release 安装包。")
             spinner.stopAnimation(nil)
             spinner.isHidden = true
             closeBtn.title = "关闭"

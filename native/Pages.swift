@@ -37,9 +37,9 @@ final class DashboardPage: NSObject {
 
     // Bento 双栏数据看板（左侧今日 24h 时段消耗趋势 + 右侧今日活跃模型速览）
     let todayTrendChart = UsageTrendChartView()
-    let todayPeakBadge = pillBadge("24 小时分布", color: Design.blue)
+    let todayPeakBadge = pillBadge("24 小时分布", color: Design.inactivePill)
     let rightBentoTitleLabel = metricDetail("今日活跃模型")
-    let rightBentoCountBadge = pillBadge("暂无调用", color: .secondaryLabelColor)
+    let rightBentoCountBadge = pillBadge("暂无调用", color: Design.inactivePill)
     let bentoRightStack = NSStackView()
     private var bentoFingerprint = ""
 
@@ -254,7 +254,7 @@ final class DashboardPage: NSObject {
             todayPeakBadge.tint = Design.blue
         } else {
             todayPeakBadge.title = "24 小时分布"
-            todayPeakBadge.tint = .secondaryLabelColor
+            todayPeakBadge.tint = Design.inactivePill
         }
 
         let rawModels = (report["byModel"] as? [[String: Any]]) ?? (report["models"] as? [[String: Any]]) ?? []
@@ -347,7 +347,7 @@ final class DashboardPage: NSObject {
             let hintRow = Self.makeBentoSubRow(
                 title: "查看更多模型统计",
                 badgeText: "单模型",
-                badgeTint: Design.blue,
+                badgeTint: Design.inactivePill,
                 subtitle: "可在「用量」页查看全部历史趋势与按模型计价明细",
                 trailingText: "-- Token",
                 trailingTint: Design.secondary
@@ -356,12 +356,12 @@ final class DashboardPage: NSObject {
             fillWidth(hintRow, in: bentoRightStack)
         } else {
             rightBentoCountBadge.title = "暂无调用"
-            rightBentoCountBadge.tint = .secondaryLabelColor
+            rightBentoCountBadge.tint = Design.inactivePill
 
             let emptyRow1 = Self.makeBentoSubRow(
                 title: "今日暂无模型调用",
                 badgeText: "待运行",
-                badgeTint: .secondaryLabelColor,
+                badgeTint: Design.inactivePill,
                 subtitle: "在 IDE 中发起请求后，将在此实时呈现活跃模型",
                 trailingText: "-- Token",
                 trailingTint: Design.secondary
@@ -372,7 +372,7 @@ final class DashboardPage: NSObject {
             let emptyRow2 = Self.makeBentoSubRow(
                 title: "模型用量明细",
                 badgeText: "用量分析",
-                badgeTint: Design.blue,
+                badgeTint: Design.inactivePill,
                 subtitle: "可在「用量」页查阅完整模型分布与历史统计",
                 trailingText: "-- 次",
                 trailingTint: Design.secondary

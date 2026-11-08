@@ -504,7 +504,83 @@ import Cocoa
         check(stableSettings.aboutSubtitleLabel.isHidden, "Clearing available release must hide about row subtitle again")
         if let updateSheet = stableSettings.updateSheet {
             check(updateSheet.closeBtn.isEnabled == true && updateSheet.primaryBtn.isEnabled == true, "Transitioning to upToDate must keep closeBtn and primaryBtn enabled")
+            check(updateSheet.stateBadge.title == "已是最新", "Update sheet upToDate state must display 已是最新 badge")
+            check(updateSheet.changelogTextView.textContainer?.lineFragmentPadding == 0, "Update sheet changelogTextView must have zero lineFragmentPadding for flush-left alignment")
+            for (theme, appearance) in [("light", NSAppearance.Name.aqua), ("dark", NSAppearance.Name.darkAqua)] {
+                updateSheet.sheet.appearance = NSAppearance(named: appearance)
+                updateSheet.sheet.contentView?.layoutSubtreeIfNeeded(); pump()
+                try capture(updateSheet.sheet.contentView!, output.appendingPathComponent("\(theme)-update-sheet-uptodate.png"))
+            }
         }
+        // Verify unified inactive PillBadge styling across neutral/secondary tints
+        let lightApp = NSAppearance(named: .aqua)!
+        let darkApp = NSAppearance(named: .darkAqua)!
+        for c in [Design.inactivePill, Design.secondary, NSColor.secondaryLabelColor, NSColor.systemGray] {
+            check(PillBadge.isNeutralOrInactiveTint(c, in: lightApp), "Neutral/inactive tint must be recognized in Light mode")
+            check(PillBadge.isNeutralOrInactiveTint(c, in: darkApp), "Neutral/inactive tint must be recognized in Dark mode")
+        }
+        check(!PillBadge.isNeutralOrInactiveTint(Design.blue, in: lightApp), "Active blue tint must not be treated as neutral/inactive")
+
+        // Capture Overview in idle (0 active models, 0 hourly tokens) to verify unified inactive capsules
+        assistant.selectPage(0); window.setFrame(NSRect(origin: window.frame.origin, size: NSSize(width: 960, height: 640)), display: true); pump()
+        assistant.cachedUsageReportsByPeriod["today"] = [
+            "summary": totals,
+            "byModel": [],
+            "todayHourly": []
+        ]
+        assistant.overview!.updateReadinessMatrix()
+        check(assistant.overview!.todayPeakBadge.title == "24 小时分布" && assistant.overview!.rightBentoCountBadge.title == "暂无调用", "Overview idle badges must show 24 小时分布 and 暂无调用")
+        for (theme, appearance) in [("light", NSAppearance.Name.aqua), ("dark", NSAppearance.Name.darkAqua)] {
+            window.appearance = NSAppearance(named: appearance)
+            window.contentView?.layoutSubtreeIfNeeded()
+            try capture(window.contentView!, output.appendingPathComponent("\(theme)-overview-idle-pills.png"))
+        }
+        assistant.cachedUsageReportsByPeriod["today"] = [
+            "summary": totals,
+            "byModel": models,
+            "todayHourly": todayHourly
+        ]
+        assistant.overview!.updateReadinessMatrix()
+
+        // Verify AccountsPage unified & per-card collapse/expand behavior
+        assistant.selectPage(1); pump()
+        let accPage = assistant.accountsPage!
+        accPage.fetch(); pump()
+        window.appearance = NSAppearance(named: .aqua)
+        window.contentView?.layoutSubtreeIfNeeded(); pump()
+        check(!accPage.toggleCollapseAllButton.isHidden && accPage.toggleCollapseAllButton.title == "收起配额", "AccountsPage header must show 收起配额 button when cards are expanded")
+        let expandedFirstCardHeight = accPage.cardsStack.arrangedSubviews.first?.bounds.height ?? 0
+        check(expandedFirstCardHeight > 180, "Expanded account card height must include full quota bars (>180pt)")
+
+        accPage.toggleCollapseAllAccounts(); pump()
+        window.contentView?.layoutSubtreeIfNeeded(); pump()
+        check(accPage.isAllCollapsedMode && accPage.collapsedAccountIds.count == 3, "Clicking 收起配额 must collapse all 3 account cards")
+        check(accPage.toggleCollapseAllButton.title == "展开配额", "Header button title must switch to 展开配额 when all cards are collapsed")
+        check(assistant.configuration.value.accountsCollapsed == true, "Collapsing all accounts must persist accountsCollapsed = true in configuration")
+        let collapsedFirstCardHeight = accPage.cardsStack.arrangedSubviews.first?.bounds.height ?? 0
+        check(collapsedFirstCardHeight > 40 && collapsedFirstCardHeight < expandedFirstCardHeight - 100, "Collapsed account card height must shrink by >100pt (got \(collapsedFirstCardHeight) vs \(expandedFirstCardHeight))")
+        let collapsedTexts = allTextValues(accPage.cardsStack)
+        check(collapsedTexts.contains { $0.contains("Gemini 91%") && $0.contains("Claude/GPT 0%") }, "Collapsed account card must display inline quota summary")
+        for (theme, appearance) in [("light", NSAppearance.Name.aqua), ("dark", NSAppearance.Name.darkAqua)] {
+            window.appearance = NSAppearance(named: appearance)
+            window.contentView?.layoutSubtreeIfNeeded(); pump()
+            try capture(window.contentView!, output.appendingPathComponent("\(theme)-accounts-collapsed.png"))
+        }
+
+        // Toggle single account card expand while others stay collapsed
+        let singleBtn = NSButton()
+        singleBtn.identifier = NSUserInterfaceItemIdentifier("a")
+        accPage.toggleSingleAccountCollapse(singleBtn); pump()
+        window.contentView?.layoutSubtreeIfNeeded(); pump()
+        check(!accPage.collapsedAccountIds.contains("a") && accPage.collapsedAccountIds.contains("b"), "Per-card collapse button must expand account a while keeping b collapsed")
+        check(accPage.toggleCollapseAllButton.title == "收起配额", "When any card is expanded, header button must offer 收起配额")
+
+        // Collapse all again, then expand all
+        accPage.toggleCollapseAllAccounts(); pump()
+        check(accPage.collapsedAccountIds.count == 3 && accPage.toggleCollapseAllButton.title == "展开配额", "Clicking 收起配额 when partially expanded must collapse all cards")
+        accPage.toggleCollapseAllAccounts(); pump()
+        check(accPage.collapsedAccountIds.isEmpty && accPage.toggleCollapseAllButton.title == "收起配额" && assistant.configuration.value.accountsCollapsed == false, "Clicking 展开配额 must expand all cards and persist accountsCollapsed = false")
+
         let stableAccounts = AccountsPage(app: assistant)
         stableAccounts.updateAutoSwitchState()
         check(stableAccounts.autoSwitchToggle.isEnabled && stableAccounts.configButton.isEnabled, "All account switch controls must remain enabled for stable Antigravity")

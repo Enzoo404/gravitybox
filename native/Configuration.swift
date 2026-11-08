@@ -40,13 +40,14 @@ struct AppConfiguration: Codable {
     var localizationShortcutEnabled = true
     var syncAntigravityLifecycle = false
     var autoUpdateEnabled = false
+    var accountsCollapsed = false
     var menuSelectedTab = 0
     var menuUsagePeriod = 0
     var menuTrendMetric = "tokens"
     var applicationChannel = "stable"
 
     enum CodingKeys: String, CodingKey {
-        case localizationShortcutEnabled, quotaRefreshMinutes, schema, lastPage, navigationVersion, syncAntigravityLifecycle, autoUpdateEnabled, menuSelectedTab, menuUsagePeriod, menuTrendMetric, applicationChannel
+        case localizationShortcutEnabled, quotaRefreshMinutes, schema, lastPage, navigationVersion, syncAntigravityLifecycle, autoUpdateEnabled, accountsCollapsed, menuSelectedTab, menuUsagePeriod, menuTrendMetric, applicationChannel
     }
 
     init() {}
@@ -60,6 +61,7 @@ struct AppConfiguration: Codable {
         navigationVersion = try? container.decode(Int.self, forKey: .navigationVersion)
         syncAntigravityLifecycle = (try? container.decode(Bool.self, forKey: .syncAntigravityLifecycle)) ?? false
         autoUpdateEnabled = (try? container.decode(Bool.self, forKey: .autoUpdateEnabled)) ?? false
+        accountsCollapsed = (try? container.decode(Bool.self, forKey: .accountsCollapsed)) ?? false
         if let channel = try container.decodeIfPresent(String.self, forKey: .applicationChannel) {
             guard ["stable", "insiders"].contains(channel) else { throw BackendFailure(message: "应用版本选择无效，原配置已保留。") }
             applicationChannel = "stable"

@@ -8,8 +8,9 @@ final class AccountsPage: NSObject {
     let autoSwitchToggle = NSSwitch()
     let autoSwitchBadgeBox = NSBox()
     let autoSwitchBadgeIcon = symbol("arrow.triangle.2.circlepath", size: 13.5, color: Design.blue)
-    let autoSwitchStatusBadge = pillBadge("已停用", color: Design.secondary)
+    let autoSwitchStatusBadge = pillBadge("已停用", color: Design.inactivePill)
     let configButton = button("配置…", target: nil, action: #selector(showPolicySettings))
+    let toggleCollapseAllButton = button("收起配额", target: nil, action: #selector(toggleCollapseAllAccounts))
     let policyBox: NSBox
     let cardsStack = NSStackView()
     // B01: 页面顶部提示“N 个账号的分组沿用上次记录”（仅在没有挂载底部页脚的前提下提供轻量汇总）。
@@ -19,6 +20,8 @@ final class AccountsPage: NSObject {
     var activeId = ""
     var recommendedAccountId: String? = nil
     var autoSwitchConfig: [String: Any] = [:]
+    private(set) var collapsedAccountIds = Set<String>()
+    private(set) var isAllCollapsedMode = false
     private var renderedFingerprint = ""
     private var recommendationFingerprint = ""
     private var accountReadError: String?
@@ -38,11 +41,16 @@ final class AccountsPage: NSObject {
         let tierPill: PillBadge
         let statusBadge: PillBadge
         let emailLbl: NSTextField
+        let collapsedSummaryLabel: NSTextField
         let switchButton: NSButton
         let singleRefreshBtn: QuotaRefreshButton
         let actionsButton: NSButton
+        let collapseButton: NSButton
         let actionStack: NSStackView
         var actionStackWidthConstraint: NSLayoutConstraint?
+        let cardDivider: NSView
+        let qRow1: NSView
+        let qRow2: NSView
         let bar1: QuotaBarView
         let bar2: QuotaBarView
         let barClaude5h: QuotaBarView
@@ -61,11 +69,16 @@ final class AccountsPage: NSObject {
             tierPill: PillBadge,
             statusBadge: PillBadge,
             emailLbl: NSTextField,
+            collapsedSummaryLabel: NSTextField,
             switchButton: NSButton,
             singleRefreshBtn: QuotaRefreshButton,
             actionsButton: NSButton,
+            collapseButton: NSButton,
             actionStack: NSStackView,
             actionStackWidthConstraint: NSLayoutConstraint?,
+            cardDivider: NSView,
+            qRow1: NSView,
+            qRow2: NSView,
             bar1: QuotaBarView,
             bar2: QuotaBarView,
             barClaude5h: QuotaBarView,
@@ -83,11 +96,16 @@ final class AccountsPage: NSObject {
             self.tierPill = tierPill
             self.statusBadge = statusBadge
             self.emailLbl = emailLbl
+            self.collapsedSummaryLabel = collapsedSummaryLabel
             self.switchButton = switchButton
             self.singleRefreshBtn = singleRefreshBtn
             self.actionsButton = actionsButton
+            self.collapseButton = collapseButton
             self.actionStack = actionStack
             self.actionStackWidthConstraint = actionStackWidthConstraint
+            self.cardDivider = cardDivider
+            self.qRow1 = qRow1
+            self.qRow2 = qRow2
             self.bar1 = bar1
             self.bar2 = bar2
             self.barClaude5h = barClaude5h
@@ -118,11 +136,23 @@ final class AccountsPage: NSObject {
 
     init(app: Assistant) {
         self.app = app
+        self.isAllCollapsedMode = app.configuration?.value.accountsCollapsed ?? false
         let saveCurrentBtn = button("添加账号…", target: nil, action: #selector(addAccount))
         saveCurrentBtn.bezelColor = .controlAccentColor
         let refreshQuotaBtn = QuotaRefreshButton(target: nil, action: #selector(refreshAllQuotas))
 
-        let headerActions = horizontal([refreshQuotaBtn, saveCurrentBtn], spacing: 8)
+        toggleCollapseAllButton.image = NSImage(
+            systemSymbolName: isAllCollapsedMode ? "chevron.down" : "chevron.up",
+            accessibilityDescription: nil
+        )?.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 10.5, weight: .semibold))
+        toggleCollapseAllButton.image?.isTemplate = true
+        toggleCollapseAllButton.imagePosition = .imageLeading
+        toggleCollapseAllButton.title = isAllCollapsedMode ? "展开配额" : "收起配额"
+        toggleCollapseAllButton.toolTip = isAllCollapsedMode ? "展开所有账号的详细配额进度条" : "收起所有账号的配额进度条，仅展示紧凑摘要"
+        toggleCollapseAllButton.setAccessibilityLabel(toggleCollapseAllButton.title)
+
+        let headerActions = horizontal([toggleCollapseAllButton, refreshQuotaBtn, saveCurrentBtn], spacing: 8)
+        headerActions.detachesHiddenViews = true
         let root = pageStack(title: "账号", actions: headerActions)
         root.spacing = 10
 
@@ -229,12 +259,13 @@ final class AccountsPage: NSObject {
         // 2. 卡片式多账号列表 (取代生硬的 NSTableView)
         cardsStack.orientation = .vertical
         cardsStack.alignment = .leading
-        cardsStack.spacing = 16
+        cardsStack.spacing = 12
         root.addArrangedSubview(cardsStack)
 
         view = scrollPage(root)
         super.init()
 
+        toggleCollapseAllButton.target = self
         saveCurrentBtn.target = self
         refreshQuotaBtn.target = self
         rollbackButton.target = self
@@ -249,6 +280,92 @@ final class AccountsPage: NSObject {
         fetchPolicy()
     }
 
+    private static func formatCollapsedQuotaSummary(g5h: Int?, gWeek: Int?, c5h: Int?, cWeek: Int?, argonPct: Int?) -> String {
+        var parts: [String] = []
+        if let gPct = g5h ?? gWeek {
+            parts.append("Gemini \(gPct)%")
+        }
+        if let cPct = c5h ?? cWeek {
+            parts.append("Claude/GPT \(cPct)%")
+        }
+        if let aPct = argonPct {
+            parts.append("Argon \(aPct)%")
+        }
+        guard !parts.isEmpty else { return "· 配额待刷新" }
+        return "· " + parts.joined(separator: " · ")
+    }
+
+    private func syncCollapseHeaderButtonState() {
+        let validIds = Set(accounts.compactMap { $0["id"] as? String }.filter { !$0.isEmpty })
+        guard !validIds.isEmpty else {
+            toggleCollapseAllButton.isHidden = true
+            return
+        }
+        toggleCollapseAllButton.isHidden = false
+        let allCollapsed = validIds.isSubset(of: collapsedAccountIds)
+        isAllCollapsedMode = allCollapsed
+        let title = allCollapsed ? "展开配额" : "收起配额"
+        let symbolName = allCollapsed ? "chevron.down" : "chevron.up"
+        if toggleCollapseAllButton.title != title {
+            toggleCollapseAllButton.title = title
+        }
+        toggleCollapseAllButton.image = NSImage(
+            systemSymbolName: symbolName,
+            accessibilityDescription: nil
+        )?.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 10.5, weight: .semibold))
+        toggleCollapseAllButton.image?.isTemplate = true
+        toggleCollapseAllButton.toolTip = allCollapsed ? "展开所有账号的详细配额进度条" : "收起所有账号的配额进度条，仅展示紧凑摘要"
+        toggleCollapseAllButton.setAccessibilityLabel(title)
+        toggleCollapseAllButton.invalidateIntrinsicContentSize()
+    }
+
+    @objc func toggleCollapseAllAccounts() {
+        let validIds = Set(accounts.compactMap { $0["id"] as? String }.filter { !$0.isEmpty })
+        guard !validIds.isEmpty else { return }
+        let shouldCollapseAll = !validIds.isSubset(of: collapsedAccountIds)
+        if shouldCollapseAll {
+            collapsedAccountIds.formUnion(validIds)
+        } else {
+            collapsedAccountIds.removeAll()
+        }
+        isAllCollapsedMode = shouldCollapseAll
+        if app.configuration != nil {
+            app.configuration.value.accountsCollapsed = shouldCollapseAll
+            try? app.configuration.save()
+        }
+        for item in accounts {
+            let id = item["id"] as? String ?? ""
+            if let card = cardViewsById[id] {
+                updateAccountCardViews(card, item: item)
+            }
+        }
+        syncCollapseHeaderButtonState()
+        view.layoutSubtreeIfNeeded()
+    }
+
+    @objc func toggleSingleAccountCollapse(_ sender: NSButton) {
+        let id = sender.identifier?.rawValue ?? ""
+        guard !id.isEmpty else { return }
+        if collapsedAccountIds.contains(id) {
+            collapsedAccountIds.remove(id)
+        } else {
+            collapsedAccountIds.insert(id)
+        }
+        let validIds = Set(accounts.compactMap { $0["id"] as? String }.filter { !$0.isEmpty })
+        let allCollapsed = !validIds.isEmpty && validIds.isSubset(of: collapsedAccountIds)
+        isAllCollapsedMode = allCollapsed
+        if app.configuration != nil {
+            app.configuration.value.accountsCollapsed = allCollapsed
+            try? app.configuration.save()
+        }
+        if let item = accounts.first(where: { ($0["id"] as? String) == id }),
+           let card = cardViewsById[id] {
+            updateAccountCardViews(card, item: item)
+        }
+        syncCollapseHeaderButtonState()
+        view.layoutSubtreeIfNeeded()
+    }
+
     private func makeAccountCardViews(id: String, item: [String: Any]) -> AccountCardViews {
         let email = item["email"] as? String ?? "未命名账号"
         let name = item["name"] as? String ?? ""
@@ -261,7 +378,7 @@ final class AccountsPage: NSObject {
         titleLbl.lineBreakMode = .byTruncatingTail
         titleLbl.setContentCompressionResistancePriority(NSLayoutConstraint.Priority(240), for: .horizontal)
 
-        let tierPill = pillBadge(tier, color: isUltra ? .systemPurple : isPro ? .systemBlue : .secondaryLabelColor)
+        let tierPill = pillBadge(tier, color: isUltra ? .systemPurple : isPro ? .systemBlue : Design.inactivePill)
         tierPill.isHidden = tier.isEmpty
 
         let statusBadge = pillBadge("当前账号", color: Design.blue)
@@ -275,10 +392,20 @@ final class AccountsPage: NSObject {
         let emailLbl = text(email, size: 11, color: .secondaryLabelColor)
         emailLbl.font = .systemFont(ofSize: 11.5, weight: .regular)
         emailLbl.lineBreakMode = .byTruncatingMiddle
-        emailLbl.setContentCompressionResistancePriority(NSLayoutConstraint.Priority(230), for: .horizontal)
-        let subRowViews: [NSView] = [emailLbl]
-        let subRow = horizontal(subRowViews, spacing: 6)
+        emailLbl.setContentCompressionResistancePriority(NSLayoutConstraint.Priority(215), for: .horizontal)
+        emailLbl.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+
+        let collapsedSummaryLabel = text("", size: 11, weight: .medium, color: Design.inactivePill)
+        collapsedSummaryLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .medium)
+        collapsedSummaryLabel.lineBreakMode = .byTruncatingTail
+        collapsedSummaryLabel.setContentCompressionResistancePriority(NSLayoutConstraint.Priority(248), for: .horizontal)
+        collapsedSummaryLabel.setContentHuggingPriority(.required, for: .horizontal)
+        collapsedSummaryLabel.isHidden = true
+
+        let subRowViews: [NSView] = [emailLbl, collapsedSummaryLabel, flexibleSpace()]
+        let subRow = horizontal(subRowViews, spacing: 5)
         subRow.alignment = .centerY
+        subRow.detachesHiddenViews = true
 
         let nameAndEmail = vertical([titleRow, subRow], spacing: 3)
         nameAndEmail.alignment = .leading
@@ -307,7 +434,14 @@ final class AccountsPage: NSObject {
         let actionsButton = button("…", target: self, action: #selector(showAccountActions(_:)))
         actionsButton.identifier = NSUserInterfaceItemIdentifier(id); actionsButton.setAccessibilityLabel("账号操作 · " + accountTitle)
 
-        let actionViews: [NSView] = [swBtn, singleRefreshBtn, actionsButton]
+        let collapseButton = button("", target: self, action: #selector(toggleSingleAccountCollapse(_:)))
+        collapseButton.identifier = NSUserInterfaceItemIdentifier(id)
+        collapseButton.image = NSImage(systemSymbolName: "chevron.up", accessibilityDescription: nil)?.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 11, weight: .semibold))
+        collapseButton.image?.isTemplate = true
+        collapseButton.toolTip = "收起此账号配额详情"
+        collapseButton.setAccessibilityLabel("收起账号 \(accountTitle) 配额详情")
+
+        let actionViews: [NSView] = [swBtn, singleRefreshBtn, actionsButton, collapseButton]
         let actionStack = horizontal(actionViews, spacing: 6)
         actionStack.alignment = .centerY
         actionStack.detachesHiddenViews = true
@@ -340,8 +474,9 @@ final class AccountsPage: NSObject {
         let updateLabel = text("", size: 11, color: .secondaryLabelColor)
         updateLabel.isHidden = true
 
+        let cardDivider = divider()
         let cardRows: [NSView] = [
-            headerRow, divider(), qRow1, qRow2, barArgon,
+            headerRow, cardDivider, qRow1, qRow2, barArgon,
             authWarningLabel, quotaWarningLabel, refreshErrorLabel, staleLabel, updateLabel
         ]
         let cardBox = group(cardRows, inset: 16, spacing: 12)
@@ -363,11 +498,16 @@ final class AccountsPage: NSObject {
             tierPill: tierPill,
             statusBadge: statusBadge,
             emailLbl: emailLbl,
+            collapsedSummaryLabel: collapsedSummaryLabel,
             switchButton: swBtn,
             singleRefreshBtn: singleRefreshBtn,
             actionsButton: actionsButton,
+            collapseButton: collapseButton,
             actionStack: actionStack,
             actionStackWidthConstraint: widthConstraint,
+            cardDivider: cardDivider,
+            qRow1: qRow1,
+            qRow2: qRow2,
             bar1: bar1,
             bar2: bar2,
             barClaude5h: barClaude5h,
@@ -389,13 +529,14 @@ final class AccountsPage: NSObject {
         let isUltra = tier == "ULTRA"
         let isPro = tier == "PRO"
         let isActive = id == activeId
+        let isCollapsed = collapsedAccountIds.contains(id)
 
         let displayName = AccountIdentity.displayName(name: name, email: email)
         if card.titleLbl.stringValue != displayName { card.titleLbl.stringValue = displayName }
         if card.emailLbl.stringValue != email { card.emailLbl.stringValue = email }
 
         card.tierPill.title = tier
-        card.tierPill.tint = isUltra ? .systemPurple : isPro ? .systemBlue : .secondaryLabelColor
+        card.tierPill.tint = isUltra ? .systemPurple : isPro ? .systemBlue : Design.inactivePill
         card.tierPill.isHidden = tier.isEmpty
 
         if isActive {
@@ -415,12 +556,18 @@ final class AccountsPage: NSObject {
         card.switchButton.identifier = NSUserInterfaceItemIdentifier(id)
         card.switchButton.toolTip = "切换至账号 \(accountTitle)"
         card.switchButton.setAccessibilityLabel("切换至账号 \(accountTitle)")
+        card.collapseButton.identifier = NSUserInterfaceItemIdentifier(id)
+        let chevronSymbol = isCollapsed ? "chevron.down" : "chevron.up"
+        card.collapseButton.image = NSImage(systemSymbolName: chevronSymbol, accessibilityDescription: nil)?.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 11, weight: .semibold))
+        card.collapseButton.image?.isTemplate = true
+        card.collapseButton.toolTip = isCollapsed ? "展开此账号配额详情" : "收起此账号配额详情"
+        card.collapseButton.setAccessibilityLabel((isCollapsed ? "展开账号 " : "收起账号 ") + accountTitle + " 配额详情")
         if card.switchButton.isHidden != !canSwitch {
             card.switchButton.isHidden = !canSwitch
-            let visibleActions = card.actionStack.arrangedSubviews.filter { !$0.isHidden }
-            let width = visibleActions.reduce(CGFloat(0)) { $0 + max(0, $1.intrinsicContentSize.width) } + CGFloat(max(0, visibleActions.count - 1)) * card.actionStack.spacing
-            card.actionStackWidthConstraint?.constant = width
         }
+        let visibleActions = card.actionStack.arrangedSubviews.filter { !$0.isHidden }
+        let width = visibleActions.reduce(CGFloat(0)) { $0 + max(0, $1.intrinsicContentSize.width) } + CGFloat(max(0, visibleActions.count - 1)) * card.actionStack.spacing
+        card.actionStackWidthConstraint?.constant = width
 
         card.singleRefreshBtn.identifier = NSUserInterfaceItemIdentifier(id)
         card.singleRefreshBtn.setAccessibilityLabel("刷新账号 \(accountTitle) 配额")
@@ -430,10 +577,18 @@ final class AccountsPage: NSObject {
         let quotaContract = QuotaPresentation.contract(item)
         let g5h = quotaContract.geminiPrimary.window?.percentage
         let gWeek = quotaContract.geminiWeekly?.percentage
+        let c5h = quotaContract.claudePrimary.window?.percentage
         let cWeek = quotaContract.claudeWeekly?.percentage
         let g5Cd = quotaContract.geminiPrimary.window?.resetText ?? ""
         let gWCd = quotaContract.geminiWeekly?.resetText ?? ""
         let cWCd = quotaContract.claudeWeekly?.resetText ?? ""
+
+        let summaryText = Self.formatCollapsedQuotaSummary(g5h: g5h, gWeek: gWeek, c5h: c5h, cWeek: cWeek, argonPct: quotaContract.argon?.percentage)
+        if card.collapsedSummaryLabel.stringValue != summaryText {
+            card.collapsedSummaryLabel.stringValue = summaryText
+            card.collapsedSummaryLabel.toolTip = summaryText
+        }
+        card.collapsedSummaryLabel.isHidden = !isCollapsed
 
         card.bar1.update(
             title: "Gemini · \(quotaContract.geminiPrimary.label)",
@@ -481,6 +636,11 @@ final class AccountsPage: NSObject {
             stale: argon?.stale == true
         )
 
+        card.cardDivider.isHidden = isCollapsed
+        card.qRow1.isHidden = isCollapsed
+        card.qRow2.isHidden = isCollapsed
+        card.barArgon.isHidden = isCollapsed
+
         if let readiness = item["credentialReadiness"] as? [String: Any], readiness["state"] as? String == "needs_authorization" {
             card.authWarningLabel.toolTip = readiness["message"] as? String ?? ""
             card.authWarningLabel.isHidden = false
@@ -494,7 +654,7 @@ final class AccountsPage: NSObject {
             return value.isEmpty || value.contains("双周期") ? nil : value
         }
         let quotaWarning = QuotaPresentation.warningSummary(quotaContract, excluding: [refreshError].compactMap { $0 })
-        if !quotaWarning.isEmpty {
+        if !quotaWarning.isEmpty && !isCollapsed {
             card.quotaWarningLabel.toolTip = quotaContract.quotaWarnings.joined(separator: "；")
             card.quotaWarningLabel.isHidden = false
         } else {
@@ -512,7 +672,8 @@ final class AccountsPage: NSObject {
             card.refreshErrorLabel.isHidden = true
         }
 
-        if let quota = item["quota"] as? [String: Any],
+        if !isCollapsed,
+           let quota = item["quota"] as? [String: Any],
            let staleGroups = quota["stale_groups"] as? [[String: Any]], !staleGroups.isEmpty {
             let names = staleGroups.compactMap { $0["name"] as? String }.filter { !$0.isEmpty }
             let stamps = staleGroups.compactMap { group -> Double? in
@@ -533,7 +694,8 @@ final class AccountsPage: NSObject {
             card.staleLabel.isHidden = true
         }
 
-        if let quota = item["quota"] as? [String: Any], let stamp = quota["last_updated"] as? Double, stamp > 0 {
+        if !isCollapsed,
+           let quota = item["quota"] as? [String: Any], let stamp = quota["last_updated"] as? Double, stamp > 0 {
             let source = quota["source"] as? String == "external" ? "Switch 记录" : quota["source"] as? String == "live" ? "本机实时读取" : "Google 配额记录"
             let dateStr = Self.dateFormatter.string(from: Date(timeIntervalSince1970: stamp))
             let isStale = (Date().timeIntervalSince1970 - stamp) > 15 * 60
@@ -567,6 +729,7 @@ final class AccountsPage: NSObject {
 
         if accountReadError != nil || accounts.isEmpty {
             cardViewsById.removeAll()
+            syncCollapseHeaderButtonState()
             cardsStack.arrangedSubviews.forEach {
                 cardsStack.removeArrangedSubview($0)
                 $0.removeFromSuperview()
@@ -595,7 +758,13 @@ final class AccountsPage: NSObject {
             }
         }
 
-        let validIds = Set(accounts.compactMap { $0["id"] as? String })
+        let validIds = Set(accounts.compactMap { $0["id"] as? String }.filter { !$0.isEmpty })
+        collapsedAccountIds = collapsedAccountIds.intersection(validIds)
+        if isAllCollapsedMode {
+            for id in validIds where cardViewsById[id] == nil {
+                collapsedAccountIds.insert(id)
+            }
+        }
         cardViewsById = cardViewsById.filter { validIds.contains($0.key) }
 
         var orderedBoxes: [NSView] = []
@@ -613,6 +782,7 @@ final class AccountsPage: NSObject {
             orderedBoxes.append(card.cardBox)
             refreshControlsById[id] = card.singleRefreshBtn
         }
+        syncCollapseHeaderButtonState()
 
         let currentViews = cardsStack.arrangedSubviews
         let structureSame = currentViews.count == orderedBoxes.count && zip(currentViews, orderedBoxes).allSatisfy { $0 === $1 }
@@ -768,11 +938,11 @@ final class AccountsPage: NSObject {
         } else {
             policyBox.borderWidth = 0.5
             policyBox.borderColor = Design.border
-            autoSwitchBadgeBox.fillColor = Design.subcard
-            autoSwitchBadgeBox.borderColor = Design.border
-            autoSwitchBadgeIcon.contentTintColor = Design.secondary
+            autoSwitchBadgeBox.fillColor = Design.inactivePillFill
+            autoSwitchBadgeBox.borderColor = Design.inactivePillBorder
+            autoSwitchBadgeIcon.contentTintColor = Design.inactivePill
             autoSwitchStatusBadge.title = "已停用"
-            autoSwitchStatusBadge.tint = Design.secondary
+            autoSwitchStatusBadge.tint = Design.inactivePill
         }
         configButton.isEnabled = true
         configButton.alphaValue = 1.0
