@@ -6,6 +6,19 @@
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-11-08
+
+### Added
+- **UI**：原生账号中心（AccountsPage）新增配额折叠卡片特性，支持顶部全局“收起配额/展开配额”与单卡独立折叠，收起时自适应呈现紧凑摘要徽标（如 `Gemini 91%`）。
+- **Configuration**：在原生配置数据模型中新增 `accountsCollapsed` 属性并实现本地持久化，启动与切页自动恢复折叠偏好。
+- **UI Test**：补充原生 Swift Headless 界面测试，覆盖账号卡片收起/展开、状态切换及配置持久化断言。
+
+### Fixed
+- **i18n**：修复 Antigravity 2.29 版本汉化失效问题。
+- **i18n**：登记 2.29.0 官方界面包 SHA-256 指纹，确保新版正常识别受支持版本。
+- **i18n**：放宽 URL 路由白名单正则，适配 2.29 新增的 `/chatski-connect`、`/c`、`/c/_new` 等路径，避免新窗口被拦截跳过。
+- **i18n**：增强 DOM Ready 页面契约识别逻辑，支持大小写不敏感侧边栏选择器与新版输入框/设置对话框选择器，新增 10 次状态轮询确认与重试。
+
 ## [1.0.2] - 2026-11-07
 
 ### Fixed
@@ -60,7 +73,8 @@
 ### Fixed
 - **Native UI**：保持菜单栏状态图标在不同翻译开关状态下的不透明度一致（`b9921e8`，已包含于 1.0.0）。
 
-[Unreleased]: https://github.com/Enzoo404/gravitybox/compare/v1.0.2...HEAD
+[Unreleased]: https://github.com/Enzoo404/gravitybox/compare/v1.0.3...HEAD
+[1.0.3]: https://github.com/Enzoo404/gravitybox/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/Enzoo404/gravitybox/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/Enzoo404/gravitybox/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/Enzoo404/gravitybox/releases/tag/v1.0.0
