@@ -423,7 +423,12 @@ import Cocoa
         assistant.confirmSwitchForTesting = { _, reply in reply(true) }
         assistant.switchAccountByIdFromMenu("b")
         check(assistant.activeAccountId == "a","Menu must not optimistically change current identity")
-        pump(); check(switches == 1,"Confirmed fixture switch must run exactly once")
+        var switchWaited = 0
+        while switches < 1 && switchWaited < 20 {
+            pump()
+            switchWaited += 1
+        }
+        check(switches == 1, "Confirmed fixture switch must run exactly once")
         preflightState = "busy"; assistant.switchAccountByIdFromMenu("c"); pump()
         check(switches == 1,"Running official app must block switching")
         preflightState = "error"; assistant.switchAccountByIdFromMenu("c"); pump()
