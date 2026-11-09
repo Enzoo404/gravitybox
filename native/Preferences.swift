@@ -35,6 +35,9 @@ final class AppUpdateManager {
     var onStateChanged: (() -> Void)?
     private var checkInFlight = false
     private var downloadInFlight = false
+    private var installationInFlight = false
+    private var cleanupInFlight = false
+    private var launchCleanupCompleted = false
 
     init(app: Assistant) {
         self.app = app
@@ -113,7 +116,7 @@ final class AppUpdateManager {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.state = next
-            self.app.preferencesController?.refreshUpdateRowState()
+            self.app.syncUpdatePromptControls()
             self.onStateChanged?()
         }
     }
@@ -126,12 +129,12 @@ final class AppUpdateManager {
         } else {
             state = .upToDate
         }
-        app.preferencesController?.refreshUpdateRowState()
+        app.syncUpdatePromptControls()
         onStateChanged?()
     }
 
     func checkForUpdates(silent: Bool = false) {
-        guard !checkInFlight, !downloadInFlight else { return }
+        guard !checkInFlight, !downloadInFlight, !installationInFlight else { return }
         #if NATIVE_UI_TEST
         if let release = availableRelease {
             transition(.updateAvailable(release))
@@ -206,11 +209,9 @@ final class AppUpdateManager {
                     guard let assetName = asset["name"] as? String,
                           let downloadStr = asset["browser_download_url"] as? String,
                           let url = URL(string: downloadStr) else { continue }
-                    if assetName.hasSuffix(".dmg") {
-                        dmgURL = url
-                    } else if assetName.hasSuffix(".dmg.sha256") {
-                        sha256URL = url
-                    }
+                    let expectedName = "GravityBox-\(remoteVersion)-arm64.dmg"
+                    if assetName == expectedName { dmgURL = url }
+                    else if assetName == expectedName + ".sha256" { sha256URL = url }
                 }
             }
 
@@ -228,15 +229,10 @@ final class AppUpdateManager {
             DispatchQueue.main.async {
                 self.availableRelease = info
                 let cached = self.cachedDMGPath(for: info.version)
-                if FileManager.default.fileExists(atPath: cached.path) {
-                    self.downloadedDMGURL = cached
-                    self.transition(.readyToInstall(info, cached))
-                } else {
-                    self.downloadedDMGURL = nil
-                    self.transition(.updateAvailable(info))
-                    if self.app.configuration.value.autoUpdateEnabled, info.dmgURL != nil {
-                        self.preDownloadRelease(info, silent: true)
-                    }
+                self.downloadedDMGURL = nil
+                self.transition(.updateAvailable(info))
+                if FileManager.default.fileExists(atPath: cached.path) || self.app.configuration.value.autoUpdateEnabled {
+                    self.preDownloadRelease(info, silent: true)
                 }
             }
         }.resume()
@@ -340,91 +336,77 @@ final class AppUpdateManager {
         proc.standardError = FileHandle.nullDevice
     }
 
+    static func verifyCachedDownload(_ file: URL) throws {
+        let text = try String(contentsOf: file.appendingPathExtension("sha256"), encoding: .utf8)
+        let expected = try UpdatePackageIntegrity.expectedHash(text, fileName: file.lastPathComponent)
+        try UpdatePackageIntegrity.verify(file, expected: expected)
+    }
+
     func preDownloadRelease(_ release: AppReleaseInfo, silent: Bool, completion: ((Result<URL, Error>) -> Void)? = nil) {
-        if let ready = downloadedDMGURL, FileManager.default.fileExists(atPath: ready.path) {
-            transition(.readyToInstall(release, ready))
-            completion?(.success(ready))
-            return
-        }
-        guard let dmgURL = release.dmgURL else {
-            let err = NSError(domain: "GravityBoxUpdate", code: 1, userInfo: [NSLocalizedDescriptionKey: "该版本未附带 DMG 安装包，请前往 GitHub 下载。"])
-            if !silent { transition(.failed(err.localizedDescription)) }
-            completion?(.failure(err))
-            return
-        }
         guard !downloadInFlight else { return }
         downloadInFlight = true
+        downloadedDMGURL = nil
         transition(.downloading(release))
-
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self else { return }
-            defer { self.downloadInFlight = false }
-            do {
+            let result = Result<URL, Error> {
+                guard release.version.range(of: #"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$"#, options: .regularExpression) != nil else {
+                    throw UpdatePackageIntegrity.failure("更新版本号无效，已停止更新。")
+                }
                 let targetFile = self.cachedDMGPath(for: release.version)
-                let dir = targetFile.deletingLastPathComponent()
                 let fm = FileManager.default
+                // Rehash on every reuse, including installation. Old unverified caches never qualify.
+                if fm.fileExists(atPath: targetFile.path), (try? Self.verifyCachedDownload(targetFile)) != nil {
+                    return targetFile
+                }
+                guard let dmgURL = release.dmgURL, let shaURL = release.sha256URL else {
+                    throw UpdatePackageIntegrity.failure("该版本缺少安装包或 SHA-256 校验文件，已停止更新；当前版本仍可继续使用。")
+                }
+                let shaText: String
+                do { shaText = try String(contentsOf: shaURL, encoding: .utf8) }
+                catch { throw UpdatePackageIntegrity.failure("无法读取 SHA-256 校验文件，已停止更新，请稍后重试。") }
+                let expected = try UpdatePackageIntegrity.expectedHash(shaText, fileName: targetFile.lastPathComponent)
+                let dir = targetFile.deletingLastPathComponent()
                 try fm.createDirectory(at: dir, withIntermediateDirectories: true)
                 let tempDMG = dir.appendingPathComponent("download-\(UUID().uuidString).dmg.part")
                 defer { try? fm.removeItem(at: tempDMG) }
-
-                let dmgData = try Data(contentsOf: dmgURL)
-                try dmgData.write(to: tempDMG, options: .atomic)
-
-                if let shaURL = release.sha256URL,
-                   let shaText = try? String(contentsOf: shaURL, encoding: .utf8) {
-                    let expectedHash = shaText.split(whereSeparator: { $0.isWhitespace }).first.map(String.init)?.lowercased() ?? ""
-                    if expectedHash.count == 64 {
-                        let actualHash = SHA256.hash(data: dmgData).map { String(format: "%02x", $0) }.joined()
-                        if actualHash != expectedHash {
-                            throw NSError(domain: "GravityBoxUpdate", code: 2, userInfo: [NSLocalizedDescriptionKey: "安装包 SHA-256 校验不一致，已拦截损坏文件。"])
-                        }
-                    }
+                try Data(contentsOf: dmgURL).write(to: tempDMG, options: .atomic)
+                try UpdatePackageIntegrity.verify(tempDMG, expected: expected)
+                let verify = Process()
+                verify.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
+                verify.arguments = ["verify", "-quiet", tempDMG.path]
+                Self.configureSilentProcess(verify)
+                try verify.run(); verify.waitUntilExit()
+                guard verify.terminationStatus == 0 else { throw UpdatePackageIntegrity.failure("DMG 磁盘映像完整性校验未通过。") }
+                guard rename(tempDMG.path, targetFile.path) == 0 else { throw UpdatePackageIntegrity.failure("无法保存已校验安装包，请稍后重试。") }
+                // A crash between these writes leaves an unusable cache, never an unchecked ready state.
+                try Data("\(expected)  \(targetFile.lastPathComponent)\n".utf8).write(to: targetFile.appendingPathExtension("sha256"), options: .atomic)
+                try Self.verifyCachedDownload(targetFile)
+                return targetFile
+            }
+            DispatchQueue.main.async {
+                self.downloadInFlight = false
+                switch result {
+                case .success(let file):
+                    self.downloadedDMGURL = file
+                    self.transition(.readyToInstall(release, file))
+                case .failure(let error):
+                    self.transition(silent ? .updateAvailable(release) : .failed(error.localizedDescription))
                 }
-
-                let verifyProc = Process()
-                verifyProc.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
-                verifyProc.arguments = ["verify", "-quiet", tempDMG.path]
-                Self.configureSilentProcess(verifyProc)
-                try verifyProc.run()
-                verifyProc.waitUntilExit()
-                guard verifyProc.terminationStatus == 0 else {
-                    throw NSError(domain: "GravityBoxUpdate", code: 3, userInfo: [NSLocalizedDescriptionKey: "DMG 磁盘映像完整性校验未通过。"])
-                }
-
-                if fm.fileExists(atPath: targetFile.path) {
-                    try fm.removeItem(at: targetFile)
-                }
-                try fm.moveItem(at: tempDMG, to: targetFile)
-
-                DispatchQueue.main.async {
-                    self.downloadedDMGURL = targetFile
-                    self.transition(.readyToInstall(release, targetFile))
-                    completion?(.success(targetFile))
-                }
-            } catch {
-                DispatchQueue.main.async {
-                    if !silent {
-                        self.transition(.failed(error.localizedDescription))
-                    } else {
-                        self.transition(.updateAvailable(release))
-                    }
-                    completion?(.failure(error))
-                }
+                completion?(result)
             }
         }
     }
 
     func installRelease(_ release: AppReleaseInfo) {
-        if let dmgFile = downloadedDMGURL, FileManager.default.fileExists(atPath: dmgFile.path) {
-            executeInstall(release: release, dmgFile: dmgFile)
-        } else if release.dmgURL != nil {
-            preDownloadRelease(release, silent: false) { [weak self] result in
-                if case .success(let dmgFile) = result {
-                    self?.executeInstall(release: release, dmgFile: dmgFile)
-                }
+        guard !installationInFlight, !downloadInFlight else { return }
+        installationInFlight = true
+        // The cached path must pass the same validation as a newly downloaded package.
+        preDownloadRelease(release, silent: false) { [weak self] result in
+            switch result {
+            case .success(let file): self?.executeInstall(release: release, dmgFile: file)
+            case .failure: self?.installationInFlight = false
             }
-        } else {
-            NSWorkspace.shared.open(release.htmlURL)
         }
     }
 
@@ -471,13 +453,48 @@ final class AppUpdateManager {
         }
     }
 
+    /// Invoked only after a successful backend status reply, never merely because the app started.
+    func cleanupAfterSuccessfulLaunch() {
+        #if !NATIVE_UI_TEST
+        guard !cleanupInFlight, !launchCleanupCompleted, !installationInFlight else { return }
+        let arguments = CommandLine.arguments, version = currentVersion, bundle = Bundle.main.bundleURL, stateDir = app.state
+        let hasReceipt = arguments.contains("--update-receipt")
+        if !hasReceipt && app.configuration.value.lastCleanedVersion == version {
+            launchCleanupCompleted = true
+            return
+        }
+        cleanupInFlight = true
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self else { return }
+            let confirmed: Bool
+            if hasReceipt {
+                // Ready is only the new app's acknowledgement; wait for the helper's committed confirmation.
+                confirmed = UpdateInstaller.isConfirmed(arguments: arguments, state: stateDir, bundle: bundle)
+            } else {
+                // Manual drag-and-drop upgrades have no helper receipt: validate the running app after backend readiness.
+                confirmed = (try? UpdateInstaller.validateApp(bundle, version: version, appHash: UpdatePackageIntegrity.appHash(bundle))) != nil
+            }
+            if confirmed {
+                _ = self.cleanupObsoleteUpdateArtifacts(successfulLaunchConfirmed: true,
+                    restartedAfterUpdate: arguments.contains("--restarted-after-update"), detachMountedVolumes: true)
+            }
+            DispatchQueue.main.async {
+                self.cleanupInFlight = false
+                self.launchCleanupCompleted = confirmed
+            }
+        }
+        #endif
+    }
+
     @discardableResult
     func cleanupObsoleteUpdateArtifacts(
+        successfulLaunchConfirmed: Bool = false,
         restartedAfterUpdate: Bool = false,
         currentVersionOverride: String? = nil,
         downloadsDirectory: URL? = nil,
         detachMountedVolumes: Bool = false
     ) -> Int {
+        guard successfulLaunchConfirmed else { return 0 }
         let fm = FileManager.default
         let currentVer = Self.normalizeVersion(currentVersionOverride ?? currentVersion)
         var cleanedCount = 0
@@ -492,6 +509,7 @@ final class AppUpdateManager {
 
                 if isDir && name.hasPrefix("install-") {
                     if case .installing = state { continue }
+                    if fm.fileExists(atPath: entryURL.appendingPathComponent(UpdateInstaller.receiptName).path) { continue }
                     if (try? fm.removeItem(at: entryURL)) != nil {
                         cleanedCount += 1
                     }
@@ -586,10 +604,11 @@ final class AppUpdateManager {
                 self.availableRelease = nil
                 self.downloadedDMGURL = nil
                 self.state = .upToDate
-                self.app.preferencesController?.refreshUpdateRowState()
+                self.app.syncUpdatePromptControls()
                 self.onStateChanged?()
             } else {
                 self.validateCachedDMGState()
+                self.app.syncUpdatePromptControls()
             }
             if self.app.configuration != nil && self.app.configuration.value.lastCleanedVersion != currentVer {
                 self.app.configuration.value.lastCleanedVersion = currentVer
@@ -605,22 +624,15 @@ final class AppUpdateManager {
         return cleanedCount
     }
 
+    static func shellQuote(_ value: String) -> String { "'" + value.replacingOccurrences(of: "'", with: "'\"'\"'") + "'" }
+
     static func buildDetachedUpdaterScript(myPid: Int32, stagedAppPath: String, targetAppPath: String, workDirPath: String, dmgFilePath: String = "") -> String {
-        let dmgCleanupCommands: String
-        if !dmgFilePath.isEmpty {
-            let dmgDirPath = (dmgFilePath as NSString).deletingLastPathComponent
-            dmgCleanupCommands = """
-              rm -f "\(dmgFilePath)" "\(dmgFilePath).sha256" 2>/dev/null || true
-              rmdir "\(dmgDirPath)" 2>/dev/null || true
-            """
-        } else {
-            dmgCleanupCommands = "  :"
-        }
-        return """
-        nohup /bin/sh -c '
+        let helper = URL(fileURLWithPath: workDirPath).appendingPathComponent("installer").path
+        let receipt = URL(fileURLWithPath: workDirPath).appendingPathComponent(UpdateInstaller.receiptName).path
+        let body = """
         trap "" HUP TERM INT QUIT PIPE
         i=0
-        while kill -0 \(myPid) 2>/dev/null && [ $i -lt 25 ]; do
+        while kill -0 \(myPid) 2>/dev/null && [ $i -lt 50 ]; do
           sleep 0.2
           i=$((i + 1))
         done
@@ -628,22 +640,9 @@ final class AppUpdateManager {
           kill -9 \(myPid) 2>/dev/null || true
           sleep 0.2
         fi
-        pkill -f "GravityBox.app/Contents/MacOS/GravityBox --lifecycle-agent" 2>/dev/null || true
-        REPLACED=0
-        if rm -rf "\(targetAppPath)" && mv "\(stagedAppPath)" "\(targetAppPath)"; then
-          /usr/bin/xattr -dr com.apple.quarantine "\(targetAppPath)" 2>/dev/null || true
-          REPLACED=1
-        elif /usr/bin/ditto "\(stagedAppPath)" "\(targetAppPath)" 2>/dev/null; then
-          /usr/bin/xattr -dr com.apple.quarantine "\(targetAppPath)" 2>/dev/null || true
-          REPLACED=1
-        fi
-        rm -rf "\(workDirPath)" 2>/dev/null || true
-        if [ "$REPLACED" = "1" ]; then
-        \(dmgCleanupCommands)
-        fi
-        /usr/bin/open -n "\(targetAppPath)" --args --restarted-after-update >/dev/null 2>&1 || /usr/bin/open "\(targetAppPath)" >/dev/null 2>&1
-        ' >/dev/null 2>&1 &
+        exec \(shellQuote(helper)) --install-update \(shellQuote(receipt))
         """
+        return "nohup /bin/sh -c " + shellQuote(body) + " >/dev/null 2>&1 &"
     }
 
     private func executeInstall(release: AppReleaseInfo, dmgFile: URL) {
@@ -651,10 +650,11 @@ final class AppUpdateManager {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
             let fm = FileManager.default
-            let workDir = self.app.state.appendingPathComponent("updates/install-\(UUID().uuidString)")
+            let workDir = self.app.state.appendingPathComponent("updates/transactions/install-\(UUID().uuidString)")
             let mountDir = workDir.appendingPathComponent("mount")
             let stagedApp = workDir.appendingPathComponent("GravityBox.app")
             do {
+                try Self.verifyCachedDownload(dmgFile)
                 try fm.createDirectory(at: mountDir, withIntermediateDirectories: true)
                 let attach = Process()
                 attach.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
@@ -663,8 +663,7 @@ final class AppUpdateManager {
                 try attach.run()
                 attach.waitUntilExit()
                 guard attach.terminationStatus == 0 else {
-                    try? fm.removeItem(at: dmgFile)
-                    throw NSError(domain: "GravityBoxUpdate", code: 4, userInfo: [NSLocalizedDescriptionKey: "无法挂载更新镜像，已清理缓存文件，请点击重试。"])
+                    throw NSError(domain: "GravityBoxUpdate", code: 4, userInfo: [NSLocalizedDescriptionKey: "无法挂载更新镜像，安装包已保留，请重试或重新下载。"])
                 }
                 defer {
                     let detach = Process()
@@ -677,7 +676,6 @@ final class AppUpdateManager {
 
                 let mountedApp = mountDir.appendingPathComponent("GravityBox.app")
                 guard fm.fileExists(atPath: mountedApp.appendingPathComponent("Contents/MacOS/GravityBox").path) else {
-                    try? fm.removeItem(at: dmgFile)
                     throw NSError(domain: "GravityBoxUpdate", code: 5, userInfo: [NSLocalizedDescriptionKey: "更新镜像内未找到有效的 GravityBox.app。"])
                 }
                 try fm.copyItem(at: mountedApp, to: stagedApp)
@@ -696,14 +694,20 @@ final class AppUpdateManager {
                 try signCheck.run()
                 signCheck.waitUntilExit()
                 guard signCheck.terminationStatus == 0 else {
-                    try? fm.removeItem(at: dmgFile)
                     throw NSError(domain: "GravityBoxUpdate", code: 6, userInfo: [NSLocalizedDescriptionKey: "新版本应用包代码签名校验未通过。"])
                 }
 
+                let targetAppPath = Self.resolveInstallTargetAppPath()
+                let receipt = try UpdateInstaller.prepare(stagedApp: stagedApp, target: URL(fileURLWithPath: targetAppPath),
+                    work: workDir, version: release.version, dmg: dmgFile)
+                let helper = workDir.appendingPathComponent("installer")
+                try fm.copyItem(at: Bundle.main.executableURL!, to: helper)
+                try fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: helper.path)
+                // The signed helper is the currently running binary, independent of the app being exchanged.
+                guard fm.fileExists(atPath: receipt.path) else { throw UpdatePackageIntegrity.failure("更新恢复记录未能保存。") }
                 DispatchQueue.main.async {
                     self.app.suppressLifecycleAutoQuit(seconds: 60)
                     let myPid = getpid()
-                    let targetAppPath = Self.resolveInstallTargetAppPath()
                     let script = Self.buildDetachedUpdaterScript(
                         myPid: myPid,
                         stagedAppPath: stagedApp.path,
@@ -720,13 +724,14 @@ final class AppUpdateManager {
                         updater.waitUntilExit()
                         self.app.quitForUpdate()
                     } catch {
-                        try? fm.removeItem(at: workDir)
-                        self.transition(.failed("无法启动安装辅助脚本：\(error.localizedDescription)"))
+                        self.installationInFlight = false
+                        self.transition(.failed("无法启动安装辅助脚本，旧版本和恢复材料已保留：\(error.localizedDescription)"))
                     }
                 }
             } catch {
-                try? fm.removeItem(at: workDir)
+                if !fm.fileExists(atPath: workDir.appendingPathComponent(UpdateInstaller.receiptName).path) { try? fm.removeItem(at: workDir) }
                 DispatchQueue.main.async {
+                    self.installationInFlight = false
                     if !fm.fileExists(atPath: dmgFile.path) {
                         self.downloadedDMGURL = nil
                     }
@@ -739,20 +744,32 @@ final class AppUpdateManager {
 
 final class UpdateSheetController: NSObject, NSWindowDelegate {
     unowned let app: Assistant
-    let sheet = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 304), styleMask: [.titled], backing: .buffered, defer: false)
-    let statusHeadline = text("正在检查 GitHub Release 最新版本…", size: 11.5, weight: .medium, color: Design.secondary, wrap: true)
+    let sheet = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 292), styleMask: [.titled], backing: .buffered, defer: false)
+    let titleLabel = text("GravityBox", size: 16, weight: .bold, color: .labelColor)
+    let verPill: PillBadge
+    let githubBtn: NSButton
     let statusIconView = symbol("checkmark.seal.fill", size: 13, color: Design.blue)
     let changelogHeading = text("版本说明", size: 12, weight: .semibold, color: .labelColor)
-    let stateBadge = pillBadge("检查中", color: Design.inactivePill)
     let changelogTextView = NSTextView()
     let autoUpdateSwitch = NSSwitch()
-    let spinner = NSProgressIndicator()
     let closeBtn = button("完成", target: nil, action: #selector(closeSheet))
-    let primaryBtn = button("重新检查", target: nil, action: #selector(primaryAction))
+    let primaryBtn = DesignButton(title: "重新检查", target: nil, action: #selector(primaryAction))
+    var spinner: NSProgressIndicator { primaryBtn.activitySpinner }
 
     init(app: Assistant) {
         self.app = app
+        let ver = app.updateManager.currentVersion
+        self.verPill = pillBadge("v\(ver)", color: Design.blue)
+        self.githubBtn = button("GitHub ↗", target: nil, action: #selector(openGitHubReleases))
         super.init()
+        githubBtn.target = self
+        githubBtn.refusesFirstResponder = true
+
+        primaryBtn.bezelStyle = .rounded
+        primaryBtn.isBordered = false
+        primaryBtn.font = .systemFont(ofSize: 12, weight: .medium)
+        primaryBtn.setAccessibilityLabel("重新检查")
+
         sheet.delegate = self
         sheet.title = "软件更新"
         sheet.isReleasedWhenClosed = false
@@ -786,29 +803,16 @@ final class UpdateSheetController: NSObject, NSWindowDelegate {
             ])
         }
 
-        let ver = app.updateManager.currentVersion
-        let buildStr = app.updateManager.currentBuildDisplay
-        let titleLabel = text("GravityBox", size: 15.5, weight: .bold, color: .labelColor)
-        let verPill = pillBadge("v\(ver)", color: Design.blue)
-        let buildPill = pillBadge("构建 \(buildStr)", color: Design.inactivePill)
-        let titleRow = horizontal([titleLabel, verPill, buildPill, flexibleSpace()], spacing: 6)
+        let titleRow = horizontal([titleLabel, verPill], spacing: 7)
         titleRow.alignment = .centerY
-
-        statusHeadline.maximumNumberOfLines = 1
-        statusHeadline.lineBreakMode = .byTruncatingTail
-        let headerMeta = vertical([titleRow, statusHeadline], spacing: 4)
-        headerMeta.alignment = .leading
-        headerMeta.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        let githubBtn = button("GitHub ↗", target: self, action: #selector(openGitHubReleases))
-        let headerRow = horizontal([iconBox, headerMeta, flexibleSpace(), githubBtn], spacing: 12)
+        let headerRow = horizontal([iconBox, titleRow, flexibleSpace(), githubBtn], spacing: 12)
         headerRow.alignment = .centerY
 
         statusIconView.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 12.5, weight: .semibold)
         for c in statusIconView.constraints where c.firstAttribute == .width || c.firstAttribute == .height {
             c.constant = 16
         }
-        stateBadge.setContentCompressionResistancePriority(.required, for: .horizontal)
-        let notesHeaderRow = horizontal([statusIconView, changelogHeading, flexibleSpace(), stateBadge], spacing: 6)
+        let notesHeaderRow = horizontal([statusIconView, changelogHeading, flexibleSpace()], spacing: 6)
         notesHeaderRow.alignment = .centerY
 
         changelogTextView.isEditable = false
@@ -830,7 +834,7 @@ final class UpdateSheetController: NSObject, NSWindowDelegate {
         scroll.borderType = .noBorder
         scroll.documentView = changelogTextView
         scroll.translatesAutoresizingMaskIntoConstraints = false
-        scroll.heightAnchor.constraint(equalToConstant: 108).isActive = true
+        scroll.heightAnchor.constraint(equalToConstant: 112).isActive = true
 
         let notesDivider = divider()
         let notesStack = vertical([notesHeaderRow, notesDivider, scroll], spacing: 8)
@@ -851,23 +855,13 @@ final class UpdateSheetController: NSObject, NSWindowDelegate {
         let autoUpdateLeft = horizontal([autoUpdateSwitch, autoUpdateLabel, autoUpdateHint], spacing: 6)
         autoUpdateLeft.alignment = .centerY
 
-        spinner.style = .spinning
-        spinner.controlSize = .small
-        spinner.isDisplayedWhenStopped = false
-        spinner.isHidden = true
-        spinner.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            spinner.widthAnchor.constraint(equalToConstant: 16),
-            spinner.heightAnchor.constraint(equalToConstant: 16)
-        ])
-
         closeBtn.target = self
         closeBtn.keyEquivalent = "\u{1b}"
         primaryBtn.target = self
         primaryBtn.bezelColor = Design.blue
         primaryBtn.keyEquivalent = "\r"
 
-        let footerRow = horizontal([autoUpdateLeft, flexibleSpace(), spinner, closeBtn, primaryBtn], spacing: 8)
+        let footerRow = horizontal([autoUpdateLeft, flexibleSpace(), closeBtn, primaryBtn], spacing: 8)
         footerRow.alignment = .centerY
 
         let root = vertical([
@@ -917,6 +911,7 @@ final class UpdateSheetController: NSObject, NSWindowDelegate {
         if sheet.sheetParent == nil {
             parent.beginSheet(sheet)
         }
+        sheet.makeFirstResponder(nil)
         if case .idle = app.updateManager.state {
             app.updateManager.checkForUpdates(silent: false)
         } else if case .upToDate = app.updateManager.state {
@@ -929,106 +924,73 @@ final class UpdateSheetController: NSObject, NSWindowDelegate {
     func renderState() {
         let ver = app.updateManager.currentVersion
         let buildStr = app.updateManager.currentBuildDisplay
+        verPill.title = "v\(ver)"
         switch app.updateManager.state {
         case .idle, .checking:
-            statusHeadline.stringValue = "正在连接 GitHub Releases 检查更新…"
-            statusHeadline.textColor = Design.secondary
             setStatusIcon("arrow.triangle.2.circlepath", tint: Design.blue)
             changelogHeading.stringValue = "版本说明"
-            stateBadge.title = "正在检查"
-            stateBadge.tint = Design.inactivePill
             setNotesContent("• 当前运行版本：GravityBox v\(ver)（构建 \(buildStr)）\n• 正在同步 GitHub Release 最新版本信息，请稍候…")
-            spinner.isHidden = false
-            spinner.startAnimation(nil)
             closeBtn.title = "关闭"
             closeBtn.isEnabled = true
             primaryBtn.title = "检查中…"
+            primaryBtn.showsSpinner = true
             primaryBtn.isEnabled = false
         case .upToDate:
-            statusHeadline.stringValue = "已同步 GitHub Releases 官方更新通道"
-            statusHeadline.textColor = Design.secondary
             setStatusIcon("checkmark.seal.fill", tint: .systemGreen)
             changelogHeading.stringValue = "当前版本状态"
-            stateBadge.title = "已是最新"
-            stateBadge.tint = .systemGreen
             setNotesContent("• 当前运行版本 GravityBox v\(ver)（构建 \(buildStr)）已是最新发布版本。\n• 开启下方「自动更新」后，后台将自动检测新版本并预下载更新包。")
-            spinner.stopAnimation(nil)
-            spinner.isHidden = true
             closeBtn.title = "完成"
             closeBtn.isEnabled = true
             primaryBtn.title = "重新检查"
+            primaryBtn.showsSpinner = false
             primaryBtn.isEnabled = true
         case .updateAvailable(let release):
-            statusHeadline.stringValue = "发现新版本 v\(release.version)（发布于 \(release.publishedDate)）"
-            statusHeadline.textColor = Design.blue
             setStatusIcon("sparkles", tint: Design.blue)
             changelogHeading.stringValue = "\(release.tagName) 更新日志"
-            stateBadge.title = "可升级"
-            stateBadge.tint = Design.blue
             setNotesContent(AppUpdateManager.formatReleaseNotes(release.changelog))
-            spinner.stopAnimation(nil)
-            spinner.isHidden = true
             closeBtn.title = "稍后"
             closeBtn.isEnabled = true
             primaryBtn.title = "立即更新"
+            primaryBtn.showsSpinner = false
             primaryBtn.isEnabled = true
         case .downloading(let release):
-            statusHeadline.stringValue = "正在下载并校验 GravityBox v\(release.version)…"
-            statusHeadline.textColor = Design.blue
             setStatusIcon("arrow.down.circle.fill", tint: Design.blue)
             changelogHeading.stringValue = "\(release.tagName) 更新日志"
-            stateBadge.title = "下载校验中"
-            stateBadge.tint = Design.blue
             setNotesContent(AppUpdateManager.formatReleaseNotes(release.changelog))
-            spinner.isHidden = false
-            spinner.startAnimation(nil)
             closeBtn.title = "后台下载"
             closeBtn.isEnabled = true
             primaryBtn.title = "下载中…"
+            primaryBtn.showsSpinner = true
             primaryBtn.isEnabled = false
         case .readyToInstall(let release, _):
-            statusHeadline.stringValue = "新版本 v\(release.version) 已就绪，可立即覆盖安装"
-            statusHeadline.textColor = Design.blue
             setStatusIcon("checkmark.shield.fill", tint: .systemGreen)
             changelogHeading.stringValue = "\(release.tagName) 更新日志"
-            stateBadge.title = "SHA-256 已校验"
-            stateBadge.tint = .systemGreen
             setNotesContent(AppUpdateManager.formatReleaseNotes(release.changelog))
-            spinner.stopAnimation(nil)
-            spinner.isHidden = true
             closeBtn.title = "稍后"
             closeBtn.isEnabled = true
             primaryBtn.title = "立即更新"
+            primaryBtn.showsSpinner = false
             primaryBtn.isEnabled = true
         case .installing(let release):
-            statusHeadline.stringValue = "正在安装 GravityBox v\(release.version) 并准备重启…"
-            statusHeadline.textColor = Design.blue
             setStatusIcon("gearshape.2.fill", tint: Design.blue)
             changelogHeading.stringValue = "\(release.tagName) 更新日志"
-            stateBadge.title = "正在安装"
-            stateBadge.tint = Design.blue
             setNotesContent(AppUpdateManager.formatReleaseNotes(release.changelog))
-            spinner.isHidden = false
-            spinner.startAnimation(nil)
             closeBtn.title = "稍后"
             closeBtn.isEnabled = false
             primaryBtn.title = "正在安装…"
+            primaryBtn.showsSpinner = true
             primaryBtn.isEnabled = false
         case .failed(let message):
-            statusHeadline.stringValue = message
-            statusHeadline.textColor = accessibleDangerColor()
             setStatusIcon("exclamationmark.triangle.fill", tint: accessibleWarningColor())
             changelogHeading.stringValue = "检查结果"
-            stateBadge.title = "更新受阻"
-            stateBadge.tint = .systemOrange
             setNotesContent("• 未能完成在线更新：\(message)\n• 您可以点击右上角「GitHub ↗」直接查看或下载最新 Release 安装包。")
-            spinner.stopAnimation(nil)
-            spinner.isHidden = true
             closeBtn.title = "关闭"
             closeBtn.isEnabled = true
             primaryBtn.title = "重试"
+            primaryBtn.showsSpinner = false
             primaryBtn.isEnabled = true
         }
+        primaryBtn.setAccessibilityLabel(primaryBtn.title)
     }
 
     @objc func toggleAutoUpdate() {
@@ -1038,8 +1000,15 @@ final class UpdateSheetController: NSObject, NSWindowDelegate {
         do {
             try app.configuration.save()
             app.configureAutoUpdateTimer()
-            if next, let release = app.updateManager.availableRelease, !app.updateManager.hasDownloadedUpdateReady {
-                app.updateManager.preDownloadRelease(release, silent: true)
+            app.syncUpdatePromptControls()
+            if next {
+                if let release = app.updateManager.availableRelease {
+                    if !app.updateManager.hasDownloadedUpdateReady {
+                        app.updateManager.preDownloadRelease(release, silent: true)
+                    }
+                } else {
+                    app.updateManager.checkForUpdates(silent: true)
+                }
             }
         } catch {
             app.configuration.value.autoUpdateEnabled = previous

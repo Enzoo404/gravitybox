@@ -31,6 +31,18 @@ type Journal = {
   keychainAfterDigest?: string;
   at: string;
 };
+type RollbackRecord = {
+  version: 1;
+  phase: 'prepared' | 'committed';
+  databasePath: string;
+  hadDatabase: boolean;
+  rowsBefore: Rows;
+  rowsAfter: Rows;
+  files: SavedFile[];
+  keychainBefore: string | null;
+  keychainAfter: string | null;
+  originalJournal: Journal;
+};
 
 function sha256(content: string): string {
   return createHash('sha256').update(content).digest('hex');
@@ -41,13 +53,15 @@ function rowsDigest(rows: Rows): string {
 
 // sqlite3 stays in BEGIN IMMEDIATE while the other resources are committed. SQL goes through
 // stdin, so neither tokens nor database values appear in command arguments or diagnostics.
-class DatabaseTransaction {
+export class DatabaseTransaction {
   private child;
   private output = '';
   private pending?: { marker: string; resolve: (s: string) => void; reject: (e: Error) => void };
   private failed = false;
+  private exited: Promise<void>;
   constructor(path: string) {
     this.child = spawn('/usr/bin/sqlite3', ['-batch', '-bail', path], { stdio: ['pipe', 'pipe', 'pipe'] });
+    this.exited = new Promise(resolve => this.child.once('close', () => resolve()));
     this.child.stdin.on('error', () => this.fail());
     this.child.stderr.on('data', () => this.fail());
     this.child.on('error', () => this.fail());
@@ -82,7 +96,11 @@ class DatabaseTransaction {
     await this.sql(`DELETE FROM ItemTable WHERE key IN (${KEYS.map(quote).join(',')});\n${Object.entries(rows).map(([k, v]) => `INSERT INTO ItemTable(key,value) VALUES(${quote(k)},${quote(v)});`).join('\n')}`);
   }
   async finish(commit: boolean) { try { await this.sql(commit ? 'COMMIT;' : 'ROLLBACK;'); } finally { this.child.stdin.end(); } }
-  close() { this.child.stdin.end(); }
+  async close() {
+    this.child.stdin.end();
+    const timer = setTimeout(() => this.child.kill(), 1500);
+    try { await this.exited; } finally { clearTimeout(timer); }
+  }
 }
 
 
@@ -142,6 +160,7 @@ export class AccountSwitchService {
   constructor(private manager: AccountsManager, private options: {
     stateDir: string; profile: string; externalDir: string; keychain?: KeychainAdapter; channel?: ApplicationChannel; target?: ApplicationTarget;
     isRunning?: () => Promise<boolean>; // Isolated tests only; never accepted over IPC.
+    databaseFactory?: (path: string) => DatabaseTransaction; // Fault injection, never accepted over IPC.
   }) {
     this.keychain = options.keychain ?? new SystemKeychainAdapter();
     this.target = options.target ?? applicationTarget(options.channel ?? 'stable', undefined, { profile: options.profile });
@@ -156,6 +175,65 @@ export class AccountSwitchService {
   }
 
   private assertSupported() {}
+  private get rollbackPath() { return this.journalPath + '.rollback.json'; }
+  private database(path: string) { return this.options.databaseFactory?.(path) ?? new DatabaseTransaction(path); }
+
+  private completedRollback(journal: Journal): Journal {
+    return { ...journal, before: sanitizeJournalRows(journal.before), after: sanitizeJournalRows(journal.after),
+      afterDigest: undefined, files: sanitizeJournalFiles(journal.files), keychainBefore: null,
+      keychainAfter: '', keychainAfterDigest: undefined, status: 'rolled-back' };
+  }
+
+  /** Reconcile an interrupted undo using the committed database as the decision point.
+   * All resources are compared against both recorded states before any overwrite.
+   * The durable record survives a compensation failure and can be retried after restart.
+   */
+  private async reconcileRollback(): Promise<'none' | 'restored' | 'rolled-back'> {
+    let record: RollbackRecord;
+    try { await this.regular(this.rollbackPath); record = JSON.parse(await readFile(this.rollbackPath, 'utf8')); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'none'; throw error; }
+    const dbPath = join(this.options.profile, 'User', 'globalStorage', 'state.vscdb');
+    const allowed = new Set([join(this.options.stateDir, 'accounts.json'), join(this.options.externalDir, 'accounts.json')]);
+    if (record.version !== 1 || !['prepared', 'committed'].includes(record.phase) || record.databasePath !== dbPath ||
+        !Array.isArray(record.files) || record.files.some(f => !allowed.has(f.path) &&
+          !(f.path.startsWith(join(this.options.stateDir, 'accounts') + '/') && /^[a-zA-Z0-9_-]+\.json$/.test(f.path.slice(join(this.options.stateDir, 'accounts').length + 1))))) {
+      throw new Error('撤销恢复记录身份不匹配，原材料已保留');
+    }
+    const currentJournal = JSON.parse(await readFile(this.journalPath, 'utf8')) as Journal;
+    const original = record.originalJournal;
+    const knownJournals = [original, { ...original, status: 'rolling-back' }, this.completedRollback(original)];
+    if (!knownJournals.some(value => JSON.stringify(value) === JSON.stringify(currentJournal))) throw new Error('切号恢复记录已被外部修改，停止覆盖');
+    if (await this.optionalRegular(dbPath) !== record.hadDatabase) throw new Error('登录数据库已变化，撤销恢复材料已保留');
+    const tx = record.hadDatabase ? new DatabaseTransaction(dbPath) : undefined;
+    try {
+      await tx?.begin();
+      const rows = tx ? await tx.rows() : {};
+      const isBefore = rowsDigest(rows) === rowsDigest(record.rowsBefore), isAfter = rowsDigest(rows) === rowsDigest(record.rowsAfter);
+      if (!isBefore && !isAfter) throw new Error('登录数据库已被外部修改，停止自动补偿');
+      const committed = isAfter && (!isBefore || record.phase === 'committed' || currentJournal.status === 'rolled-back');
+      for (const file of record.files) {
+        await this.regular(file.path);
+        const value = await readFile(file.path, 'utf8');
+        if (value !== file.before && value !== file.after) throw new Error('账号文件已被外部修改，停止自动补偿');
+      }
+      const password = await this.keychain.readPassword('gemini', 'antigravity');
+      if (password !== record.keychainBefore && password !== record.keychainAfter) throw new Error('钥匙串已被外部修改，停止自动补偿');
+      for (const file of record.files) {
+        const desired = committed ? file.after : file.before;
+        if (await readFile(file.path, 'utf8') !== desired) await atomicText(file.path, desired);
+      }
+      const desiredPassword = committed ? record.keychainAfter : record.keychainBefore;
+      if (password !== desiredPassword) {
+        if (desiredPassword === null) await this.keychain.deletePassword('gemini', 'antigravity');
+        else await this.keychain.writePassword('gemini', 'antigravity', desiredPassword);
+      }
+      // No database rewrite: its observed committed state selected which file/keychain state to keep.
+      await tx?.finish(false);
+      await atomicJson(this.journalPath, committed ? this.completedRollback(original) : original);
+      await unlink(this.rollbackPath);
+      return committed ? 'rolled-back' : 'restored';
+    } finally { await tx?.close(); }
+  }
   private async guardStopped() {
     const candidatePrefixes = Array.from(
       // Insiders shares official credentials: block switching while it runs, without managing it.
@@ -246,6 +324,7 @@ export class AccountSwitchService {
     if (!['all', 'app'].includes(target)) throw new Error('目前仅支持切换 Antigravity 桌面账号');
     return this.locked(async () => {
       await this.guardStopped();
+      await this.reconcileRollback();
       let previous: Journal | undefined;
       try { previous = JSON.parse(await readFile(this.journalPath, 'utf8')); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error('切换恢复记录无法读取，请先检查数据目录'); }
       if (previous && !['complete', 'rolled-back', 'cleared'].includes(previous.status)) throw new Error('上次切换未完成，请先使用“撤销上次账号切换”恢复');
@@ -254,7 +333,7 @@ export class AccountSwitchService {
       if (!acc.token.access_token || acc.token.access_token === 'pending_refresh' || acc.token.expiry_timestamp <= Date.now() / 1000 + 30) throw new Error('请先刷新此账号配额以更新登录凭据');
       const db = join(this.options.profile, 'User', 'globalStorage', 'state.vscdb');
       const hasDb = await this.optionalRegular(db);
-      const transaction = hasDb ? new DatabaseTransaction(db) : undefined;
+      const transaction = hasDb ? this.database(db) : undefined;
       let journal: Journal | undefined, committed = false;
       try {
         let before: Rows = {}, after: Rows = {};
@@ -323,19 +402,21 @@ export class AccountSwitchService {
           throw new Error(error instanceof Error ? error.message : '切换失败，原状态已恢复');
         }
         throw new Error('登录记录已提交，但完成记录未保存；请保留数据目录供恢复核查');
-      } finally { transaction?.close(); }
+      } finally { await transaction?.close(); }
     });
   }
   async recoveryInfo() {
     try {
       const raw=await readFile(this.journalPath,'utf8'), journal=JSON.parse(raw) as Journal;
       const at=Date.parse(journal.at), expiresAt=Number.isFinite(at)?new Date(at+7*86400000).toISOString():null;
-      const pending=!['complete','rolled-back','cleared'].includes(journal.status);
-      return {available:journal.status!=='cleared',status:journal.status,createdAt:journal.at,expiresAt,pending,expired:!pending&&(!expiresAt||Date.parse(expiresAt)<Date.now()),digest:sha256(raw),containsCredentials:!!Object.keys(journal.before??{}).length||!!journal.keychainBefore};
+      const interruptedUndo = await this.optionalRegular(this.rollbackPath);
+      const pending=interruptedUndo||!['complete','rolled-back','cleared'].includes(journal.status);
+      return {available:journal.status!=='cleared'||interruptedUndo,status:interruptedUndo?'rollback-pending':journal.status,createdAt:journal.at,expiresAt,pending,expired:!pending&&(!expiresAt||Date.parse(expiresAt)<Date.now()),digest:sha256(raw),containsCredentials:interruptedUndo||!!Object.keys(journal.before??{}).length||!!journal.keychainBefore};
     } catch(error) {if((error as NodeJS.ErrnoException).code==='ENOENT')return{available:false}; throw new Error('恢复记录无法读取，原文件已保留');}
   }
   async clearRecovery(expectedDigest: string) {
     return this.locked(async()=>{
+      if (await this.optionalRegular(this.rollbackPath)) throw new Error('撤销尚未完成，恢复材料不可清除；请先重试撤销');
       const raw=await readFile(this.journalPath,'utf8'), journal=JSON.parse(raw) as Journal;
       if(sha256(raw)!==expectedDigest)throw new Error('恢复记录已变化，请重新预览');
       if(!['complete','rolled-back'].includes(journal.status))throw new Error('未完成的切号恢复材料不可清除');
@@ -347,17 +428,20 @@ export class AccountSwitchService {
     this.assertSupported();
     return this.locked(async () => {
       await this.guardStopped();
+      if (await this.reconcileRollback() === 'rolled-back') return { message: '已完成上次中断的账号恢复；下次打开 Antigravity 后生效' };
       const journal = JSON.parse(await readFile(this.journalPath, 'utf8')) as Journal;
       if (journal.status === 'rolled-back') throw new Error('上次切换已撤销');
       if (journal.status === 'cleared') throw new Error('恢复材料已由用户清除');
       if (journal.status === 'complete' && (!Number.isFinite(Date.parse(journal.at)) || Date.now()-Date.parse(journal.at)>7*86400000)) throw new Error('完成记录已超过 7 天撤销期；材料保留，可在设置中核对和清除');
       const db = join(this.options.profile, 'User', 'globalStorage', 'state.vscdb');
       const hasDb = await this.optionalRegular(db);
-      const transaction = hasDb ? new DatabaseTransaction(db) : undefined;
+      const transaction = hasDb ? this.database(db) : undefined;
+      let record: RollbackRecord | undefined;
       try {
+        let rows: Rows = {};
         if (transaction) {
           await transaction.begin();
-          const rows = await transaction.rows();
+          rows = await transaction.rows();
           const currentCanonical = JSON.stringify(Object.entries(rows).sort());
           const beforeCanonical = JSON.stringify(Object.entries(journal.before).sort());
           const matchesBefore = currentCanonical === beforeCanonical;
@@ -365,29 +449,38 @@ export class AccountSwitchService {
           const matchesAfterDigest = journal.afterDigest ? currentDigest === journal.afterDigest : false;
           const matchesAfterRows = journal.after ? currentCanonical === JSON.stringify(Object.entries(journal.after).sort()) : false;
           if (!matchesBefore && !matchesAfterDigest && !matchesAfterRows) throw new Error('登录数据库已变化，停止自动回滚以保留新状态');
-          await this.restoreFiles(journal.files, journal.keychainBefore, journal.keychainAfter, journal.keychainAfterDigest);
-          await transaction.replace(journal.before);
-          await this.guardStopped(); await transaction.finish(true);
         } else {
           if (Object.keys(journal.before || {}).length > 0) throw new Error('登录数据库已变化，停止自动回滚以保留新状态');
-          await this.restoreFiles(journal.files, journal.keychainBefore, journal.keychainAfter, journal.keychainAfterDigest);
-          await this.guardStopped();
         }
-        // 撤销完成后清除待恢复凭据，杜绝磁盘长期残留旧 Token
-        await atomicJson(this.journalPath, {
-          ...journal,
-          before: sanitizeJournalRows(journal.before),
-          after: sanitizeJournalRows(journal.after),
-          afterDigest: undefined,
-          files: sanitizeJournalFiles(journal.files),
-          keychainBefore: null,
-          keychainAfter: '',
-          keychainAfterDigest: undefined,
-          status: 'rolled-back'
-        });
+        const snapshots: SavedFile[] = [];
+        for (const file of journal.files) {
+          await this.regular(file.path);
+          snapshots.push({ path: file.path, before: await readFile(file.path, 'utf8'), after: file.before });
+        }
+        record = { version: 1, phase: 'prepared', databasePath: db, hadDatabase: hasDb, rowsBefore: rows, rowsAfter: journal.before,
+          files: snapshots, keychainBefore: await this.keychain.readPassword('gemini', 'antigravity'), keychainAfter: journal.keychainBefore, originalJournal: journal };
+        await atomicJson(this.rollbackPath, record);
+        await atomicJson(this.journalPath, { ...journal, status: 'rolling-back' });
+        await this.restoreFiles(journal.files, journal.keychainBefore, journal.keychainAfter, journal.keychainAfterDigest);
+        if (transaction) await transaction.replace(journal.before);
+        await this.guardStopped();
+        if (transaction) await transaction.finish(true);
+        record.phase = 'committed'; await atomicJson(this.rollbackPath, record);
+        await atomicJson(this.journalPath, this.completedRollback(journal));
+        await unlink(this.rollbackPath);
         return { message: '已恢复切换前的账号记录；下次打开 Antigravity 后生效' };
-      } catch (error) { await transaction?.finish(false).catch(() => {}); throw error; }
-      finally { transaction?.close(); }
+      } catch (error) {
+        await transaction?.finish(false).catch(() => {});
+        await transaction?.close();
+        if (record) {
+          try {
+            if (await this.reconcileRollback() === 'rolled-back') return { message: '已恢复切换前的账号记录；下次打开 Antigravity 后生效' };
+          } catch {
+            throw new Error('撤销未完成，自动补偿受阻；恢复记录已保留，请退出 Antigravity 后重试撤销');
+          }
+        }
+        throw error;
+      } finally { await transaction?.close(); }
     });
   }
 }

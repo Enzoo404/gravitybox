@@ -248,5 +248,8 @@ test('check-docs CLI：差异 exit 1，一致 exit 0，--json 可解析', async 
     const parsed = JSON.parse(jsonRun.stdout);
     assert.equal(parsed.ok, false);
     assert.ok(parsed.errorCount > 0);
+
+    const sourceOnlyRun = await run(process.execPath, [join(repo, 'tools/check-docs.mjs'), '--source-only'], { cwd: repo });
+    assert.match(sourceOnlyRun.stdout, /发现 0 处不一致/);
   } finally { await cleanup([consistent.root, stale.root]); }
 });

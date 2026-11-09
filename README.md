@@ -191,7 +191,7 @@ GRAVITYBOX_GOOGLE_CLIENT_SECRET=your_client_secret
 ## 隐私安全与架构
 
 - **零遥测与零埋点**：不包含任何第三方统计、崩溃上报或行为追踪代码；
-- **凭据系统级隔离**：所有账号的 OAuth 令牌与敏感凭据仅存放在本机 **macOS 钥匙串（Keychain）** 中，本地配置文件（`accounts.json`）与历史日志仅保留脱敏索引；
+- **账号与凭据本机存储**：账号库位于 `~/Library/Application Support/GravityBox`；`accounts/<id>.json` 以未加密 JSON 保存账号信息及 OAuth 凭据（包括 Access Token、Refresh Token），通过仅当前用户可读写的文件权限（`0600`）限制访问。应用同时使用 macOS 钥匙串读取或写入 Antigravity 登录态；切号恢复记录也可能保留恢复所需凭据。上述用户文件不打包进安装包或公开源码，请勿公开分享整个数据目录或含凭据备份；
 - **只读数据库快照**：统计 Token 用量时，在独立 Worker 线程中以只读模式读取本地会话数据库，不写入、不加锁，不阻塞 Antigravity 的正常读写；
 - **外联边界透明**：应用仅在以下明确场景发起网络请求：
   1. 连接 Google 官方接口完成账号 OAuth 授权与云端配额查询；

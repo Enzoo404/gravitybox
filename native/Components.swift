@@ -431,15 +431,27 @@ final class SidebarLaunchButton: NSButton {
             }
         }
     }
-    private let iconView = NSImageView()
-    private let titleField: NSTextField
+    let iconView = NSImageView()
+    let titleField: NSTextField
+    let badgeLabel = text("", size: 11, weight: .semibold, color: Design.blue)
+    let isUpdatePrompt: Bool
+
+    var badgeText: String {
+        get { badgeLabel.stringValue }
+        set {
+            badgeLabel.stringValue = newValue
+            badgeLabel.isHidden = newValue.isEmpty
+            needsDisplay = true
+        }
+    }
 
     override var intrinsicContentSize: NSSize {
         NSSize(width: NSView.noIntrinsicMetric, height: 36)
     }
 
-    init(title: String = "打开 Antigravity", target: AnyObject?, action: Selector) {
-        self.titleField = text(title, size: 13, weight: .medium, color: Design.primary.withAlphaComponent(0.86))
+    init(title: String = "打开 Antigravity", symbolName: String = "arrow.up.forward.app", isUpdatePrompt: Bool = false, target: AnyObject?, action: Selector) {
+        self.isUpdatePrompt = isUpdatePrompt
+        self.titleField = text(title, size: 13, weight: isUpdatePrompt ? .semibold : .medium, color: Design.primary.withAlphaComponent(0.86))
         super.init(frame: .zero)
         self.title = title
         self.target = target
@@ -452,8 +464,8 @@ final class SidebarLaunchButton: NSButton {
         heightAnchor.constraint(equalToConstant: 36).isActive = true
         setAccessibilityLabel(title)
 
-        iconView.image = NSImage(systemSymbolName: "arrow.up.forward.app", accessibilityDescription: nil)
-        iconView.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 14.5, weight: .medium)
+        iconView.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)
+        iconView.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 14.5, weight: isUpdatePrompt ? .semibold : .medium)
         iconView.translatesAutoresizingMaskIntoConstraints = false
         iconView.setAccessibilityElement(false)
         NSLayoutConstraint.activate([
@@ -462,16 +474,24 @@ final class SidebarLaunchButton: NSButton {
         ])
 
         titleField.lineBreakMode = .byTruncatingTail
-        titleField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        titleField.setContentCompressionResistancePriority(.required, for: .horizontal)
         titleField.setAccessibilityElement(false)
 
-        let row = horizontal([iconView, titleField], spacing: 10)
+        badgeLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .semibold)
+        badgeLabel.isHidden = true
+        badgeLabel.setContentHuggingPriority(.required, for: .horizontal)
+        badgeLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+        badgeLabel.setAccessibilityElement(false)
+
+        let row = horizontal([iconView, titleField, flexibleSpace(), badgeLabel], spacing: 10)
+        row.setCustomSpacing(6, after: titleField)
         row.alignment = .centerY
+        row.detachesHiddenViews = true
         addSubview(row)
         row.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             row.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            row.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -10),
+            row.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
             row.centerYAnchor.constraint(equalTo: centerYAnchor)
         ])
     }
@@ -499,20 +519,38 @@ final class SidebarLaunchButton: NSButton {
         let rect = bounds.insetBy(dx: 0.5, dy: 1.5)
         let path = NSBezierPath(roundedRect: rect, xRadius: 9, yRadius: 9)
 
-        if isHighlighted {
-            Design.blue.withAlphaComponent(isDark ? 0.20 : 0.12).setFill()
-            path.fill()
-        } else if hoverProgress > 0.02 {
-            let hoverFill = isDark ? NSColor.white.withAlphaComponent(0.08 * hoverProgress) : NSColor.black.withAlphaComponent(0.048 * hoverProgress)
-            hoverFill.setFill()
-            path.fill()
-        }
-
         let accentTint = isDark
             ? NSColor(srgbRed: 0.38, green: 0.68, blue: 1.0, alpha: 1.0)
             : Design.blue
-        iconView.contentTintColor = active ? accentTint : Design.secondary
-        titleField.textColor = active ? (isDark ? .white : Design.blue) : Design.primary.withAlphaComponent(0.84)
+
+        if isUpdatePrompt {
+            if isHighlighted {
+                Design.blue.withAlphaComponent(isDark ? 0.26 : 0.16).setFill()
+                path.fill()
+            } else {
+                let baseAlpha: CGFloat = isDark ? 0.15 : 0.085
+                let hoverBoost: CGFloat = (isDark ? 0.07 : 0.05) * hoverProgress
+                Design.blue.withAlphaComponent(baseAlpha + hoverBoost).setFill()
+                path.fill()
+            }
+            Design.inactivePillBorder.setStroke()
+            path.lineWidth = 0.75
+            path.stroke()
+            iconView.contentTintColor = accentTint
+            titleField.textColor = isDark ? .white : Design.blue
+            badgeLabel.textColor = accentTint.withAlphaComponent(isDark ? 0.88 : 0.82)
+        } else {
+            if isHighlighted {
+                Design.blue.withAlphaComponent(isDark ? 0.20 : 0.12).setFill()
+                path.fill()
+            } else if hoverProgress > 0.02 {
+                let hoverFill = isDark ? NSColor.white.withAlphaComponent(0.08 * hoverProgress) : NSColor.black.withAlphaComponent(0.048 * hoverProgress)
+                hoverFill.setFill()
+                path.fill()
+            }
+            iconView.contentTintColor = active ? accentTint : Design.secondary
+            titleField.textColor = active ? (isDark ? .white : Design.blue) : Design.primary.withAlphaComponent(0.84)
+        }
 
         if window?.firstResponder === self {
             Design.blue.setStroke()

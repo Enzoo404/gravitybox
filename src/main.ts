@@ -635,14 +635,8 @@ async function run() {
               const bActive = b.id === effectiveActiveId ? 1 : 0;
               return bActive - aActive;
             });
-            let pendingSwitch = false;
-            try {
-              const journalPath = join(channelStateDir, 'account-switch-journal-stable.json');
-              const journal = JSON.parse(await readFile(journalPath, 'utf8'));
-              if (journal && !['complete', 'rolled-back', 'cleared'].includes(journal.status)) {
-                pendingSwitch = true;
-              }
-            } catch {}
+            const recovery = await switchService.recoveryInfo().catch(() => ({ available: true, pending: true, status: 'unreadable' }));
+            const pendingSwitch = 'pending' in recovery && recovery.pending === true;
             reply({
               ok: true,
               activeId: effectiveActiveId,
@@ -651,7 +645,7 @@ async function run() {
               accounts: accountsWithQuota,
               targetIde: index.current_target_ide,
               pendingSwitch,
-              recovery: await switchService.recoveryInfo().catch(() => ({ available: true, pending: true, status: 'unreadable' })),
+              recovery,
             });
             return;
           }

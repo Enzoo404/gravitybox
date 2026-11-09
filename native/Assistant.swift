@@ -83,6 +83,7 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     var reachable = false
     var quotaRefreshTimer: Timer?
     var autoUpdateTimer: Timer?
+    private var updateLaunchAcknowledged = false
     lazy var updateManager = AppUpdateManager(app: self)
     var timer: Timer?
     var directorySource: DispatchSourceFileSystemObject?
@@ -106,6 +107,7 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     static var applicationChannel = "stable"
     static var selectedTarget: DesktopApplicationTarget { DesktopApplicationTarget(channel: applicationChannel) }
     var targetApplication: DesktopApplicationTarget { Self.selectedTarget }
+    weak var installUpdateButton: SidebarLaunchButton?
     weak var launchApplicationButton: SidebarLaunchButton?
     let state: URL
     init(state: URL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/GravityBox")) { self.state = state; super.init() }
@@ -186,9 +188,6 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         // 登录项启动时没有窗口，历史上因此从未创建定时器，菜单栏配额永远不更新。
         configureRefreshTimer()
         if quotaRefreshTimer == nil { configureQuotaRefreshTimer() }
-        DispatchQueue.global(qos: .utility).async { [weak self] in
-            self?.updateManager.cleanupObsoleteUpdateArtifacts(restartedAfterUpdate: restartedAfterUpdate, detachMountedVolumes: true)
-        }
         configureAutoUpdateTimer()
         refresh()
     }
@@ -914,6 +913,16 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
                 brandHeader.heightAnchor.constraint(equalToConstant: 28)
             ])
 
+            let installBtn = SidebarLaunchButton(
+                title: "安装更新",
+                symbolName: "arrow.down.circle",
+                isUpdatePrompt: true,
+                target: self,
+                action: #selector(installUpdateFromSidebar)
+            )
+            installBtn.isHidden = true
+            installUpdateButton = installBtn
+
             let globalOpenBtn = SidebarLaunchButton(title: "打开 Antigravity", target: self, action: #selector(openAntigravity))
             launchApplicationButton = globalOpenBtn
 
@@ -932,7 +941,7 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
                 serviceFootnoteLabel.bottomAnchor.constraint(equalTo: footnoteBox.bottomAnchor)
             ])
 
-            let bottomStack = vertical([footnoteBox, globalOpenBtn], spacing: 6)
+            let bottomStack = vertical([footnoteBox, installBtn, globalOpenBtn], spacing: 6)
             bottomStack.detachesHiddenViews = true
             footnoteBox.isHidden = reachable
             let sideStack = vertical([brandHeader, scroll, bottomStack], spacing: 10)
@@ -955,7 +964,9 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             fillWidth(scroll, in: sideStack)
             fillWidth(bottomStack, in: sideStack)
             fillWidth(footnoteBox, in: bottomStack)
+            fillWidth(installBtn, in: bottomStack)
             fillWidth(globalOpenBtn, in: bottomStack)
+            syncUpdatePromptControls()
             scroll.setContentHuggingPriority(.defaultLow, for: .vertical)
 
             let left = NSSplitViewItem(sidebarWithViewController: sideController)
@@ -1496,6 +1507,10 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             case .success(let value):
                 let prevAccountsRevision = self.statusValue.accountsRevision
                 let prevLiveEmail = self.statusValue.liveAccountEmail
+                if !self.updateLaunchAcknowledged {
+                    self.updateLaunchAcknowledged = UpdateInstaller.acknowledge(arguments: CommandLine.arguments, state: self.state, bundle: Bundle.main.bundleURL)
+                }
+                self.updateManager.cleanupAfterSuccessfulLaunch()
                 self.reachable = true; self.recoveryAttempts = 0; var raw=value["status"] as? [String:Any] ?? [:];raw["taskRevision"]=value["taskRevision"];raw["runningTasks"]=value["runningTasks"];self.statusValue=self.mergeStatusSnapshot(raw, previous:self.statusValue);if let rows=value["tasks"] as? [[String:Any]]{self.taskRows=rows;self.lastTaskRevision=value["taskRevision"] as? Int ?? 0}
                 if includeAccounts {
                     let accountsChanged = (!self.statusValue.accountsRevision.isEmpty && self.statusValue.accountsRevision != prevAccountsRevision) || self.statusValue.liveAccountEmail != prevLiveEmail
@@ -1629,12 +1644,43 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         }
         return merged
     }
+    func syncUpdatePromptControls() {
+        preferencesController?.refreshUpdateRowState()
+        if let release = updateManager.availableRelease {
+            installUpdateButton?.badgeText = "v\(release.version)"
+            installUpdateButton?.toolTip = updateManager.hasDownloadedUpdateReady
+                ? "新版本 GravityBox v\(release.version) 已预下载就绪，点击立即安装"
+                : "发现新版本 GravityBox v\(release.version)，点击安装更新"
+            installUpdateButton?.isHidden = false
+        } else {
+            installUpdateButton?.badgeText = ""
+            installUpdateButton?.toolTip = nil
+            installUpdateButton?.isHidden = true
+        }
+    }
+    @objc func installUpdateFromSidebar() {
+        guard let release = updateManager.availableRelease else {
+            checkForUpdatesFromMenu()
+            return
+        }
+        showPanel()
+        if let window {
+            if preferencesController == nil {
+                preferencesController = PreferencesController(app: self)
+            }
+            if preferencesController?.updateSheet == nil {
+                preferencesController?.updateSheet = UpdateSheetController(app: self)
+            }
+            preferencesController?.updateSheet?.show(in: window)
+        }
+        updateManager.installRelease(release)
+    }
     func configureAutoUpdateTimer() {
         autoUpdateTimer?.invalidate()
         autoUpdateTimer = nil
         #if !NATIVE_UI_TEST
         guard configuration?.value.autoUpdateEnabled == true else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 10.0) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
             guard let self, !self.quitting, self.configuration?.value.autoUpdateEnabled == true else { return }
             self.updateManager.checkForUpdates(silent: true)
         }
@@ -1796,6 +1842,10 @@ private enum AntigravityLifecycleAgent {
 
 @main struct GravityBoxMain {
     static func main() {
+        if let i = CommandLine.arguments.firstIndex(of: "--install-update"), i + 1 < CommandLine.arguments.count {
+            do { try UpdateInstaller.run(receiptURL: URL(fileURLWithPath: CommandLine.arguments[i + 1])); exit(0) }
+            catch { fputs("GravityBox 更新未完成；恢复材料已保留。\n", stderr); exit(1) }
+        }
         if CommandLine.arguments.contains("--lifecycle-agent") {
             AntigravityLifecycleAgent.run()
         }

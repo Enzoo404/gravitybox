@@ -487,12 +487,58 @@ class DesignButton: NSButton {
     override func mouseEntered(with event: NSEvent) { if isEnabled { hovered = true } }
     override func mouseExited(with event: NSEvent) { hovered = false }
 
+    private var spinnerTimer: Timer?
+    private var spinnerPhase: Int = 0
+
+    let activitySpinner: NSProgressIndicator = {
+        let s = NSProgressIndicator()
+        s.style = .spinning
+        s.controlSize = .small
+        s.isDisplayedWhenStopped = false
+        s.isHidden = true
+        s.alphaValue = 0.001
+        s.translatesAutoresizingMaskIntoConstraints = false
+        return s
+    }()
+
+    var showsSpinner: Bool = false {
+        didSet {
+            guard oldValue != showsSpinner else { return }
+            if activitySpinner.superview == nil {
+                addSubview(activitySpinner)
+                NSLayoutConstraint.activate([
+                    activitySpinner.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+                    activitySpinner.centerYAnchor.constraint(equalTo: centerYAnchor),
+                    activitySpinner.widthAnchor.constraint(equalToConstant: 13),
+                    activitySpinner.heightAnchor.constraint(equalToConstant: 13)
+                ])
+            }
+            activitySpinner.isHidden = !showsSpinner
+            spinnerTimer?.invalidate()
+            spinnerTimer = nil
+            if showsSpinner {
+                spinnerPhase = 0
+                if Design.shouldAnimate(in: self) {
+                    let t = Timer(timeInterval: 1.0 / 12.0, repeats: true) { [weak self] _ in
+                        guard let self, self.showsSpinner else { return }
+                        self.spinnerPhase = (self.spinnerPhase + 1) % 8
+                        self.needsDisplay = true
+                    }
+                    RunLoop.main.add(t, forMode: .common)
+                    spinnerTimer = t
+                }
+            }
+            invalidateIntrinsicContentSize()
+            needsDisplay = true
+        }
+    }
+
     override var intrinsicContentSize: NSSize {
         if title.isEmpty, image != nil {
             return NSSize(width: 30, height: 28)
         }
         let width = (title as NSString).size(withAttributes: [.font: font ?? NSFont.systemFont(ofSize: 12, weight: .medium)]).width
-        let iconExtra: CGFloat = image != nil ? 18 : 0
+        let iconExtra: CGFloat = (image != nil || showsSpinner) ? 18 : 0
         return NSSize(width: ceil(width) + 24 + iconExtra, height: 28)
     }
 
@@ -520,28 +566,31 @@ class DesignButton: NSButton {
         let path = NSBezierPath(roundedRect: rect, xRadius: cornerR, yRadius: cornerR)
 
         if primary {
-            let enableAlpha: CGFloat = isEnabled ? 1.0 : 0.42
-            let topBlue = Design.color(0x1A82FF, 0x389BFF).withAlphaComponent((1.0 - 0.12 * pp + 0.04 * hp) * enableAlpha)
-            let botBlue = Design.blue.withAlphaComponent((0.94 - 0.12 * pp) * enableAlpha)
-            NSGraphicsContext.saveGraphicsState()
-            if isEnabled && !inPopover {
+            let activeLook = isEnabled || showsSpinner
+            let topBlue = activeLook
+                ? Design.color(0x1A82FF, 0x389BFF).withAlphaComponent(1.0 - 0.12 * pp + 0.04 * hp)
+                : Design.color(0x4CA0FF, 0x2B7AE0)
+            let botBlue = activeLook
+                ? Design.blue.withAlphaComponent(0.96 - 0.12 * pp)
+                : Design.color(0x2E84EB, 0x1F68C9)
+            if activeLook && !inPopover {
+                NSGraphicsContext.saveGraphicsState()
                 let btnShadow = NSShadow()
                 btnShadow.shadowColor = Design.blue.withAlphaComponent(isDark ? 0.32 : 0.22)
                 btnShadow.shadowOffset = NSSize(width: 0, height: -1.0)
                 btnShadow.shadowBlurRadius = 2.5
                 btnShadow.set()
-            }
-            path.fill()
-            NSGraphicsContext.restoreGraphicsState()
-            if let grad = NSGradient(starting: topBlue, ending: botBlue) {
-                grad.draw(in: path, angle: 90)
+                botBlue.setFill()
+                path.fill()
+                NSGraphicsContext.restoreGraphicsState()
             } else {
                 botBlue.setFill()
                 path.fill()
             }
-            if isEnabled {
-                Design.drawSpecularBevel(in: rect, cornerRadius: cornerR, isDark: true)
+            if let grad = NSGradient(starting: topBlue, ending: botBlue) {
+                grad.draw(in: path, angle: 90)
             }
+            Design.drawSpecularBevel(in: rect, cornerRadius: cornerR, isDark: true)
         } else if inPopover {
             // Pure translucent glass overlay that blends with the popover's vibrant wallpaper tint in both Light and Dark mode.
             let enableScale: CGFloat = isEnabled ? 1.0 : 0.45
@@ -617,13 +666,37 @@ class DesignButton: NSButton {
             }
         }
 
-        let fgColor = (primary ? NSColor.white : Design.primary).withAlphaComponent(isEnabled ? 1 : 0.42)
+        let fgAlpha: CGFloat = primary ? ((isEnabled || showsSpinner) ? 1.0 : 0.88) : (isEnabled ? 1.0 : 0.42)
+        let fgColor = (primary ? NSColor.white : Design.primary).withAlphaComponent(fgAlpha)
         let attrs: [NSAttributedString.Key: Any] = [
             .font: font ?? NSFont.systemFont(ofSize: 12, weight: .medium),
             .foregroundColor: fgColor
         ]
 
-        if let leftInset = spinnerLeftInset {
+        let resolvedSpinnerInset = spinnerLeftInset ?? (showsSpinner ? 24 : nil)
+        if showsSpinner {
+            let cx: CGFloat = 16.5
+            let cy: CGFloat = bounds.midY
+            let innerR: CGFloat = 2.6
+            let outerR: CGFloat = 5.6
+            let spokeAlphas: [CGFloat] = [0.98, 0.82, 0.66, 0.52, 0.38, 0.28, 0.20, 0.14]
+            let baseSpokeColor = primary ? NSColor.white : Design.primary
+            for i in 0..<8 {
+                let angle = CGFloat(i) * (.pi / 4.0) - (.pi / 2.0)
+                let relIdx = (i - spinnerPhase + 8) % 8
+                let alpha = spokeAlphas[relIdx]
+                let p1 = NSPoint(x: cx + cos(angle) * innerR, y: cy + sin(angle) * innerR)
+                let p2 = NSPoint(x: cx + cos(angle) * outerR, y: cy + sin(angle) * outerR)
+                let spoke = NSBezierPath()
+                spoke.move(to: p1)
+                spoke.line(to: p2)
+                spoke.lineWidth = 1.45
+                spoke.lineCapStyle = .round
+                baseSpokeColor.withAlphaComponent(alpha).setStroke()
+                spoke.stroke()
+            }
+        }
+        if let leftInset = resolvedSpinnerInset {
             let style = NSMutableParagraphStyle(); style.alignment = .center
             var centeredAttrs = attrs; centeredAttrs[.paragraphStyle] = style
             let size = (title as NSString).size(withAttributes: centeredAttrs)

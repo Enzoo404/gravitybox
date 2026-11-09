@@ -476,6 +476,7 @@ import Cocoa
         check(stableSettings.checkUpdateBtn.title == "检查更新", "About row must replace 关于 GravityBox with 检查更新 button")
         check(!allTextValues(stableSettings.view).contains("关于 GravityBox"), "Settings UI must not contain 关于 GravityBox button")
         check(stableSettings.aboutSubtitleLabel.isHidden && stableSettings.aboutSubtitleLabel.stringValue.isEmpty, "About row subtitle must stay hidden when no update is available")
+        check(assistant.installUpdateButton?.isHidden == true, "Sidebar installUpdateButton must stay hidden when no update is available")
         assistant.updateManager.simulateRelease(AppReleaseInfo(
             version: "1.1.0",
             tagName: "v1.1.0",
@@ -488,10 +489,33 @@ import Cocoa
         ))
         stableSettings.refreshUpdateRowState()
         check(!stableSettings.aboutSubtitleLabel.isHidden && stableSettings.aboutSubtitleLabel.stringValue == "发现新版本 v1.1.0，可立即升级", "About row must display exact update subtitle when update is available")
+        check(assistant.installUpdateButton?.isHidden == false && assistant.installUpdateButton?.title == "安装更新" && assistant.installUpdateButton?.badgeText == "v1.1.0" && assistant.installUpdateButton?.isUpdatePrompt == true, "Sidebar must display 安装更新 prompt capsule above 打开 Antigravity when update is available")
+        if let installBtn = assistant.installUpdateButton, let openBtn = assistant.launchApplicationButton, let bStack = installBtn.superview as? NSStackView {
+            let installIdx = bStack.arrangedSubviews.firstIndex(of: installBtn) ?? -1
+            let openIdx = bStack.arrangedSubviews.firstIndex(of: openBtn) ?? -1
+            check(installIdx >= 0 && openIdx == installIdx + 1, "安装更新 capsule must sit directly above 打开 Antigravity in sidebar bottomStack")
+        }
+        // Capture Hero/Overview with sidebar 安装更新 capsule visible
+        assistant.selectPage(0); window.setFrame(NSRect(origin: window.frame.origin, size: NSSize(width: 960, height: 640)), display: true); pump()
+        for (theme, appearance) in [("light", NSAppearance.Name.aqua), ("dark", NSAppearance.Name.darkAqua)] {
+            window.appearance = NSAppearance(named: appearance)
+            window.contentView?.layoutSubtreeIfNeeded(); pump()
+            try capture(window.contentView!, output.appendingPathComponent("\(theme)-hero-install-update-capsule.png"))
+        }
+        assistant.selectPage(3); pump()
         stableSettings.showUpdateSheet(); pump()
         if let updateSheet = stableSettings.updateSheet {
             check(updateSheet.primaryBtn.title == "立即更新", "Update sheet must display 立即更新 button when release is available")
+            check(updateSheet.primaryBtn.showsSpinner == false && updateSheet.spinner.isHidden == true, "Update sheet primaryBtn must hide inline spinner when updateAvailable")
             check(updateSheet.closeBtn.isEnabled == true, "Update sheet closeBtn must be enabled in updateAvailable state")
+            let sheetTexts = allTextValues(updateSheet.sheet.contentView!)
+            check(!sheetTexts.contains { $0.hasPrefix("构建 ") }, "Update sheet header must not display 构建 pill")
+            check(!sheetTexts.contains { $0.contains("正在连接 GitHub Releases") }, "Update sheet header must not display 正在连接 GitHub Releases subtitle")
+            check(!sheetTexts.contains("正在检查") && !sheetTexts.contains("可升级") && !sheetTexts.contains("已是最新"), "Update sheet notes header must not display right-side state capsule")
+            updateSheet.sheet.contentView?.layoutSubtreeIfNeeded()
+            if let titleRow = updateSheet.titleLabel.superview {
+                check(abs(titleRow.frame.midY - updateSheet.githubBtn.frame.midY) <= 1.5, "GravityBox title and version pill must be vertically parallel with GitHub button")
+            }
             check(updateSheet.changelogTextView.string.contains("• 新增 GitHub Release 检查更新"), "Update sheet must format markdown list items into bullets")
             check(!updateSheet.changelogTextView.string.contains("```") && !updateSheet.changelogTextView.string.contains("###"), "Update sheet must strip raw markdown code fences and heading hashes")
             check(!updateSheet.changelogTextView.string.contains("sudo xattr") && !updateSheet.changelogTextView.string.contains("SHA-256"), "Update sheet must strip terminal quarantine commands and SHA-256 footer blocks")
@@ -502,8 +526,8 @@ import Cocoa
                 workDirPath: "/tmp/staged",
                 dmgFilePath: "/tmp/updates/v1.0.4/GravityBox-1.0.4-arm64.dmg"
             )
-            check(updaterScript.contains("trap \"\" HUP TERM INT QUIT PIPE") && updaterScript.contains("kill -9 12345") && updaterScript.contains("--restarted-after-update"), "Detached updater script must ignore signals, bound PID wait with kill -9 fallback, and pass --restarted-after-update")
-            check(updaterScript.contains("REPLACED=1") && updaterScript.contains("rm -f \"/tmp/updates/v1.0.4/GravityBox-1.0.4-arm64.dmg\"") && updaterScript.contains("rmdir \"/tmp/updates/v1.0.4\""), "Detached updater script must automatically remove installed DMG and version directory after replacement succeeds")
+            check(updaterScript.contains("HUP TERM INT QUIT PIPE") && updaterScript.contains("kill -9 12345") && updaterScript.contains("--install-update"), "Detached updater must wait for its parent then invoke the transactional helper")
+            check(!updaterScript.contains("rm -rf") && !updaterScript.contains("ditto"), "Detached launcher must never delete or copy over the live app")
             check(AppUpdateManager.extractGravityBoxDMGVersion(from: "GravityBox-1.0.4-arm64.dmg") == "1.0.4", "Must extract version from standard arm64 DMG filename")
             check(AppUpdateManager.extractGravityBoxDMGVersion(from: "GravityBox-v1.0.3-universal.dmg.sha256") == "1.0.3", "Must extract version from v-prefixed DMG sha256 sidecar")
             check(AppUpdateManager.extractGravityBoxDMGVersion(from: "OtherApp-1.0.4-arm64.dmg") == nil, "Must ignore unrelated DMG filenames")
@@ -530,7 +554,20 @@ import Cocoa
             for f in [oldCachedDMG, currCachedDMG, newerCachedDMG, newerPartDMG, dlOldDMG, dlCurrDMG, dlCurrSha, dlNewerDMG, dlUnrelated] {
                 try Data("dummy".utf8).write(to: f)
             }
+            let previousCleanedVersion = assistant.configuration.value.lastCleanedVersion
+            let unconfirmedCount = assistant.updateManager.cleanupObsoleteUpdateArtifacts(
+                restartedAfterUpdate: true,
+                currentVersionOverride: "1.0.4",
+                downloadsDirectory: fakeDownloadsDir,
+                detachMountedVolumes: false
+            )
+            check(unconfirmedCount == 0, "Startup, version change and restarted-after-update flags alone must never trigger cleanup")
+            for f in [oldCachedDMG, currCachedDMG, newerCachedDMG, newerPartDMG, dlOldDMG, dlCurrDMG, dlCurrSha] {
+                check(fm.fileExists(atPath: f.path), "Unconfirmed update must retain packages and checksums")
+            }
+            check(assistant.configuration.value.lastCleanedVersion == previousCleanedVersion, "Unconfirmed launch must not advance cleanup marker")
             let cleanedCount = assistant.updateManager.cleanupObsoleteUpdateArtifacts(
+                successfulLaunchConfirmed: true,
                 restartedAfterUpdate: true,
                 currentVersionOverride: "1.0.4",
                 downloadsDirectory: fakeDownloadsDir,
@@ -550,6 +587,18 @@ import Cocoa
                 updateSheet.sheet.contentView?.layoutSubtreeIfNeeded(); pump()
                 try capture(updateSheet.sheet.contentView!, output.appendingPathComponent("\(theme)-update-sheet-available.png"))
             }
+            // Verify checking state spinner is embedded inside primaryBtn and button stays bright blue (no dark navy blue flash)
+            updateSheet.primaryBtn.title = "检查中…"
+            updateSheet.primaryBtn.showsSpinner = true
+            updateSheet.primaryBtn.isEnabled = false
+            check(updateSheet.spinner.superview === updateSheet.primaryBtn && !updateSheet.spinner.isHidden, "Checking spinner must be embedded inside primaryBtn")
+            for (theme, appearance) in [("light", NSAppearance.Name.aqua), ("dark", NSAppearance.Name.darkAqua)] {
+                updateSheet.sheet.appearance = NSAppearance(named: appearance)
+                updateSheet.sheet.contentView?.layoutSubtreeIfNeeded(); pump()
+                try capture(updateSheet.sheet.contentView!, output.appendingPathComponent("\(theme)-update-sheet-checking.png"))
+            }
+            updateSheet.renderState()
+
             check(updateSheet.autoUpdateSwitch.state == .off, "Auto update switch in sheet footer must default to off")
             updateSheet.autoUpdateSwitch.state = .off
             updateSheet.toggleAutoUpdate()
@@ -563,9 +612,10 @@ import Cocoa
         assistant.updateManager.simulateRelease(nil)
         stableSettings.refreshUpdateRowState()
         check(stableSettings.aboutSubtitleLabel.isHidden, "Clearing available release must hide about row subtitle again")
+        check(assistant.installUpdateButton?.isHidden == true, "Clearing available release must hide sidebar installUpdateButton again")
         if let updateSheet = stableSettings.updateSheet {
-            check(updateSheet.closeBtn.isEnabled == true && updateSheet.primaryBtn.isEnabled == true, "Transitioning to upToDate must keep closeBtn and primaryBtn enabled")
-            check(updateSheet.stateBadge.title == "已是最新", "Update sheet upToDate state must display 已是最新 badge")
+            check(updateSheet.closeBtn.isEnabled == true && updateSheet.primaryBtn.isEnabled == true && !updateSheet.primaryBtn.showsSpinner, "Transitioning to upToDate must keep closeBtn and primaryBtn enabled without spinner")
+            check(updateSheet.changelogHeading.stringValue == "当前版本状态", "Update sheet upToDate state must display 当前版本状态 heading")
             check(updateSheet.changelogTextView.textContainer?.lineFragmentPadding == 0, "Update sheet changelogTextView must have zero lineFragmentPadding for flush-left alignment")
             for (theme, appearance) in [("light", NSAppearance.Name.aqua), ("dark", NSAppearance.Name.darkAqua)] {
                 updateSheet.sheet.appearance = NSAppearance(named: appearance)
@@ -736,6 +786,41 @@ import Cocoa
         check(DesktopApplicationTarget.installedChannels().isEmpty, "Insiders alone is not a supported installation")
         check(DesktopApplicationTarget.preferredLaunchPath() == "/Applications/Antigravity.app", "Launch must not fall back to Insiders")
         DesktopApplicationTarget.installedChannelsOverride = nil
+
+        // Exercise the real download/cache path with local fixture bytes; no external requests or installation.
+        let updateRoot = state.appendingPathComponent("update-integrity-fixtures")
+        try FileManager.default.createDirectory(at: updateRoot, withIntermediateDirectories: true)
+        let fakeDMG = updateRoot.appendingPathComponent("source.dmg")
+        try Data("synthetic package".utf8).write(to: fakeDMG)
+        let malformed = updateRoot.appendingPathComponent("malformed.sha256")
+        try Data("invalid".utf8).write(to: malformed)
+        let wrongName = updateRoot.appendingPathComponent("wrong-name.sha256")
+        try Data((String(repeating: "0", count: 64) + "  Other.dmg\n").utf8).write(to: wrongName)
+        let mismatch = updateRoot.appendingPathComponent("mismatch.sha256")
+        try Data((String(repeating: "0", count: 64) + "  GravityBox-9.9.9-arm64.dmg\n").utf8).write(to: mismatch)
+        let sources: [URL?] = [nil, updateRoot.appendingPathComponent("missing.sha256"), malformed, wrongName, mismatch]
+        for source in sources {
+            let release = AppReleaseInfo(version: "9.9.9", tagName: "v9.9.9", title: "fixture", changelog: "", publishedDate: "", htmlURL: URL(string: "https://example.invalid")!, dmgURL: fakeDMG, sha256URL: source)
+            var finished = false, accepted = false
+            assistant.updateManager.preDownloadRelease(release, silent: false) { result in
+                if case .success = result { accepted = true }
+                finished = true
+            }
+            let deadline = Date().addingTimeInterval(5)
+            while !finished && Date() < deadline { pump() }
+            check(finished && !accepted && assistant.updateManager.downloadedDMGURL == nil, "Invalid or missing checksum must never produce an installable package")
+        }
+        let cachedDMG = state.appendingPathComponent("updates/v9.9.9/GravityBox-9.9.9-arm64.dmg")
+        try FileManager.default.createDirectory(at: cachedDMG.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("previously verified synthetic package".utf8).write(to: cachedDMG)
+        let cachedHash = try UpdatePackageIntegrity.fileHash(cachedDMG)
+        try Data("\(cachedHash)  \(cachedDMG.lastPathComponent)\n".utf8).write(to: cachedDMG.appendingPathExtension("sha256"))
+        try AppUpdateManager.verifyCachedDownload(cachedDMG)
+        try Data("tampered cached package".utf8).write(to: cachedDMG)
+        var rejectedCache = false
+        do { try AppUpdateManager.verifyCachedDownload(cachedDMG) } catch { rejectedCache = true }
+        check(rejectedCache, "Cached packages must be rehashed before installation")
+        assistant.updateManager.simulateRelease(nil)
 
         Assistant.applicationChannel = "stable"
         assistant.configuration.value.applicationChannel = "stable"
