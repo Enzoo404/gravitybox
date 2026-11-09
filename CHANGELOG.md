@@ -9,7 +9,7 @@
 ## [1.0.4] - 2026-11-08
 
 ### Added
-- **i18n**：正式适配 Antigravity `2.29.0` 与 `2.29.1` 官方版本，登记新版本 `main.js` SHA-256 指纹，补齐 2.29.x 新增的语音音色专有名词（`Arlo`、`Cleo`、`Finn`、`Fola`、`Gero`、`Lora`、`Neno`、`Olin`、`Tari`）、`Google Chat` 及配额/环境限制提示词条，2.23.0 ～ 2.29.1 全版本覆盖率均达 100%。
+- **i18n**：正式适配 Antigravity `2.29.0` 与 `2.29.1` 官方版本，登记新版本 `main.js` SHA-256 指纹，补齐 2.29.x 新增的语音音色专有名词（`Arlo`、`Cleo`、`Finn`、`Fola`、`Gero`、`Lora`、`Neno`、`Olin`、`Tari`）、`Google Chat` 及配额/环境限制提示词条，覆盖 2.23.0 ～ 2.29.1 官方受支持版本词典词条。
 - **Updater**：更新缓存仅在新版身份校验、后台就绪及成功确认后清理；安装事务与旧版本恢复副本单独保留，避免自动清理影响失败回退。
 - **Updater**：新增成功确认后的自动清理流程（`AppUpdateManager.cleanupObsoleteUpdateArtifacts`）。应用仅启动、版本变化或带有更新重启标记均不触发清理；新版确认成功后才清理 `updates/` 下版本不高于当前运行版本的历史缓存目录、中断的 `.dmg.part` 临时文件与 `install-*` 暂存目录；在更新重启或手动升级完成运行验证后，自动卸载残留的 `/Volumes/GravityBox*` 磁盘映像卷，并将 `~/Downloads` 目录下不高于当前版本的 `GravityBox-*.dmg`（含 `.dmg.sha256`）安全移入废纸篓（保留更高版本的预下载包）。
 - **Configuration**：配置模型新增 `lastCleanedVersion` 字段，支持跨版本手动拖拽升级成功验证后记录历史安装包清理状态。
@@ -23,7 +23,7 @@
 - **Backend**：将 `processArguments` 迁入 `BackendBridge`，使 `Backend.swift` 可脱离 `Assistant.swift` 独立编译，修复 `native-repair` 测试编译失败。
 - **Backend / Gatekeeper**：修复部分用户通过 Finder 右键首次打开应用时，macOS 仅解除主二进制隔离而保留 `Contents/Resources/runtime/node` 的 `com.apple.quarantine` 属性，导致内嵌 Node 后端被静默拦截、`translationSwitch` 长期灰置不可点击的问题；启动子进程前自动清理内嵌运行时与资源目录的 Quarantine 扩展属性。
 - **Backend / Process Lifecycle**：启动后端前自动检测并清理遗留的旧 `backend.lock` 孤儿进程与失效 `control.sock`，重置重连计数并在用户手动拨动汉化开关时按需拉起后端；修复 `watchState` 因 `ownedPID` 时序差丢弃状态快照的问题。
-- **i18n / UI**：重构原生偏好设置（`PreferencesController`）、菜单栏（`Assistant`）与后端 `Controller` 的汉化开关状态同步机制（新增 `translationEnabled` 字段与乐观状态更新），并将 `DevToolsActivePort` 陈旧端口探测降级为等待态（`waiting`）而非错误态（`error`），彻底根治开关在 `starting` / `error` 状态下反发 `pause` 或点击后立刻弹回关闭的问题。
+- **i18n / UI**：重构原生偏好设置（`PreferencesController`）、菜单栏（`Assistant`）与后端 `Controller` 的汉化开关状态同步机制（新增 `translationEnabled` 字段与乐观状态更新），并将 `DevToolsActivePort` 陈旧端口探测降级为等待态（`waiting`）而非错误态（`error`），解决开关在 `starting` / `error` 状态下反发 `pause` 或点击后立刻弹回关闭的问题。
 - **Updater**：修复预下载缓存 `.dmg` 被系统或外部清理后，更新弹窗仍残留 `readyToInstall` 状态的问题，新增 `hasDownloadedUpdateReady` 与 `validateCachedDMGState()` 实时核对磁盘文件存在性。
 - **UI / Design**：统一主窗口总览页（`DashboardPage`）与状态栏快捷面板（`MenuStatusCard` / `MenuPanelController`）中 `FREE` 套餐徽标及“已选记录”中性状态胶囊为 `Design.inactivePill`，消除残留系统默认浅灰背景导致的视觉割裂。
 - **UI / Design**：修复点击“检查更新”或“管理缓存”时，处于禁用/扫描态的主操作按钮（`DesignButton`，如“检查中…”与“清理选中缓存…”）因 `path.fill()` 未预设填充色而在半透明蓝色渐变底层铺满纯黑（`#000000`），导致按钮瞬间变为深藏蓝色的问题。
