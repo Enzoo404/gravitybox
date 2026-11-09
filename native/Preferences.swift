@@ -550,7 +550,6 @@ final class AppUpdateManager {
 
         let lastCleaned = app.configuration?.value.lastCleanedVersion ?? ""
         let isVersionUpgrade = !currentVer.isEmpty && lastCleaned != currentVer
-        let shouldCleanDownloads = restartedAfterUpdate || isVersionUpgrade || downloadsDirectory != nil
 
         if detachMountedVolumes && (restartedAfterUpdate || isVersionUpgrade) {
             let bundlePath = Bundle.main.bundleURL.standardizedFileURL.path
@@ -574,23 +573,21 @@ final class AppUpdateManager {
             }
         }
 
-        if shouldCleanDownloads {
-            let targetDownloadsDir = downloadsDirectory ?? fm.urls(for: .downloadsDirectory, in: .userDomainMask).first
-            if let downloadsURL = targetDownloadsDir,
-               let files = try? fm.contentsOfDirectory(at: downloadsURL, includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey], options: [.skipsHiddenFiles]) {
-                for fileURL in files {
-                    let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
-                    guard values?.isSymbolicLink != true, values?.isRegularFile == true else { continue }
-                    let fileName = fileURL.lastPathComponent
-                    guard let pkgVer = Self.extractGravityBoxDMGVersion(from: fileName),
-                          !Self.isNewerVersion(pkgVer, than: currentVer) else {
-                        continue
-                    }
-                    if (try? fm.trashItem(at: fileURL, resultingItemURL: nil)) != nil {
-                        cleanedCount += 1
-                    } else if downloadsDirectory != nil, (try? fm.removeItem(at: fileURL)) != nil {
-                        cleanedCount += 1
-                    }
+        // 仅在显式传入指定目录（如单元测试隔离环境）时清理，严禁默认扫描用户 ~/Downloads，杜绝 TCC 权限弹窗与隐私越界
+        if let downloadsURL = downloadsDirectory,
+           let files = try? fm.contentsOfDirectory(at: downloadsURL, includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey], options: [.skipsHiddenFiles]) {
+            for fileURL in files {
+                let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+                guard values?.isSymbolicLink != true, values?.isRegularFile == true else { continue }
+                let fileName = fileURL.lastPathComponent
+                guard let pkgVer = Self.extractGravityBoxDMGVersion(from: fileName),
+                      !Self.isNewerVersion(pkgVer, than: currentVer) else {
+                    continue
+                }
+                if (try? fm.trashItem(at: fileURL, resultingItemURL: nil)) != nil {
+                    cleanedCount += 1
+                } else if (try? fm.removeItem(at: fileURL)) != nil {
+                    cleanedCount += 1
                 }
             }
         }

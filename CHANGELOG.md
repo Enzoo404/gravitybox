@@ -11,7 +11,7 @@
 ### Added
 - **i18n**：正式适配 Antigravity `2.29.0` 与 `2.29.1` 官方版本，登记新版本 `main.js` SHA-256 指纹，补齐 2.29.x 新增的语音音色专有名词（`Arlo`、`Cleo`、`Finn`、`Fola`、`Gero`、`Lora`、`Neno`、`Olin`、`Tari`）、`Google Chat` 及配额/环境限制提示词条，覆盖 2.23.0 ～ 2.29.1 官方受支持版本词典词条。
 - **Updater**：更新缓存仅在新版身份校验、后台就绪及成功确认后清理；安装事务与旧版本恢复副本单独保留，避免自动清理影响失败回退。
-- **Updater**：新增成功确认后的自动清理流程（`AppUpdateManager.cleanupObsoleteUpdateArtifacts`）。应用仅启动、版本变化或带有更新重启标记均不触发清理；新版确认成功后才清理 `updates/` 下版本不高于当前运行版本的历史缓存目录、中断的 `.dmg.part` 临时文件与 `install-*` 暂存目录；在更新重启或手动升级完成运行验证后，自动卸载残留的 `/Volumes/GravityBox*` 磁盘映像卷，并将 `~/Downloads` 目录下不高于当前版本的 `GravityBox-*.dmg`（含 `.dmg.sha256`）安全移入废纸篓（保留更高版本的预下载包）。
+- **Updater**：新增成功确认后的自动清理流程（`AppUpdateManager.cleanupObsoleteUpdateArtifacts`）。应用仅启动、版本变化或带有更新重启标记均不触发清理；新版确认成功后才清理 `updates/` 下版本不高于当前运行版本的历史缓存目录、中断的 `.dmg.part` 临时文件与 `install-*` 暂存目录；并在更新重启或升级完成运行验证后，自动卸载残留的 `/Volumes/GravityBox*` 磁盘映像卷；不扫描或访问用户的 `~/Downloads` 目录，杜绝系统权限弹窗与隐私越界。
 - **Configuration**：配置模型新增 `lastCleanedVersion` 字段，支持跨版本手动拖拽升级成功验证后记录历史安装包清理状态。
 
 ### Fixed
