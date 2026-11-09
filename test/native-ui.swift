@@ -662,6 +662,24 @@ import Cocoa
         check(stableSettings.translationSwitch.state == .on, "translationSwitch must be on when status mode is adaptive")
         check(stableSettings.translationSwitch.toolTip == "点击关闭界面汉化", "translationSwitch tooltip must prompt to disable when on")
 
+        // 0. Verify unreachable backend (e.g. Node process blocked by Gatekeeper quarantine): switch stays greyed out
+        assistant.reachable = false
+        stableSettings.update()
+        check(stableSettings.translationSwitch.isEnabled == false, "translationSwitch must remain greyed out / disabled when backend is unreachable due to Gatekeeper quarantine interception")
+        check(stableSettings.translationSwitch.toolTip == "正在连接后台服务…", "translationSwitch tooltip must show connecting message when backend is unreachable")
+        let menuDisabled = NSMenu()
+        assistant.menuNeedsUpdate(menuDisabled)
+        let toggleDisabled = menuDisabled.items.first { $0.title == "界面汉化" }
+        check(toggleDisabled?.isEnabled == false, "Menu bar translation toggle must be disabled when backend is unreachable")
+
+        assistant.reachable = true
+        stableSettings.update()
+        check(stableSettings.translationSwitch.isEnabled == true, "translationSwitch must become enabled once backend is reachable after quarantine clearance")
+        let menuEnabled = NSMenu()
+        assistant.menuNeedsUpdate(menuEnabled)
+        let toggleEnabled = menuEnabled.items.first { $0.title == "界面汉化" }
+        check(toggleEnabled?.isEnabled == true, "Menu bar translation toggle must become enabled once backend is reachable")
+
         // 1. User flips switch from ON to OFF
         stableSettings.translationSwitch.state = .off
         stableSettings.toggleTranslation()

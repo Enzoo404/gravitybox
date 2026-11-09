@@ -85,11 +85,69 @@ final class BackendBridge {
         return args
     }
 
-    private static func clearQuarantineIfNeeded(at url: URL) {
+    func stop() {
+        if let child, child.isRunning {
+            child.terminate()
+            child.waitUntilExit()
+        }
+    }
+
+    static func clearQuarantineIfNeeded(at url: URL) {
         let path = url.path
-        _ = path.withCString { Darwin.removexattr($0, "com.apple.quarantine", 0) }
-        let hasQuarantine = path.withCString { Darwin.getxattr($0, "com.apple.quarantine", nil, 0, 0, 0) >= 0 }
-        guard hasQuarantine else { return }
+        let fm = FileManager.default
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: path, isDirectory: &isDir) else { return }
+
+        func stripQuarantineOnFile(filePath: String) {
+            let hasQ = filePath.withCString { Darwin.getxattr($0, "com.apple.quarantine", nil, 0, 0, 0) >= 0 }
+            guard hasQ else { return }
+            var res = filePath.withCString { Darwin.removexattr($0, "com.apple.quarantine", 0) }
+            if res != 0 && (errno == EACCES || errno == EPERM) {
+                // If file lacks owner write permissions (e.g. 0o555 read-only binary), grant owner write permission temporarily
+                if let attrs = try? fm.attributesOfItem(atPath: filePath),
+                   let perms = attrs[.posixPermissions] as? NSNumber {
+                    let orig = perms.intValue
+                    try? fm.setAttributes([.posixPermissions: orig | 0o200], ofItemAtPath: filePath)
+                    res = filePath.withCString { Darwin.removexattr($0, "com.apple.quarantine", 0) }
+                    try? fm.setAttributes([.posixPermissions: orig], ofItemAtPath: filePath)
+                }
+            }
+            if filePath.withCString({ Darwin.getxattr($0, "com.apple.quarantine", nil, 0, 0, 0) >= 0 }) {
+                let proc = Process()
+                proc.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
+                proc.arguments = ["-d", "com.apple.quarantine", filePath]
+                proc.standardInput = FileHandle.nullDevice
+                proc.standardOutput = FileHandle.nullDevice
+                proc.standardError = FileHandle.nullDevice
+                try? proc.run()
+                proc.waitUntilExit()
+            }
+        }
+
+        if !isDir.boolValue {
+            stripQuarantineOnFile(filePath: path)
+            return
+        }
+
+        let selfHasQ = path.withCString { Darwin.getxattr($0, "com.apple.quarantine", nil, 0, 0, 0) >= 0 }
+        let candidateNodes = [
+            url.appendingPathComponent("Contents/Resources/runtime/node"),
+            url.appendingPathComponent("runtime/node"),
+            url.appendingPathComponent("node")
+        ]
+        let candidateHasQ = candidateNodes.contains { nodeUrl in
+            nodeUrl.path.withCString { Darwin.getxattr($0, "com.apple.quarantine", nil, 0, 0, 0) >= 0 }
+        }
+
+        // Fast path: avoid expensive subprocesses if neither directory nor nested node runtime has quarantine
+        guard selfHasQ || candidateHasQ else { return }
+
+        // Strip candidate binaries first (recovering from any read-only permissions)
+        for candidate in candidateNodes where fm.fileExists(atPath: candidate.path) {
+            stripQuarantineOnFile(filePath: candidate.path)
+        }
+        stripQuarantineOnFile(filePath: path)
+
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
         proc.arguments = ["-dr", "com.apple.quarantine", path]
