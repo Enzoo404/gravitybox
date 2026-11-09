@@ -1102,6 +1102,8 @@ final class PreferencesController: NSObject {
             translationSwitch.toolTip = "正在连接后台服务…"
         } else if app.statusValue.mode == "unsupported" {
             translationSwitch.toolTip = "当前应用版本不受支持"
+        } else if app.statusValue.mode == "error" {
+            translationSwitch.toolTip = "连接异常，点击重试"
         } else {
             translationSwitch.toolTip = app.statusValue.enabled ? "点击关闭界面汉化" : "点击开启界面汉化"
         }
@@ -1231,6 +1233,8 @@ final class PreferencesController: NSObject {
             translationSwitch.toolTip = "正在连接后台服务…"
         } else if app.statusValue.mode == "unsupported" {
             translationSwitch.toolTip = "当前应用版本不受支持"
+        } else if app.statusValue.mode == "error" {
+            translationSwitch.toolTip = "连接异常，点击重试"
         } else {
             translationSwitch.toolTip = app.statusValue.enabled ? "点击关闭界面汉化" : "点击开启界面汉化"
         }

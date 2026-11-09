@@ -64,6 +64,8 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     private var popoverLocalKeyMonitor: Any?
     private var quotaRefreshStartedAt: Date?
     private var recoveryAttempts = 0
+    /// 汉化开关命令在途时的乐观目标：期间到达的陈旧状态快照不得把开关弹回旧状态。
+    private var pendingTranslationTarget: Bool?
     private var nextRecoveryAt = Date.distantPast
     #if NATIVE_UI_TEST
     var confirmSwitchForTesting: ((String, @escaping (Bool) -> Void) -> Void)?
@@ -1220,6 +1222,7 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     @objc func showSettings() { selectPage(3) }
     func setTranslationEnabled(_ enable: Bool) {
         let previousStatus = statusValue
+        pendingTranslationTarget = enable
         statusValue.translationEnabled = enable
         if enable {
             if statusValue.mode == "paused" || statusValue.mode == "error" || statusValue.mode == "starting" {
@@ -1234,6 +1237,7 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             self.bridge.send(["command": enable ? "resume" : "pause"]) { [weak self] result in
                 DispatchQueue.main.async {
                     guard let self else { return }
+                    self.pendingTranslationTarget = nil
                     switch result {
                     case .success(let value):
                         if let raw = value["status"] as? [String: Any] {
@@ -1615,6 +1619,14 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         if raw["activeSubscriptionTier"] == nil { merged.activeSubscriptionTier = previous.activeSubscriptionTier }
         if raw["accountsRevision"] == nil { merged.accountsRevision = previous.accountsRevision }
         if raw["liveAccountEmail"] == nil { merged.liveAccountEmail = previous.liveAccountEmail }
+        if let target = pendingTranslationTarget {
+            merged.translationEnabled = target
+            if target {
+                if merged.mode == "paused" || merged.mode == "error" || merged.mode == "starting" { merged.mode = "waiting" }
+            } else {
+                merged.mode = "paused"
+            }
+        }
         return merged
     }
     func configureAutoUpdateTimer() {

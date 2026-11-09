@@ -678,7 +678,7 @@ import Cocoa
         assistant.statusValue = LiveStatus(["mode": "error", "message": "连接中断", "appVersion": "2.29.1"])
         stableSettings.update()
         check(stableSettings.translationSwitch.state == .off, "translationSwitch must be off when status mode is error")
-        check(stableSettings.translationSwitch.toolTip == "点击开启界面汉化", "translationSwitch tooltip must prompt to enable when in error mode")
+        check(stableSettings.translationSwitch.toolTip == "连接异常，点击重试", "translationSwitch tooltip must offer retry in error mode")
         // User flips switch ON to recover/retry
         stableSettings.translationSwitch.state = .on
         stableSettings.toggleTranslation()

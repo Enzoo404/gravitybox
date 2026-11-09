@@ -575,7 +575,8 @@ struct LiveStatus {
     }
 
     var enabled: Bool {
-        if mode == "paused" || mode == "unsupported" || mode == "legacy-blocked" || mode == "stopped" {
+        // error 表示汉化实际未生效：开关显示为“关”，用户一键开启即发送 resume 触发重连重试。
+        if mode == "paused" || mode == "unsupported" || mode == "legacy-blocked" || mode == "stopped" || mode == "error" {
             return false
         }
         if let translationEnabled {

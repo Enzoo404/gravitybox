@@ -15,6 +15,8 @@
 - **Configuration**：配置模型新增 `lastCleanedVersion` 字段，支持跨版本手动拖拽升级后的首次启动自动触发历史安装包清理。
 
 ### Fixed
+- **i18n / UI**：连接异常（`mode == "error"`）时汉化开关显示为“关”并提示“连接异常，点击重试”，一键开启即发送 `resume` 触发重连，无需先关再开；开关命令在途期间，陈旧状态快照不再把开关短暂弹回旧状态（`pendingTranslationTarget`）。
+- **Backend**：将 `processArguments` 迁入 `BackendBridge`，使 `Backend.swift` 可脱离 `Assistant.swift` 独立编译，修复 `native-repair` 测试编译失败。
 - **Backend / Gatekeeper**：修复部分用户通过 Finder 右键首次打开应用时，macOS 仅解除主二进制隔离而保留 `Contents/Resources/runtime/node` 的 `com.apple.quarantine` 属性，导致内嵌 Node 后端被静默拦截、`translationSwitch` 长期灰置不可点击的问题；启动子进程前自动清理内嵌运行时与资源目录的 Quarantine 扩展属性。
 - **Backend / Process Lifecycle**：启动后端前自动检测并清理遗留的旧 `backend.lock` 孤儿进程与失效 `control.sock`，重置重连计数并在用户手动拨动汉化开关时按需拉起后端；修复 `watchState` 因 `ownedPID` 时序差丢弃状态快照的问题。
 - **i18n / UI**：重构原生偏好设置（`PreferencesController`）、菜单栏（`Assistant`）与后端 `Controller` 的汉化开关状态同步机制（新增 `translationEnabled` 字段与乐观状态更新），并将 `DevToolsActivePort` 陈旧端口探测降级为等待态（`waiting`）而非错误态（`error`），彻底根治开关在 `starting` / `error` 状态下反发 `pause` 或点击后立刻弹回关闭的问题。
