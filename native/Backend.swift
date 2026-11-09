@@ -59,14 +59,97 @@ final class BackendBridge {
         }
     }
 
+    /// 读取进程启动参数（KERN_PROCARGS2）。放在 Backend.swift 内，保证本文件可脱离 Assistant.swift 独立编译。
+    static func processArguments(for pid: pid_t) -> [String] {
+        guard pid > 0 else { return [] }
+        var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
+        var size: Int = 0
+        guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > MemoryLayout<Int32>.size else { return [] }
+        var buffer = [UInt8](repeating: 0, count: size)
+        guard sysctl(&mib, 3, &buffer, &size, nil, 0) == 0 else { return [] }
+        let argc = buffer.withUnsafeBytes { $0.load(as: Int32.self) }
+        guard argc > 0 else { return [] }
+        var index = MemoryLayout<Int32>.size
+        while index < size && buffer[index] != 0 { index += 1 }
+        while index < size && buffer[index] == 0 { index += 1 }
+        var args: [String] = []
+        for _ in 0..<argc {
+            guard index < size else { break }
+            let start = index
+            while index < size && buffer[index] != 0 { index += 1 }
+            if let str = String(bytes: buffer[start..<index], encoding: .utf8) {
+                args.append(str)
+            }
+            index += 1
+        }
+        return args
+    }
+
+    private static func clearQuarantineIfNeeded(at url: URL) {
+        let path = url.path
+        _ = path.withCString { Darwin.removexattr($0, "com.apple.quarantine", 0) }
+        let hasQuarantine = path.withCString { Darwin.getxattr($0, "com.apple.quarantine", nil, 0, 0, 0) >= 0 }
+        guard hasQuarantine else { return }
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
+        proc.arguments = ["-dr", "com.apple.quarantine", path]
+        proc.standardInput = FileHandle.nullDevice
+        proc.standardOutput = FileHandle.nullDevice
+        proc.standardError = FileHandle.nullDevice
+        try? proc.run()
+        proc.waitUntilExit()
+    }
+
+    private func cleanupStaleBackendIfNeeded() {
+        let fm = FileManager.default
+        let sockPath = state.appendingPathComponent("control.sock").path
+        let lockPath = state.appendingPathComponent("backend.lock").path
+        if fm.fileExists(atPath: sockPath) {
+            let stopDeadline = Date().addingTimeInterval(1.2)
+            if let fd = try? openSocket(deadline: stopDeadline) {
+                if var data = try? JSONSerialization.data(withJSONObject: ["command": "stop"]) {
+                    data.append(0x0A)
+                    try? writeAll(data, fd: fd, deadline: stopDeadline)
+                    _ = try? readReply(fd: fd, deadline: stopDeadline)
+                }
+                Darwin.close(fd)
+                let waitDeadline = Date().addingTimeInterval(0.8)
+                while fm.fileExists(atPath: sockPath) && Date() < waitDeadline {
+                    usleep(40_000)
+                }
+            }
+        }
+        if let lockData = try? Data(contentsOf: URL(fileURLWithPath: lockPath)),
+           let lockJson = try? JSONSerialization.jsonObject(with: lockData) as? [String: Any],
+           let stalePid = (lockJson["pid"] as? NSNumber)?.int32Value,
+           stalePid > 0, stalePid != getpid() {
+            let args = Self.processArguments(for: stalePid)
+            let isGravityBoxBackend = args.contains(where: { $0.hasSuffix("/core/dist/main.js") || $0.hasSuffix("/dist/main.js") })
+            if isGravityBoxBackend {
+                _ = Darwin.kill(stalePid, SIGTERM)
+                let termDeadline = Date().addingTimeInterval(0.5)
+                while Darwin.kill(stalePid, 0) == 0 && Date() < termDeadline {
+                    usleep(30_000)
+                }
+                if Darwin.kill(stalePid, 0) == 0 {
+                    _ = Darwin.kill(stalePid, SIGKILL)
+                }
+            }
+        }
+    }
+
     private func startChildProcess() throws {
         if child?.isRunning == true { return }
         let node = resources.appendingPathComponent("runtime/node")
+        Self.clearQuarantineIfNeeded(at: Bundle.main.bundleURL)
+        Self.clearQuarantineIfNeeded(at: resources)
+        Self.clearQuarantineIfNeeded(at: node)
         guard FileManager.default.isExecutableFile(atPath: node.path) else {
             throw BackendFailure(message: "运行环境缺失。请重新安装完整的 GravityBox 安装包。")
         }
         let fm = FileManager.default
         try fm.createDirectory(at: state, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        cleanupStaleBackendIfNeeded()
         let logDir = fm.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/GravityBox")
         try fm.createDirectory(at: logDir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         let log = logDir.appendingPathComponent("backend.log")

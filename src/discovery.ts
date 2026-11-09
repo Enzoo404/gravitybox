@@ -69,16 +69,20 @@ async function discoverSingle(appPath: string, profile: string): Promise<Endpoin
   let listeners: string;
   try { listeners = (await execute('/usr/sbin/lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-Fpfn'])).stdout; } catch { return undefined; }
   const owners = parseListeners(listeners, port);
-  if (owners.length !== 1) throw new Error('调试端口进程身份无法唯一确认');
+  if (owners.length !== 1) return undefined;
   const owner = owners[0]!;
-  const executable = (await execute('/usr/sbin/lsof', ['-nP', '-a', '-p', String(owner.pid), '-d', 'txt', '-Fn'])).stdout;
+  let executable: string;
+  try { executable = (await execute('/usr/sbin/lsof', ['-nP', '-a', '-p', String(owner.pid), '-d', 'txt', '-Fn'])).stdout; } catch { return undefined; }
   const expected = join(appPath, 'Contents', 'MacOS', targetForApp(appPath).executable);
-  if (!executable.split('\n').includes(`n${expected}`)) throw new Error('调试端口不属于指定 Antigravity 应用');
+  if (!executable.split('\n').includes(`n${expected}`)) return undefined;
   const bundle = await inspectBundle(appPath);
-  const response = await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(2000), redirect: 'error' });
-  if (!response.ok) throw new Error('调试接口无响应');
+  let response: Response;
+  try {
+    response = await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(2000), redirect: 'error' });
+  } catch { return undefined; }
+  if (!response.ok) return undefined;
   const version = await response.json() as Record<string, string>;
-  if (!version.webSocketDebuggerUrl) throw new Error('调试接口缺少 WebSocket 地址');
+  if (!version.webSocketDebuggerUrl) return undefined;
   const ws = assertLoopback(version.webSocketDebuggerUrl);
   if (Number(ws.port) !== port) throw new Error('调试接口端口不匹配');
   return { port, pid: owner.pid, browserURL: ws.href, appVersion: bundle.version, legacyPatch: bundle.legacyPatch, appPath, profile };

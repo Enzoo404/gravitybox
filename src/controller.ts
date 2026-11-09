@@ -26,6 +26,7 @@ export type AssistantStatus = {
   schema: 1; mode: string; message: string; appVersion?: string; windows: number;
   dictionaryVersion: string; entries: number; dictionaryError?: string; errors: string[];
   rssMB: number; updatedAt: string; pid: number;
+  translationEnabled?: boolean;
   unverifiedVersion?: boolean;
   newStringsCount?: number;
   pendingListPath?: string;
@@ -88,11 +89,12 @@ export class Controller {
     onStatus: (status: AssistantStatus) => void;
   }) {
     this.paused = options.initiallyPaused === true;
-    this.status = { schema: 1, mode: 'starting', message: '正在初始化', windows: 0, dictionaryVersion: options.dictionary.version, entries: Object.keys(options.dictionary.entries).length, errors: [], rssMB: 0, updatedAt: '', pid: process.pid, menuHooked: false };
+    this.status = { schema: 1, mode: 'starting', message: '正在初始化', windows: 0, dictionaryVersion: options.dictionary.version, entries: Object.keys(options.dictionary.entries).length, errors: [], rssMB: 0, updatedAt: '', pid: process.pid, menuHooked: false, translationEnabled: !this.paused };
   }
   private publish(mode?: string, message?: string) {
     if (mode) this.status.mode = mode;
     if (message) this.status.message = message;
+    this.status.translationEnabled = !this.paused;
     this.status.windows = this.pages.size;
     this.status.bundleReads=this.bundleCache.downloads;this.status.bundleBytes=this.bundleCache.downloadedBytes;
     const modes=new Set([...this.pages.values()].map(p=>p.languageMode??'zh'));this.status.languageMode=modes.size>1?'mixed':([...modes][0]??'zh');

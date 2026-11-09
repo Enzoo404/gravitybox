@@ -11,6 +11,8 @@ export const SUPPORTED_BUNDLES = new Map([
   ['2.26.0', '94abc09ac34dcae3a98f5e0fb74b66c87f8a8ad6ad214136544f924da2099e5e'],
   ['2.27.0', '40f3e1bb1441eebcba05e47c2d043954659b69788e9c513a86fc04493cd5fe66'],
   ['2.28.0', '4d2d2f3ab5aaaeda254ec4b773593fc5db683f0b5ddf81225c65a5f60e644038'],
+  ['2.29.0', '8d1196a22cd3eb9779e8faf5c31eb732d3df8d9d037b685733ed4e3d6cdfb5a2'],
+  ['2.29.1', 'eec7297695f3b4f25d4e92f5f9d0bc4efeec86523cddcddddefc3410c5efe37a'],
 ]);
 export const VERIFIED_VERSIONS = new Set(SUPPORTED_BUNDLES.keys());
 
@@ -162,7 +164,8 @@ export function looksLikeNoise(text: string): boolean {
   if (/^system-ui,|^ui-monospace,/.test(text)) return true;
   if (/^translate[XY]\(/.test(text)) return true;
   if (/^(?:grid-rows-|opacity-|scale-|max-h-|max-w-|min-w-|h-|w-|p-|bg-|border)/.test(text) && /-|:/.test(text)) return true;
-  if (/\b(?:flex|grid|items-center|justify-center|bg-|text-|border-|opacity-|animate-|px-|py-|shrink|grow)\b/.test(text) && /\s/.test(text)) return true;
+  if (/\b(?:flex|grid|items-center|justify-center|bg-|text-|border-|opacity-|animate-|px-|py-|shrink|grow|sticky|top-0|z-10)\b/.test(text) && /\s/.test(text)) return true;
+  if (/\bminmax\(/.test(text) || /^page\.(?:reload|goBack|goForward)\(\)$/.test(text)) return true;
   if (/^[A-Z_]+(?:\s+[A-Z_]+)+$/.test(text)) return true;
   if (/^[a-z_]+(?:\s+[a-z_]+){2,}$/.test(text)) return true;
   if (/^[A-Z0-9_]{4,}$/.test(text)) return true;
@@ -171,7 +174,7 @@ export function looksLikeNoise(text: string): boolean {
   if (/\($/.test(text)) return true;
   if (/^EDITION_\d+_TEST_ONLY$/.test(text)) return true;
   if (/^Optional(?:Double|Int)?\.empty\(\)$/.test(text)) return true;
-  if (/^auxPaneV2\//.test(text) || /^code\/timeOrigin$/.test(text) || /^no-cache,/.test(text) || /^X-Frame-Options$/.test(text)) return true;
+  if (/^(?:auxPaneV2|sidePanelV2)\//.test(text) || /^code\/timeOrigin$/.test(text) || /^no-cache,/.test(text) || /^X-Frame-Options$/.test(text)) return true;
   if (/^(?:(?:Alt|Ctrl|Cmd|Shift)\+[\w.]+\s*)+$/i.test(text)) return true;
   /* 5. 快捷键组合（空格写法）、CSS 过渡片段与模型代号：都不是界面文案，不参与翻译与门禁 */
   if (/^(?:Command|Cmd|Ctrl|Control|Option|Alt|Shift)(?:\s+(?:Command|Cmd|Ctrl|Control|Option|Alt|Shift))*\s+[A-Z0-9]$/.test(text)) return true;

@@ -6,6 +6,22 @@
 
 ## [Unreleased]
 
+## [1.0.4] - 2026-11-08
+
+### Added
+- **i18n**：正式适配 Antigravity `2.29.0` 与 `2.29.1` 官方版本，登记新版本 `main.js` SHA-256 指纹，补齐 2.29.x 新增的语音音色专有名词（`Arlo`、`Cleo`、`Finn`、`Fola`、`Gero`、`Lora`、`Neno`、`Olin`、`Tari`）、`Google Chat` 及配额/环境限制提示词条，2.23.0 ～ 2.29.1 全版本覆盖率均达 100%。
+- **Updater**：新增应用更新后自动清理 `.dmg` 安装包与残留文件机制。在独立更新脚本（`buildDetachedUpdaterScript`）完成新版本覆盖替换后，立即自动清理应用数据目录（`updates/v*`）中已安装版本的缓存 `.dmg` 与 `.sha256` 校验文件。
+- **Updater**：新增启动自动清理流程（`AppUpdateManager.cleanupObsoleteUpdateArtifacts`）。每次启动时自动清理 `updates/` 下版本不高于当前运行版本的历史缓存目录、中断的 `.dmg.part` 临时文件与 `install-*` 暂存目录；在更新重启（`--restarted-after-update`）或版本升级首次启动时，自动卸载残留的 `/Volumes/GravityBox*` 磁盘映像卷，并将 `~/Downloads` 目录下不高于当前版本的 `GravityBox-*.dmg`（含 `.dmg.sha256`）安全移入废纸篓（保留更高版本的预下载包）。
+- **Configuration**：配置模型新增 `lastCleanedVersion` 字段，支持跨版本手动拖拽升级后的首次启动自动触发历史安装包清理。
+
+### Fixed
+- **Backend / Gatekeeper**：修复部分用户通过 Finder 右键首次打开应用时，macOS 仅解除主二进制隔离而保留 `Contents/Resources/runtime/node` 的 `com.apple.quarantine` 属性，导致内嵌 Node 后端被静默拦截、`translationSwitch` 长期灰置不可点击的问题；启动子进程前自动清理内嵌运行时与资源目录的 Quarantine 扩展属性。
+- **Backend / Process Lifecycle**：启动后端前自动检测并清理遗留的旧 `backend.lock` 孤儿进程与失效 `control.sock`，重置重连计数并在用户手动拨动汉化开关时按需拉起后端；修复 `watchState` 因 `ownedPID` 时序差丢弃状态快照的问题。
+- **i18n / UI**：重构原生偏好设置（`PreferencesController`）、菜单栏（`Assistant`）与后端 `Controller` 的汉化开关状态同步机制（新增 `translationEnabled` 字段与乐观状态更新），并将 `DevToolsActivePort` 陈旧端口探测降级为等待态（`waiting`）而非错误态（`error`），彻底根治开关在 `starting` / `error` 状态下反发 `pause` 或点击后立刻弹回关闭的问题。
+- **Updater**：修复预下载缓存 `.dmg` 被系统或外部清理后，更新弹窗仍残留 `readyToInstall` 状态的问题，新增 `hasDownloadedUpdateReady` 与 `validateCachedDMGState()` 实时核对磁盘文件存在性。
+- **UI / Design**：统一主窗口总览页（`DashboardPage`）与状态栏快捷面板（`MenuStatusCard` / `MenuPanelController`）中 `FREE` 套餐徽标及“已选记录”中性状态胶囊为 `Design.inactivePill`，消除残留系统默认浅灰背景导致的视觉割裂。
+- **UI / Accessibility**：统一总览页（`DashboardPage`）与请求明细页（`UsageLogController`）在浅色/深色模式下的异常与预警文字颜色为高对比度语义色（`accessibleWarningColor()` / `accessibleDangerColor()`），提升浅色白底卡片上的可读性。
+
 ## [1.0.3] - 2026-11-08
 
 ### Added

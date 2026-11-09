@@ -32,7 +32,7 @@ export const PROPER_NOUNS: string[] = [
   'Docker', 'Kubernetes', 'Puppeteer', 'Playwright', 'Jetski', 'Sidecar', 'Firebase',
   'Flutter', 'Dart', 'Electron', 'LaTeX', 'Mermaid', 'Catppuccin', 'AGY', 'Google',
   'Inter', 'Gruvbox', 'Solarized', 'Dracula', 'Nord', 'Monokai', 'Tokyo Night',
-  'Aoede', 'Charon', 'Fenrir', 'Kore', 'Leda', 'Orus', 'Puck', 'Zephyr', 'Project 4K',
+  'Aoede', 'Arlo', 'Charon', 'Cleo', 'Fenrir', 'Finn', 'Fola', 'Gero', 'Kore', 'Leda', 'Lora', 'Neno', 'Olin', 'Orus', 'Puck', 'Tari', 'Zephyr', 'Project 4K',
   'Ayu', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Roboto Mono', 'SF Mono', 'Source Code Pro',
   'One Dark', 'One Light',
 ];
@@ -43,19 +43,19 @@ export const GLOSSARY_RULES: { en: RegExp; zh: string; forbid: string[]; note: s
   { en: /\bchats?\b/i, zh: '对话', forbid: ['聊天'], note: 'chat → 对话' },
   { en: /\btokens?\b/i, zh: 'Token', forbid: ['令牌', '标记'], note: 'token → Token' },
   { en: /\ballow ?lists?\b/i, zh: '允许列表', forbid: ['白名单'], note: 'allowlist → 允许列表' },
-  { en: /\bdeny ?lists?\b/i, zh: '拒绝列表', forbid: ['黑名单'], note: 'denylist → 拒绝列表' },
+  { en: /\bdeny ?lists?\b/i, zh: '拒绝列表', forbid: ['黑名单'], note: 'denylist → 允许列表' },
   { en: /\bcustomizations?\b/i, zh: '自定义', forbid: ['个性化', '定制'], note: 'customization → 自定义' },
   { en: /\bplugins?\b/i, zh: '插件', forbid: [], note: 'plugin → 插件' },
   { en: /\bextensions?\b/i, zh: '扩展', forbid: [], note: 'extension → 扩展' },
 ];
 export const preservedIdentifier = (key: string) => [
-  '/abns/…','Alt','Android (main)','Aoede','Ayu','Ayu Dark','Ayu Light','Ayu Mirage','BoN','Buganizer','Cascadia Code','Cascadia Mono','Catppuccin',
-  'Catppuccin Frappe','Catppuccin Latte','Catppuccin Macchiato','Catppuccin Mocha','Charon','Chromium','Consolas','Courier New','Ctrl',
-  'Dracula','Fenrir','Fira Code','Fira Mono','Flash','Gemini 2.5 Flash Image','Gemini 3 Pro Image','Gemini 3.1 Flash Image','Gemini Enterprise',
-  'Google Antigravity SDK','Google Chrome','Google Sans','Google Sans Code','Google Sans Text','Google3',
-  'Gruvbox','Gruvbox Dark','Gruvbox Light','Gruvbox Material','Hack','Inconsolata','Inter','JetBrains Mono','Jetski','Kore','Leda','Linux','MacOS',
-  'Menlo','Monaco','Monokai','Monokai Dimmed','Monokai Pro','my-gcp-project-id','Nord','One Dark','One Dark Pro','One Light','Orus','PID','PID ',
-  'Pro','Project 4K','Puck','Quiet Light','Roboto Mono','SF Mono','Shift','Solarized','Solarized Dark','Solarized Light','Source Code Pro',
+  '/abns/…','Alt','Android (main)','Aoede','Arlo','Ayu','Ayu Dark','Ayu Light','Ayu Mirage','BoN','Buganizer','Cascadia Code','Cascadia Mono','Catppuccin',
+  'Catppuccin Frappe','Catppuccin Latte','Catppuccin Macchiato','Catppuccin Mocha','Charon','Chromium','Cleo','Consolas','Courier New','Ctrl',
+  'Dracula','Fenrir','Finn','Fira Code','Fira Mono','Flash','Fola','Gemini 2.5 Flash Image','Gemini 3 Pro Image','Gemini 3.1 Flash Image','Gemini Enterprise','Gero',
+  'Google Antigravity SDK','Google Chat','Google Chrome','Google Sans','Google Sans Code','Google Sans Text','Google3',
+  'Gruvbox','Gruvbox Dark','Gruvbox Light','Gruvbox Material','Hack','Inconsolata','Inter','JetBrains Mono','Jetski','Kore','Leda','Linux','Lora','MacOS',
+  'Menlo','Monaco','Monokai','Monokai Dimmed','Monokai Pro','my-gcp-project-id','Neno','Nord','Olin','One Dark','One Dark Pro','One Light','Orus','PID','PID ',
+  'Pro','Project 4K','Puck','Quiet Light','Roboto Mono','SF Mono','Shift','Solarized','Solarized Dark','Solarized Light','Source Code Pro','Tari',
   'Tokyo Night','Ubuntu Mono','Windows','Workspace_1','Workspace_2','Workspace_3','Zephyr'
 ].includes(key) || /^(?:Antigravity|GravityBox|Google|Gemini|Claude|GPT(?:-OSS)?|OpenAI|DeepSeek|Ollama|GitHub|OAuth|MCP|API|JSON|HTTP|HTTPS|URL|URI|SSH|SQL|HTML|CSS|JavaScript|TypeScript|Node\.js|macOS|Linux|Windows|Docker|VS Code)(?:$|\s+[\d.(])/.test(key);
 export function classifyCoverage(key: string, translation?: string, template = false): string {

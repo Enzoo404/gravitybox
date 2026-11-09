@@ -530,6 +530,7 @@ struct LiveStatus {
     var taskRevision = 0
     var languageMode = "zh"
     var mode = "starting"
+    var translationEnabled: Bool? = nil
     var appVersion = ""
     var entries = 0
     var windows = 0
@@ -552,6 +553,7 @@ struct LiveStatus {
         bundleCacheHit = raw["bundleCacheHit"] as? Bool ?? false
         languageMode = raw["languageMode"] as? String ?? "zh"
         mode = raw["mode"] as? String ?? "starting"
+        translationEnabled = raw["translationEnabled"] as? Bool
         appVersion = raw["appVersion"] as? String ?? ""
         entries = raw["entries"] as? Int ?? 0
         windows = raw["windows"] as? Int ?? 0
@@ -573,7 +575,13 @@ struct LiveStatus {
     }
 
     var enabled: Bool {
-        mode == "connected" || mode == "adaptive" || mode == "waiting" || mode == "waiting-window"
+        if mode == "paused" || mode == "unsupported" || mode == "legacy-blocked" || mode == "stopped" {
+            return false
+        }
+        if let translationEnabled {
+            return translationEnabled
+        }
+        return mode == "connected" || mode == "adaptive" || mode == "waiting" || mode == "waiting-window" || mode == "starting"
     }
 
     var title: String {

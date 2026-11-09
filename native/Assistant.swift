@@ -118,28 +118,7 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     #endif
 
     static func processArguments(for pid: pid_t) -> [String] {
-        guard pid > 0 else { return [] }
-        var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
-        var size: Int = 0
-        guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > MemoryLayout<Int32>.size else { return [] }
-        var buffer = [UInt8](repeating: 0, count: size)
-        guard sysctl(&mib, 3, &buffer, &size, nil, 0) == 0 else { return [] }
-        let argc = buffer.withUnsafeBytes { $0.load(as: Int32.self) }
-        guard argc > 0 else { return [] }
-        var index = MemoryLayout<Int32>.size
-        while index < size && buffer[index] != 0 { index += 1 }
-        while index < size && buffer[index] == 0 { index += 1 }
-        var args: [String] = []
-        for _ in 0..<argc {
-            guard index < size else { break }
-            let start = index
-            while index < size && buffer[index] != 0 { index += 1 }
-            if let str = String(bytes: buffer[start..<index], encoding: .utf8) {
-                args.append(str)
-            }
-            index += 1
-        }
-        return args
+        BackendBridge.processArguments(for: pid)
     }
 
     static func isMainPeerApplication(_ app: NSRunningApplication, excludingPid myPid: pid_t) -> Bool {
@@ -205,6 +184,9 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         // 登录项启动时没有窗口，历史上因此从未创建定时器，菜单栏配额永远不更新。
         configureRefreshTimer()
         if quotaRefreshTimer == nil { configureQuotaRefreshTimer() }
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            self?.updateManager.cleanupObsoleteUpdateArtifacts(restartedAfterUpdate: restartedAfterUpdate, detachMountedVolumes: true)
+        }
         configureAutoUpdateTimer()
         refresh()
     }
@@ -265,7 +247,7 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         let checkmark = NSImage(systemSymbolName: "checkmark", accessibilityDescription: nil)
         checkmark?.size = stateSize; checkmark?.isTemplate = true; toggle.onStateImage = checkmark
         toggle.offStateImage = NSImage(size: stateSize, flipped: false) { _ in true }
-        toggle.state = statusValue.enabled ? .on : .off
+        toggle.state = statusValue.enabled ? NSControl.StateValue.on : NSControl.StateValue.off
         toggle.isEnabled = reachable && statusValue.mode != "unsupported"
 
         menu.addItem(.separator())
@@ -485,7 +467,7 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         let checkmark = NSImage(systemSymbolName: "checkmark", accessibilityDescription: nil)
         checkmark?.size = stateSize; checkmark?.isTemplate = true; toggle.onStateImage = checkmark
         toggle.offStateImage = NSImage(size: stateSize, flipped: false) { _ in true }
-        toggle.state = statusValue.enabled ? .on : .off
+        toggle.state = statusValue.enabled ? NSControl.StateValue.on : NSControl.StateValue.off
         toggle.isEnabled = reachable && statusValue.mode != "unsupported"
         menu.addItem(.separator())
         add(menu, "设置…", #selector(showSettingsFromMenuPanel), ",")
@@ -1236,7 +1218,51 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     @objc func showAccounts() { selectPage(1) }
     @objc func showUsage() { selectPage(2) }
     @objc func showSettings() { selectPage(3) }
-    @objc func toggleTranslation() { perform(["command": statusValue.mode == "paused" ? "resume" : "pause"]) { [weak self] _ in self?.refresh() } }
+    func setTranslationEnabled(_ enable: Bool) {
+        let previousStatus = statusValue
+        statusValue.translationEnabled = enable
+        if enable {
+            if statusValue.mode == "paused" || statusValue.mode == "error" || statusValue.mode == "starting" {
+                statusValue.mode = "waiting"
+            }
+        } else {
+            statusValue.mode = "paused"
+        }
+        updateViews()
+        let sendCommand = { [weak self] in
+            guard let self else { return }
+            self.bridge.send(["command": enable ? "resume" : "pause"]) { [weak self] result in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    switch result {
+                    case .success(let value):
+                        if let raw = value["status"] as? [String: Any] {
+                            self.reachable = true
+                            self.recoveryAttempts = 0
+                            self.statusValue = self.mergeStatusSnapshot(raw, previous: self.statusValue)
+                            self.updateViews()
+                        }
+                        self.refresh()
+                    case .failure(let error):
+                        self.statusValue = previousStatus
+                        self.updateViews()
+                        self.showMessage(error.localizedDescription, error: true)
+                        self.refresh()
+                    }
+                }
+            }
+        }
+        if !reachable && !bridge.isOwnedProcessRunning {
+            recoveryAttempts = 0
+            nextRecoveryAt = .distantPast
+            bridge.launch { _ in sendCommand() }
+        } else {
+            sendCommand()
+        }
+    }
+    @objc func toggleTranslation() {
+        setTranslationEnabled(!statusValue.enabled)
+    }
     @objc func openAntigravity() {
         #if NATIVE_UI_TEST
         openedApplications += 1; return
@@ -1347,7 +1373,7 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     }
 
     @objc func about() {
-        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0.0"
+        let version = updateManager.currentVersion
         var buildStr = (Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if buildStr.lowercased().hasPrefix("build ") {
             buildStr = String(buildStr.dropFirst(6)).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1359,7 +1385,7 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
            !rev.isEmpty, buildStr != rev {
             buildStr = buildStr.isEmpty ? rev : "\(buildStr) · \(rev)"
         }
-        let resolvedBuild = buildStr.isEmpty ? "10000" : buildStr
+        let resolvedBuild = buildStr.isEmpty ? updateManager.currentBuildDisplay : buildStr
         guard let window, window.isVisible, window.activeSheetWindow == nil else {
             let alert = NSAlert(); alert.messageText = "GravityBox"; alert.informativeText = "版本 \(version)\n构建 \(resolvedBuild)"; alert.addButton(withTitle: "关闭")
             NSApp.activate(ignoringOtherApps: true)
@@ -1466,7 +1492,7 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             case .success(let value):
                 let prevAccountsRevision = self.statusValue.accountsRevision
                 let prevLiveEmail = self.statusValue.liveAccountEmail
-                self.reachable = true;var raw=value["status"] as? [String:Any] ?? [:];raw["taskRevision"]=value["taskRevision"];raw["runningTasks"]=value["runningTasks"];self.statusValue=self.mergeStatusSnapshot(raw, previous:self.statusValue);if let rows=value["tasks"] as? [[String:Any]]{self.taskRows=rows;self.lastTaskRevision=value["taskRevision"] as? Int ?? 0}
+                self.reachable = true; self.recoveryAttempts = 0; var raw=value["status"] as? [String:Any] ?? [:];raw["taskRevision"]=value["taskRevision"];raw["runningTasks"]=value["runningTasks"];self.statusValue=self.mergeStatusSnapshot(raw, previous:self.statusValue);if let rows=value["tasks"] as? [[String:Any]]{self.taskRows=rows;self.lastTaskRevision=value["taskRevision"] as? Int ?? 0}
                 if includeAccounts {
                     let accountsChanged = (!self.statusValue.accountsRevision.isEmpty && self.statusValue.accountsRevision != prevAccountsRevision) || self.statusValue.liveAccountEmail != prevLiveEmail
                     let periodicAccountRefreshDue = (self.menuTracking || (self.contentVisible && self.currentPage == 1)) && Date().timeIntervalSince(self.lastAccountListFetchAt) >= 15.0
@@ -1561,12 +1587,13 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
                       let data = try? Data(contentsOf: statusURL),
                       let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
                 DispatchQueue.main.async { [weak self] in
-                    guard let self, (raw["pid"] as? NSNumber)?.int32Value == self.bridge.ownedPID else { return }
+                    guard let self, self.bridge.ownedPID == nil || (raw["pid"] as? NSNumber)?.int32Value == self.bridge.ownedPID else { return }
                     let rawTaskRev = raw["taskRevision"] as? Int ?? 0
                     if self.reachable && rawTaskRev < self.statusValue.taskRevision { return }
                     let wasReachable = self.reachable
                     let taskChanged = self.statusValue.taskRevision != rawTaskRev
                     self.reachable = true
+                    self.recoveryAttempts = 0
                     self.statusValue = self.mergeStatusSnapshot(raw, previous: self.statusValue)
                     self.updateViews()
                     if !wasReachable || (taskChanged && (self.pendingAccountTaskId != nil || self.quotaRefreshing)) {
@@ -1582,6 +1609,7 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     /// 合并 status.json 快照：其中缺失的账号字段沿用上一次 socket status 的值，避免账号/费用 UI 瞬时清空。
     private func mergeStatusSnapshot(_ raw: [String: Any], previous: LiveStatus) -> LiveStatus {
         var merged = LiveStatus(raw)
+        if raw["translationEnabled"] == nil { merged.translationEnabled = previous.translationEnabled }
         if raw["activeAccountEmail"] == nil { merged.activeAccountEmail = previous.activeAccountEmail }
         if raw["activeFiveHourQuota"] == nil { merged.activeFiveHourQuota = previous.activeFiveHourQuota }
         if raw["activeSubscriptionTier"] == nil { merged.activeSubscriptionTier = previous.activeSubscriptionTier }

@@ -1,6 +1,6 @@
 {
   "name": "gravitybox",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "private": true,
   "type": "module",
   "description": "GravityBox: 原生 macOS Antigravity 工具箱",
@@ -29,6 +29,10 @@
     "package:mac:2.27.0": "npm run verify:2.27.0 && node tools/package-mac.mjs --target-app-version 2.27.0",
     "verify:2.28.0": "node tools/verify.mjs --target-app-version 2.28.0",
     "package:mac:2.28.0": "npm run verify:2.28.0 && node tools/package-mac.mjs --target-app-version 2.28.0",
+    "verify:2.29.0": "node tools/verify.mjs --target-app-version 2.29.0",
+    "package:mac:2.29.0": "npm run verify:2.29.0 && node tools/package-mac.mjs --target-app-version 2.29.0",
+    "verify:2.29.1": "node tools/verify.mjs --target-app-version 2.29.1",
+    "package:mac:2.29.1": "npm run verify:2.29.1 && node tools/package-mac.mjs --target-app-version 2.29.1",
     "i18n:extract": "node tools/extract-ui-strings.mjs",
     "i18n:coverage": "node tools/coverage-report.mjs",
     "i18n:gate": "npm run build && node tools/coverage-report.mjs --gate",

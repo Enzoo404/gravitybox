@@ -41,7 +41,24 @@ final class AppUpdateManager {
     }
 
     var currentVersion: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0.0"
+        if let bundleVer = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !bundleVer.isEmpty {
+            return bundleVer
+        }
+        let candidateURLs: [URL?] = [
+            app.resources.appendingPathComponent("build-info.json"),
+            Bundle.main.resourceURL?.appendingPathComponent("build-info.json"),
+            URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("package.json")
+        ]
+        for url in candidateURLs.compactMap({ $0 }) {
+            if let data = try? Data(contentsOf: url),
+               let info = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let ver = (info["version"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !ver.isEmpty {
+                return Self.normalizeVersion(ver)
+            }
+        }
+        return "1.0.4"
     }
 
     var currentBuildDisplay: String {
@@ -49,14 +66,24 @@ final class AppUpdateManager {
         if buildStr.lowercased().hasPrefix("build ") {
             buildStr = String(buildStr.dropFirst(6)).trimmingCharacters(in: .whitespacesAndNewlines)
         }
-        if let infoURL = Bundle.main.resourceURL?.appendingPathComponent("build-info.json"),
-           let data = try? Data(contentsOf: infoURL),
-           let info = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let rev = (info["revision"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !rev.isEmpty, buildStr != rev {
-            buildStr = buildStr.isEmpty ? rev : "\(buildStr) · \(rev)"
+        let infoURLs = [
+            app.resources.appendingPathComponent("build-info.json"),
+            Bundle.main.resourceURL?.appendingPathComponent("build-info.json")
+        ].compactMap { $0 }
+        for infoURL in infoURLs {
+            if let data = try? Data(contentsOf: infoURL),
+               let info = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                if buildStr.isEmpty, let buildNum = info["buildNumber"] {
+                    buildStr = "\(buildNum)"
+                }
+                if let rev = (info["revision"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !rev.isEmpty, !buildStr.contains(rev) {
+                    buildStr = buildStr.isEmpty ? rev : "\(buildStr) · \(rev)"
+                }
+                break
+            }
         }
-        return buildStr.isEmpty ? "10000" : buildStr
+        return buildStr.isEmpty ? "10004" : buildStr
     }
 
     static func normalizeVersion(_ raw: String) -> String {
@@ -221,24 +248,74 @@ final class AppUpdateManager {
             .replacingOccurrences(of: "\r", with: "\n")
         var outputLines: [String] = []
         var inCodeBlock = false
+        var codeBlockLines: [String] = []
+        var skipSection = false
+
+        func isBoilerplateHeading(_ heading: String) -> Bool {
+            let lower = heading.lowercased()
+            return lower.contains("sha-256") ||
+                lower.contains("sha256") ||
+                heading.contains("附件校验") ||
+                heading.contains("安装与首次打开") ||
+                heading.contains("手动安装")
+        }
+
+        func isBoilerplateCodeLine(_ line: String) -> Bool {
+            let t = line.trimmingCharacters(in: .whitespaces)
+            if t.isEmpty { return true }
+            if t.contains("com.apple.quarantine") || t.hasPrefix("sudo xattr") || t.hasPrefix("xattr ") {
+                return true
+            }
+            let parts = t.split(whereSeparator: { $0.isWhitespace })
+            if let first = parts.first, first.count == 64,
+               first.allSatisfy({ $0.isHexDigit }) {
+                return true
+            }
+            return false
+        }
+
         for rawLine in normalized.components(separatedBy: "\n") {
             let trimmed = rawLine.trimmingCharacters(in: .whitespaces)
             if trimmed.hasPrefix("```") {
-                inCodeBlock.toggle()
+                if inCodeBlock {
+                    inCodeBlock = false
+                    if !skipSection && !codeBlockLines.allSatisfy(isBoilerplateCodeLine) {
+                        for cLine in codeBlockLines {
+                            outputLines.append("  " + cLine)
+                        }
+                    }
+                    codeBlockLines.removeAll()
+                } else {
+                    inCodeBlock = true
+                    codeBlockLines.removeAll()
+                }
                 continue
             }
             if inCodeBlock {
-                outputLines.append("  " + rawLine)
+                codeBlockLines.append(rawLine)
                 continue
             }
-            var line = rawLine
+            var headingTitle: String?
             if trimmed.hasPrefix("### ") {
-                line = String(trimmed.dropFirst(4)).trimmingCharacters(in: .whitespaces)
+                headingTitle = String(trimmed.dropFirst(4)).trimmingCharacters(in: .whitespaces)
             } else if trimmed.hasPrefix("## ") {
-                line = String(trimmed.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+                headingTitle = String(trimmed.dropFirst(3)).trimmingCharacters(in: .whitespaces)
             } else if trimmed.hasPrefix("# ") {
-                line = String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces)
-            } else if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") {
+                headingTitle = String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+            }
+            if let headingTitle {
+                skipSection = isBoilerplateHeading(headingTitle)
+                if !skipSection {
+                    let cleanHeading = headingTitle.replacingOccurrences(of: "**", with: "")
+                        .replacingOccurrences(of: "`", with: "")
+                    outputLines.append(cleanHeading)
+                }
+                continue
+            }
+            if skipSection { continue }
+
+            var line = rawLine
+            if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") {
                 line = "• " + String(trimmed.dropFirst(2))
             }
             line = line.replacingOccurrences(of: "**", with: "")
@@ -362,7 +439,183 @@ final class AppUpdateManager {
         return "/Applications/GravityBox.app"
     }
 
-    static func buildDetachedUpdaterScript(myPid: Int32, stagedAppPath: String, targetAppPath: String, workDirPath: String) -> String {
+    private static let dmgFilenameRegex = try! NSRegularExpression(
+        pattern: #"^GravityBox[-_ ]v?(\d+\.\d+\.\d+(?:-[A-Za-z0-9._-]+)?)(?:-(?:arm64|universal|x86_64|mac))?\.dmg(?:\.sha256)?$"#,
+        options: [.caseInsensitive]
+    )
+
+    static func extractGravityBoxDMGVersion(from fileName: String) -> String? {
+        let ns = fileName as NSString
+        let range = NSRange(location: 0, length: ns.length)
+        guard let match = dmgFilenameRegex.firstMatch(in: fileName, options: [], range: range),
+              match.numberOfRanges >= 2 else {
+            return nil
+        }
+        let rawVer = ns.substring(with: match.range(at: 1))
+        let normalized = normalizeVersion(rawVer)
+        return normalized.isEmpty ? nil : normalized
+    }
+
+    var hasDownloadedUpdateReady: Bool {
+        guard let url = downloadedDMGURL, !downloadInFlight else { return false }
+        if case .installing = state { return false }
+        return FileManager.default.fileExists(atPath: url.path)
+    }
+
+    func validateCachedDMGState() {
+        if let url = downloadedDMGURL, !FileManager.default.fileExists(atPath: url.path) {
+            downloadedDMGURL = nil
+            if case .readyToInstall(let release, _) = state {
+                state = .updateAvailable(release)
+            }
+        }
+    }
+
+    @discardableResult
+    func cleanupObsoleteUpdateArtifacts(
+        restartedAfterUpdate: Bool = false,
+        currentVersionOverride: String? = nil,
+        downloadsDirectory: URL? = nil,
+        detachMountedVolumes: Bool = false
+    ) -> Int {
+        let fm = FileManager.default
+        let currentVer = Self.normalizeVersion(currentVersionOverride ?? currentVersion)
+        var cleanedCount = 0
+
+        let updatesDir = app.state.appendingPathComponent("updates", isDirectory: true)
+        if let entries = try? fm.contentsOfDirectory(at: updatesDir, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey], options: [.skipsHiddenFiles]) {
+            for entryURL in entries {
+                let name = entryURL.lastPathComponent
+                let values = try? entryURL.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+                if values?.isSymbolicLink == true { continue }
+                let isDir = values?.isDirectory == true
+
+                if isDir && name.hasPrefix("install-") {
+                    if case .installing = state { continue }
+                    if (try? fm.removeItem(at: entryURL)) != nil {
+                        cleanedCount += 1
+                    }
+                    continue
+                }
+
+                if isDir && name.lowercased().hasPrefix("v") {
+                    let folderVer = Self.normalizeVersion(name)
+                    if !folderVer.isEmpty && !Self.isNewerVersion(folderVer, than: currentVer) {
+                        if (try? fm.removeItem(at: entryURL)) != nil {
+                            cleanedCount += 1
+                        }
+                    } else if !downloadInFlight,
+                              let children = try? fm.contentsOfDirectory(at: entryURL, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) {
+                        for child in children where child.lastPathComponent.hasSuffix(".dmg.part") {
+                            if (try? fm.removeItem(at: child)) != nil {
+                                cleanedCount += 1
+                            }
+                        }
+                    }
+                    continue
+                }
+
+                if !isDir {
+                    if !downloadInFlight && name.hasSuffix(".dmg.part") {
+                        if (try? fm.removeItem(at: entryURL)) != nil {
+                            cleanedCount += 1
+                        }
+                    } else if let pkgVer = Self.extractGravityBoxDMGVersion(from: name),
+                              !Self.isNewerVersion(pkgVer, than: currentVer) {
+                        if (try? fm.removeItem(at: entryURL)) != nil {
+                            cleanedCount += 1
+                        }
+                    }
+                }
+            }
+        }
+
+        let lastCleaned = app.configuration?.value.lastCleanedVersion ?? ""
+        let isVersionUpgrade = !currentVer.isEmpty && lastCleaned != currentVer
+        let shouldCleanDownloads = restartedAfterUpdate || isVersionUpgrade || downloadsDirectory != nil
+
+        if detachMountedVolumes && (restartedAfterUpdate || isVersionUpgrade) {
+            let bundlePath = Bundle.main.bundleURL.standardizedFileURL.path
+            if !bundlePath.hasPrefix("/Volumes/") {
+                let volumesDir = URL(fileURLWithPath: "/Volumes", isDirectory: true)
+                if let mounts = try? fm.contentsOfDirectory(at: volumesDir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) {
+                    for mountURL in mounts {
+                        let mountName = mountURL.lastPathComponent
+                        guard mountName.lowercased().hasPrefix("gravitybox"),
+                              fm.fileExists(atPath: mountURL.appendingPathComponent("GravityBox.app/Contents/Info.plist").path) else {
+                            continue
+                        }
+                        let detach = Process()
+                        detach.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
+                        detach.arguments = ["detach", mountURL.path, "-force", "-quiet"]
+                        Self.configureSilentProcess(detach)
+                        try? detach.run()
+                        detach.waitUntilExit()
+                    }
+                }
+            }
+        }
+
+        if shouldCleanDownloads {
+            let targetDownloadsDir = downloadsDirectory ?? fm.urls(for: .downloadsDirectory, in: .userDomainMask).first
+            if let downloadsURL = targetDownloadsDir,
+               let files = try? fm.contentsOfDirectory(at: downloadsURL, includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey], options: [.skipsHiddenFiles]) {
+                for fileURL in files {
+                    let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+                    guard values?.isSymbolicLink != true, values?.isRegularFile == true else { continue }
+                    let fileName = fileURL.lastPathComponent
+                    guard let pkgVer = Self.extractGravityBoxDMGVersion(from: fileName),
+                          !Self.isNewerVersion(pkgVer, than: currentVer) else {
+                        continue
+                    }
+                    if (try? fm.trashItem(at: fileURL, resultingItemURL: nil)) != nil {
+                        cleanedCount += 1
+                    } else if downloadsDirectory != nil, (try? fm.removeItem(at: fileURL)) != nil {
+                        cleanedCount += 1
+                    }
+                }
+            }
+        }
+
+        let syncMemoryState = { [weak self] in
+            guard let self else { return }
+            if let dmg = self.downloadedDMGURL, !fm.fileExists(atPath: dmg.path) {
+                self.downloadedDMGURL = nil
+            }
+            if let rel = self.availableRelease, !Self.isNewerVersion(rel.version, than: currentVer) {
+                self.availableRelease = nil
+                self.downloadedDMGURL = nil
+                self.state = .upToDate
+                self.app.preferencesController?.refreshUpdateRowState()
+                self.onStateChanged?()
+            } else {
+                self.validateCachedDMGState()
+            }
+            if self.app.configuration != nil && self.app.configuration.value.lastCleanedVersion != currentVer {
+                self.app.configuration.value.lastCleanedVersion = currentVer
+                try? self.app.configuration.save()
+            }
+        }
+        if Thread.isMainThread {
+            syncMemoryState()
+        } else {
+            DispatchQueue.main.async(execute: syncMemoryState)
+        }
+
+        return cleanedCount
+    }
+
+    static func buildDetachedUpdaterScript(myPid: Int32, stagedAppPath: String, targetAppPath: String, workDirPath: String, dmgFilePath: String = "") -> String {
+        let dmgCleanupCommands: String
+        if !dmgFilePath.isEmpty {
+            let dmgDirPath = (dmgFilePath as NSString).deletingLastPathComponent
+            dmgCleanupCommands = """
+              rm -f "\(dmgFilePath)" "\(dmgFilePath).sha256" 2>/dev/null || true
+              rmdir "\(dmgDirPath)" 2>/dev/null || true
+            """
+        } else {
+            dmgCleanupCommands = "  :"
+        }
         return """
         nohup /bin/sh -c '
         trap "" HUP TERM INT QUIT PIPE
@@ -376,13 +629,18 @@ final class AppUpdateManager {
           sleep 0.2
         fi
         pkill -f "GravityBox.app/Contents/MacOS/GravityBox --lifecycle-agent" 2>/dev/null || true
+        REPLACED=0
         if rm -rf "\(targetAppPath)" && mv "\(stagedAppPath)" "\(targetAppPath)"; then
           /usr/bin/xattr -dr com.apple.quarantine "\(targetAppPath)" 2>/dev/null || true
-        else
-          /usr/bin/ditto "\(stagedAppPath)" "\(targetAppPath)" 2>/dev/null || true
+          REPLACED=1
+        elif /usr/bin/ditto "\(stagedAppPath)" "\(targetAppPath)" 2>/dev/null; then
           /usr/bin/xattr -dr com.apple.quarantine "\(targetAppPath)" 2>/dev/null || true
+          REPLACED=1
         fi
         rm -rf "\(workDirPath)" 2>/dev/null || true
+        if [ "$REPLACED" = "1" ]; then
+        \(dmgCleanupCommands)
+        fi
         /usr/bin/open -n "\(targetAppPath)" --args --restarted-after-update >/dev/null 2>&1 || /usr/bin/open "\(targetAppPath)" >/dev/null 2>&1
         ' >/dev/null 2>&1 &
         """
@@ -450,7 +708,8 @@ final class AppUpdateManager {
                         myPid: myPid,
                         stagedAppPath: stagedApp.path,
                         targetAppPath: targetAppPath,
-                        workDirPath: workDir.path
+                        workDirPath: workDir.path,
+                        dmgFilePath: dmgFile.path
                     )
                     let updater = Process()
                     updater.executableURL = URL(fileURLWithPath: "/bin/sh")
@@ -652,6 +911,7 @@ final class UpdateSheetController: NSObject, NSWindowDelegate {
     }
 
     func show(in parent: NSWindow) {
+        app.updateManager.validateCachedDMGState()
         autoUpdateSwitch.state = app.configuration.value.autoUpdateEnabled ? .on : .off
         renderState()
         if sheet.sheetParent == nil {
@@ -778,7 +1038,7 @@ final class UpdateSheetController: NSObject, NSWindowDelegate {
         do {
             try app.configuration.save()
             app.configureAutoUpdateTimer()
-            if next, let release = app.updateManager.availableRelease, app.updateManager.downloadedDMGURL == nil {
+            if next, let release = app.updateManager.availableRelease, !app.updateManager.hasDownloadedUpdateReady {
                 app.updateManager.preDownloadRelease(release, silent: true)
             }
         } catch {
@@ -838,6 +1098,13 @@ final class PreferencesController: NSObject {
         translationSwitch.controlSize = .small
         translationSwitch.state = app.statusValue.enabled ? .on : .off
         translationSwitch.isEnabled = app.reachable && app.statusValue.mode != "unsupported"
+        if !app.reachable {
+            translationSwitch.toolTip = "正在连接后台服务…"
+        } else if app.statusValue.mode == "unsupported" {
+            translationSwitch.toolTip = "当前应用版本不受支持"
+        } else {
+            translationSwitch.toolTip = app.statusValue.enabled ? "点击关闭界面汉化" : "点击开启界面汉化"
+        }
         translationSwitch.target = self; translationSwitch.action = #selector(toggleTranslation); translationSwitch.setAccessibilityLabel("界面汉化")
 
         login.controlSize = .small
@@ -879,7 +1146,7 @@ final class PreferencesController: NSObject {
         ], spacing: 12)
         for child in maintenance.arrangedSubviews { fillWidth(child, in: maintenance) }
 
-        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0.0"
+        let version = app.updateManager.currentVersion
         let verPill = pillBadge("v\(version)", color: Design.blue)
         checkUpdateBtn = button("检查更新", target: self, action: #selector(showUpdateSheet))
         let aboutRow = settingRow(
@@ -960,6 +1227,13 @@ final class PreferencesController: NSObject {
     func update() {
         translationSwitch.state = app.statusValue.enabled ? .on : .off
         translationSwitch.isEnabled = app.reachable && app.statusValue.mode != "unsupported"
+        if !app.reachable {
+            translationSwitch.toolTip = "正在连接后台服务…"
+        } else if app.statusValue.mode == "unsupported" {
+            translationSwitch.toolTip = "当前应用版本不受支持"
+        } else {
+            translationSwitch.toolTip = app.statusValue.enabled ? "点击关闭界面汉化" : "点击开启界面汉化"
+        }
         syncLifecycleSwitch.state = app.configuration.value.syncAntigravityLifecycle ? .on : .off
         refresh.selectItem(at: Self.refreshIntervals.firstIndex(of: app.configuration.value.quotaRefreshMinutes) ?? 0)
         refreshUpdateRowState()
@@ -967,7 +1241,8 @@ final class PreferencesController: NSObject {
     }
 
     @objc func toggleTranslation() {
-        app.toggleTranslation()
+        let target = translationSwitch.state == .on
+        app.setTranslationEnabled(target)
     }
 
     @objc func toggleSyncLifecycle() {

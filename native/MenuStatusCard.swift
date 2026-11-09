@@ -231,7 +231,7 @@ final class MenuAccountRowButton: NSButton {
         nameLbl.lineBreakMode = .byTruncatingTail
         nameLbl.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        let badge = pillBadge(tier, color: tier == "ULTRA" ? .systemPurple : tier == "PRO" ? .systemBlue : .secondaryLabelColor)
+        let badge = pillBadge(tier, color: tier == "ULTRA" ? .systemPurple : tier == "PRO" ? .systemBlue : Design.inactivePill)
         badge.isHidden = tier.isEmpty
         badge.setContentCompressionResistancePriority(.required, for: .horizontal)
 
@@ -569,7 +569,7 @@ final class MenuStatusCard: NSView {
         emailLabel.isHidden = email.isEmpty
         let tier = AccountIdentity.normalizeTier(account["subscription_tier"] as? String)
         tierBadge.title = tier
-        tierBadge.tint = tier == "ULTRA" ? .systemPurple : tier == "PRO" ? .systemBlue : .secondaryLabelColor
+        tierBadge.tint = tier == "ULTRA" ? .systemPurple : tier == "PRO" ? .systemBlue : Design.inactivePill
         tierBadge.isHidden = tier.isEmpty
         accountSwitcher.isEnabled = assistant?.reachable == true && assistant?.accountSwitchInFlight != true
         accountSwitcher.switchIcon.isHidden = false
@@ -1602,7 +1602,7 @@ final class MenuExpandableAccountCardView: NSBox {
         emailLabel.toolTip = email
 
         tierBadge.title = tier
-        tierBadge.tint = tier == "ULTRA" ? .systemPurple : (tier == "PRO" ? .systemBlue : .secondaryLabelColor)
+        tierBadge.tint = tier == "ULTRA" ? .systemPurple : (tier == "PRO" ? .systemBlue : Design.inactivePill)
         tierBadge.isHidden = tier.isEmpty
 
         if isCurrent {
@@ -2775,7 +2775,7 @@ final class MenuPanelController: NSViewController {
         quotaEmailLabel.stringValue = email
         quotaEmailLabel.toolTip = email
         quotaTierBadge.title = tier
-        quotaTierBadge.tint = tier == "ULTRA" ? .systemPurple : (tier == "PRO" ? .systemBlue : .secondaryLabelColor)
+        quotaTierBadge.tint = tier == "ULTRA" ? .systemPurple : (tier == "PRO" ? .systemBlue : Design.inactivePill)
         quotaTierBadge.isHidden = tier.isEmpty
 
         let liveEmail = app.statusValue.liveAccountEmail.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2790,7 +2790,7 @@ final class MenuPanelController: NSViewController {
             quotaStatusBadge.isHidden = false
         } else {
             quotaStatusBadge.title = "已选记录"
-            quotaStatusBadge.tint = .secondaryLabelColor
+            quotaStatusBadge.tint = Design.inactivePill
             quotaStatusBadge.isHidden = false
         }
 

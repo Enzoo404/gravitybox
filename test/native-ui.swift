@@ -38,7 +38,7 @@ import Cocoa
         accounts[2]["subscription_tier"] = "FREE"
         accounts[2]["familyWindows"] = ["gemini":["weekly":bucket(100,reset:"6天23小时后重置")],"claude":["weekly":bucket(100,reset:"6天23小时后重置")]]
         accounts[2]["familyModelQuota"] = ["gemini":bucket(100,reset:"4小时59分后重置"),"claude":bucket(100,reset:"6天23小时后重置")]
-        var activeId = "a", switches = 0, preflightState = "safe"
+        var activeId = "a", switches = 0, preflightState = "safe", lastTranslationCommand: String? = nil
         assistant.activeAccountId = activeId; assistant.cachedAccounts = accounts
         let models:[[String:Any]] = [
             ["model":"gemini-3.8-flash-n","totalTokens":90800000,"promptTokens":4000000,"candidatesTokens":300000,"requestCount":695,"estimatedUsd":10.77,"priced":true,"pricingStatus":"historical"],
@@ -102,6 +102,8 @@ import Cocoa
             case "account_switch_preflight": return ["ok":preflightState != "error","safe":preflightState == "safe","appRunning":preflightState == "busy","hasRunningTask":preflightState == "busy","error":"隔离预检失败"]
             case "account_switch": switches += 1; activeId = payload["id"] as? String ?? activeId; return ["ok":true,"message":"隔离事务完成"]
             case "account_recovery_info": return ["ok":true,"available":false]
+            case "pause": lastTranslationCommand = "pause"; return ["ok":true]
+            case "resume": lastTranslationCommand = "resume"; return ["ok":true]
             default: return ["ok":true]
             }
         }
@@ -265,7 +267,7 @@ import Cocoa
             check(tile.iconView.image != nil, "\(tile.metricKey) tile must contain micro colored SF Symbol")
             check(tile.frame.height >= 54 && tile.frame.height <= 56, "\(tile.metricKey) tile must maintain 54~56pt compact height")
             check(tile.accessibilityRole() == .group, "\(tile.metricKey) tile must be a read-only group, not interactive button")
-            check(!(tile is NSControl), "\(tile.metricKey) tile must not inherit from NSControl")
+            check(!((tile as AnyObject) is NSControl), "\(tile.metricKey) tile must not inherit from NSControl")
             check(tile.titleLabel.font?.pointSize == 11.5, "\(tile.metricKey) tile title font must be 11.5pt")
             check(tile.valueLabel.font?.pointSize == 20, "\(tile.metricKey) tile value font must be 20pt")
             func subviewsRecursive(_ v: NSView) -> [NSView] { [v] + v.subviews.flatMap { subviewsRecursive($0) } }
@@ -295,7 +297,7 @@ import Cocoa
         check(zip(firstThreeModels, menuPanel.modelsListStack.arrangedSubviews.prefix(3)).allSatisfy { $0 === $1 }, "Expanding model list must reuse existing model row views without rebuilding")
         for sub in menuPanel.modelsListStack.arrangedSubviews {
             guard let modelRow = sub as? MenuModelUsageRow else { continue }
-            check(!(modelRow is NSControl), "MenuModelUsageRow must be a read-only NSView, not NSControl")
+            check(!((modelRow as AnyObject) is NSControl), "MenuModelUsageRow must be a read-only NSView, not NSControl")
             check(modelRow.accessibilityRole() == .group, "MenuModelUsageRow must have group accessibility role")
             func rowSubviews(_ v: NSView) -> [NSView] { [v] + v.subviews.flatMap { rowSubviews($0) } }
             let subs = rowSubviews(modelRow)
@@ -492,8 +494,62 @@ import Cocoa
             check(updateSheet.closeBtn.isEnabled == true, "Update sheet closeBtn must be enabled in updateAvailable state")
             check(updateSheet.changelogTextView.string.contains("• 新增 GitHub Release 检查更新"), "Update sheet must format markdown list items into bullets")
             check(!updateSheet.changelogTextView.string.contains("```") && !updateSheet.changelogTextView.string.contains("###"), "Update sheet must strip raw markdown code fences and heading hashes")
-            let updaterScript = AppUpdateManager.buildDetachedUpdaterScript(myPid: 12345, stagedAppPath: "/tmp/staged/GravityBox.app", targetAppPath: "/Applications/GravityBox.app", workDirPath: "/tmp/staged")
+            check(!updateSheet.changelogTextView.string.contains("sudo xattr") && !updateSheet.changelogTextView.string.contains("SHA-256"), "Update sheet must strip terminal quarantine commands and SHA-256 footer blocks")
+            let updaterScript = AppUpdateManager.buildDetachedUpdaterScript(
+                myPid: 12345,
+                stagedAppPath: "/tmp/staged/GravityBox.app",
+                targetAppPath: "/Applications/GravityBox.app",
+                workDirPath: "/tmp/staged",
+                dmgFilePath: "/tmp/updates/v1.0.4/GravityBox-1.0.4-arm64.dmg"
+            )
             check(updaterScript.contains("trap \"\" HUP TERM INT QUIT PIPE") && updaterScript.contains("kill -9 12345") && updaterScript.contains("--restarted-after-update"), "Detached updater script must ignore signals, bound PID wait with kill -9 fallback, and pass --restarted-after-update")
+            check(updaterScript.contains("REPLACED=1") && updaterScript.contains("rm -f \"/tmp/updates/v1.0.4/GravityBox-1.0.4-arm64.dmg\"") && updaterScript.contains("rmdir \"/tmp/updates/v1.0.4\""), "Detached updater script must automatically remove installed DMG and version directory after replacement succeeds")
+            check(AppUpdateManager.extractGravityBoxDMGVersion(from: "GravityBox-1.0.4-arm64.dmg") == "1.0.4", "Must extract version from standard arm64 DMG filename")
+            check(AppUpdateManager.extractGravityBoxDMGVersion(from: "GravityBox-v1.0.3-universal.dmg.sha256") == "1.0.3", "Must extract version from v-prefixed DMG sha256 sidecar")
+            check(AppUpdateManager.extractGravityBoxDMGVersion(from: "OtherApp-1.0.4-arm64.dmg") == nil, "Must ignore unrelated DMG filenames")
+
+            // Test cleanupObsoleteUpdateArtifacts across state/updates and Downloads
+            let fm = FileManager.default
+            let oldUpdateDir = state.appendingPathComponent("updates/v1.0.3", isDirectory: true)
+            let currUpdateDir = state.appendingPathComponent("updates/v1.0.4", isDirectory: true)
+            let newerUpdateDir = state.appendingPathComponent("updates/v1.1.0", isDirectory: true)
+            let staleInstallDir = state.appendingPathComponent("updates/install-stale", isDirectory: true)
+            let fakeDownloadsDir = state.appendingPathComponent("test-downloads", isDirectory: true)
+            for dir in [oldUpdateDir, currUpdateDir, newerUpdateDir, staleInstallDir, fakeDownloadsDir] {
+                try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            }
+            let oldCachedDMG = oldUpdateDir.appendingPathComponent("GravityBox-1.0.3-arm64.dmg")
+            let currCachedDMG = currUpdateDir.appendingPathComponent("GravityBox-1.0.4-arm64.dmg")
+            let newerCachedDMG = newerUpdateDir.appendingPathComponent("GravityBox-1.1.0-arm64.dmg")
+            let newerPartDMG = newerUpdateDir.appendingPathComponent("download-temp.dmg.part")
+            let dlOldDMG = fakeDownloadsDir.appendingPathComponent("GravityBox-1.0.3-arm64.dmg")
+            let dlCurrDMG = fakeDownloadsDir.appendingPathComponent("GravityBox-1.0.4-arm64.dmg")
+            let dlCurrSha = fakeDownloadsDir.appendingPathComponent("GravityBox-1.0.4-arm64.dmg.sha256")
+            let dlNewerDMG = fakeDownloadsDir.appendingPathComponent("GravityBox-1.1.0-arm64.dmg")
+            let dlUnrelated = fakeDownloadsDir.appendingPathComponent("Antigravity-2.29.0.dmg")
+            for f in [oldCachedDMG, currCachedDMG, newerCachedDMG, newerPartDMG, dlOldDMG, dlCurrDMG, dlCurrSha, dlNewerDMG, dlUnrelated] {
+                try Data("dummy".utf8).write(to: f)
+            }
+            let cleanedCount = assistant.updateManager.cleanupObsoleteUpdateArtifacts(
+                restartedAfterUpdate: true,
+                currentVersionOverride: "1.0.4",
+                downloadsDirectory: fakeDownloadsDir,
+                detachMountedVolumes: false
+            )
+            check(cleanedCount >= 6, "cleanupObsoleteUpdateArtifacts must clean obsolete update folders, part files, and <=1.0.4 Downloads DMGs")
+            check(!fm.fileExists(atPath: oldUpdateDir.path) && !fm.fileExists(atPath: currUpdateDir.path) && !fm.fileExists(atPath: staleInstallDir.path), "Obsolete updates/v<=1.0.4 and install-* directories must be removed")
+            check(fm.fileExists(atPath: newerCachedDMG.path) && !fm.fileExists(atPath: newerPartDMG.path), "Newer pre-downloaded DMG (v1.1.0 > 1.0.4) must be preserved while .dmg.part is cleaned")
+            check(!fm.fileExists(atPath: dlOldDMG.path) && !fm.fileExists(atPath: dlCurrDMG.path) && !fm.fileExists(atPath: dlCurrSha.path), "Downloads DMGs and .sha256 for versions <= 1.0.4 must be cleaned")
+            check(fm.fileExists(atPath: dlNewerDMG.path) && fm.fileExists(atPath: dlUnrelated.path), "Downloads DMGs for newer versions (>1.0.4) and unrelated apps must be preserved")
+            check(assistant.configuration.value.lastCleanedVersion == "1.0.4", "cleanupObsoleteUpdateArtifacts must persist lastCleanedVersion = 1.0.4")
+            try? fm.removeItem(at: state.appendingPathComponent("updates"))
+            try? fm.removeItem(at: fakeDownloadsDir)
+
+            for (theme, appearance) in [("light", NSAppearance.Name.aqua), ("dark", NSAppearance.Name.darkAqua)] {
+                updateSheet.sheet.appearance = NSAppearance(named: appearance)
+                updateSheet.sheet.contentView?.layoutSubtreeIfNeeded(); pump()
+                try capture(updateSheet.sheet.contentView!, output.appendingPathComponent("\(theme)-update-sheet-available.png"))
+            }
             check(updateSheet.autoUpdateSwitch.state == .off, "Auto update switch in sheet footer must default to off")
             updateSheet.autoUpdateSwitch.state = .off
             updateSheet.toggleAutoUpdate()
@@ -600,6 +656,60 @@ import Cocoa
         assistant.currentPage = -1
         assistant.selectPage(3); window.setContentSize(NSSize(width: 1060, height: 760)); pump()
         try capture(window.contentView!, output.appendingPathComponent("stable-settings.png"))
+
+        // Verify translationSwitch target-based state toggling and error-recovery behavior
+        check(stableSettings.translationSwitch.isEnabled == true, "translationSwitch must be enabled when reachable")
+        check(stableSettings.translationSwitch.state == .on, "translationSwitch must be on when status mode is adaptive")
+        check(stableSettings.translationSwitch.toolTip == "点击关闭界面汉化", "translationSwitch tooltip must prompt to disable when on")
+
+        // 1. User flips switch from ON to OFF
+        stableSettings.translationSwitch.state = .off
+        stableSettings.toggleTranslation()
+        pump()
+        check(lastTranslationCommand == "pause", "Flipping translationSwitch to off must send pause command")
+
+        // 2. User flips switch from OFF to ON
+        stableSettings.translationSwitch.state = .on
+        stableSettings.toggleTranslation()
+        pump()
+        check(lastTranslationCommand == "resume", "Flipping translationSwitch to on must send resume command")
+
+        // 3. User attempts to turn ON translation when system is in error mode (switch is OFF)
+        assistant.statusValue = LiveStatus(["mode": "error", "message": "连接中断", "appVersion": "2.29.1"])
+        stableSettings.update()
+        check(stableSettings.translationSwitch.state == .off, "translationSwitch must be off when status mode is error")
+        check(stableSettings.translationSwitch.toolTip == "点击开启界面汉化", "translationSwitch tooltip must prompt to enable when in error mode")
+        // User flips switch ON to recover/retry
+        stableSettings.translationSwitch.state = .on
+        stableSettings.toggleTranslation()
+        pump()
+        check(lastTranslationCommand == "resume", "Turning on translationSwitch from error mode must send resume (not pause!)")
+        check(assistant.statusValue.enabled == true, "Optimistic state after turning on translationSwitch must report enabled == true")
+
+        // 4. Verify LiveStatus.enabled respects translationEnabled during starting/error states
+        let pausedStartingStatus = LiveStatus(["mode": "starting", "translationEnabled": false, "appVersion": "2.29.1"])
+        check(pausedStartingStatus.enabled == false, "starting mode with translationEnabled=false must report enabled == false")
+        assistant.statusValue = pausedStartingStatus
+        stableSettings.update()
+        check(stableSettings.translationSwitch.state == .off, "translationSwitch must stay off when starting in paused mode")
+        stableSettings.translationSwitch.state = .on
+        stableSettings.toggleTranslation()
+        pump()
+        check(lastTranslationCommand == "resume" && assistant.statusValue.enabled == true, "Turning on switch during paused starting state must send resume and optimistically enable")
+
+        // 5. Menu bar toggle command toggling based on perceived enabled state
+        assistant.statusValue = LiveStatus(["mode": "adaptive", "appVersion": "2.29.1"])
+        assistant.toggleTranslation()
+        pump()
+        check(lastTranslationCommand == "pause", "Menu toggleTranslation when enabled must send pause")
+        assistant.statusValue = LiveStatus(["mode": "paused", "appVersion": "2.29.1"])
+        assistant.toggleTranslation()
+        pump()
+        check(lastTranslationCommand == "resume", "Menu toggleTranslation when paused must send resume")
+
+        // Restore normal status
+        assistant.statusValue = LiveStatus(status)
+        stableSettings.update()
 
         DesktopApplicationTarget.installedChannelsOverride = ["stable"]
         check(DesktopApplicationTarget.bothInstalled == false, "Single-app mode must report bothInstalled == false")

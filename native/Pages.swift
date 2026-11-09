@@ -419,7 +419,7 @@ final class DashboardPage: NSObject {
                     self.renderSummary(old, isStaleFallback: true)
                 } else {
                     self.dataTimestampLabel.stringValue = "数据获取失败：\(error.localizedDescription)"
-                    self.dataTimestampLabel.textColor = .systemOrange
+                    self.dataTimestampLabel.textColor = accessibleWarningColor()
                 }
             case .success(let result):
                 self.lastMetricsFetchTime = Date()
@@ -483,7 +483,7 @@ final class DashboardPage: NSObject {
         self.tierBadge.isHidden = true
         self.accountStatusLabel.isHidden = false
         self.accountStatusLabel.stringValue = "\(detail) · 可稍后自动重试"
-        self.accountStatusLabel.textColor = .systemOrange
+        self.accountStatusLabel.textColor = accessibleWarningColor()
         self.accountStatusLabel.toolTip = error
         self.activeEmailLabel.stringValue = "点击右上角「刷新配额」或稍后自动重试"
         self.activeEmailLabel.toolTip = error
@@ -500,15 +500,15 @@ final class DashboardPage: NSObject {
         usageQualityLabel.stringValue = "用量读取失败 · 前往用量页查看详情"; usageQualityLabel.textColor = accessibleWarningColor()
         self.todayTokensMetric.stringValue = "—"
         self.todayTokensDetail.stringValue = "\(detail) · 可稍后自动重试"
-        self.todayTokensDetail.textColor = .systemOrange
+        self.todayTokensDetail.textColor = accessibleWarningColor()
         self.todayTokensDetail.toolTip = error
         self.usageMetric.stringValue = "—"
         self.usageDetail.stringValue = "\(detail) · 可稍后自动重试"
-        self.usageDetail.textColor = .systemOrange
+        self.usageDetail.textColor = accessibleWarningColor()
         self.usageDetail.toolTip = error
         self.todayRequestsMetric.stringValue = "—"
         self.todayRequestsDetail.stringValue = "\(detail) · 可稍后自动重试"
-        self.todayRequestsDetail.textColor = .systemOrange
+        self.todayRequestsDetail.textColor = accessibleWarningColor()
         self.todayRequestsDetail.toolTip = error
         self.tokenMetricCard?.refreshAccessibility()
         self.costMetricCard?.refreshAccessibility()
@@ -590,6 +590,7 @@ final class DashboardPage: NSObject {
                 
                 let isConnected = acc["isLiveVerified"] as? Bool == true
                 self.currentAccountPill.title = isConnected ? "当前账号" : "已选记录"
+                self.currentAccountPill.tint = isConnected ? Design.blue : Design.inactivePill
                 let refreshErr = acc["quotaRefreshError"] as? String ?? ""
                 let liveEmail = (acc["liveAccountEmail"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
@@ -599,17 +600,17 @@ final class DashboardPage: NSObject {
                 let badgeTint: NSColor
                 let statusText: String
                 if !refreshErr.isEmpty {
-                    badgeTitle = "配额预警"; badgeTint = .systemOrange
+                    badgeTitle = "配额预警"; badgeTint = accessibleWarningColor()
                     statusText = InterfaceText.quotaMessage(refreshErr)
                 } else if isStale {
-                    badgeTitle = "快照已过期"; badgeTint = .systemOrange
+                    badgeTitle = "快照已过期"; badgeTint = accessibleWarningColor()
                     statusText = "配额已过期"
                 } else if isConnected {
                     if !liveEmail.isEmpty && liveEmail.lowercased() == email.lowercased() {
                         badgeTitle = "运行中已核实"; badgeTint = .systemGreen
                         statusText = ""
                     } else if !liveEmail.isEmpty {
-                        badgeTitle = "非运行中账号"; badgeTint = .systemOrange
+                        badgeTitle = "非运行中账号"; badgeTint = accessibleWarningColor()
                         statusText = "账号不一致"
                     } else {
                         badgeTitle = "已保存记录"; badgeTint = .secondaryLabelColor
@@ -626,7 +627,7 @@ final class DashboardPage: NSObject {
                 var finalBadgeTint = badgeTint
                 var finalStatus = statusText
                 if !stale.hint.isEmpty {
-                    if finalBadgeTitle == "已保存记录" { finalBadgeTitle = "部分配额陈旧"; finalBadgeTint = .systemOrange }
+                    if finalBadgeTitle == "已保存记录" { finalBadgeTitle = "部分配额陈旧"; finalBadgeTint = accessibleWarningColor() }
                     finalStatus = finalStatus.isEmpty ? stale.hint : "\(finalStatus) · \(stale.hint)"
                 }
                 self.accountStatusLabel.isHidden = finalStatus.isEmpty
@@ -634,14 +635,14 @@ final class DashboardPage: NSObject {
                 // B01: stale groups keep the existing orange warning semantics even while the
                 // running identity itself is verified (the badge is not part of the header today).
                 self.accountStatusLabel.textColor = !stale.hint.isEmpty
-                    ? .systemOrange
+                    ? accessibleWarningColor()
                     : (finalBadgeTint == .secondaryLabelColor ? Design.secondary : finalBadgeTint)
                 self.accountStatusLabel.toolTip = stale.detail.isEmpty ? finalStatus : "\(finalStatus)\n\(stale.detail)"
                 self.activeEmailLabel.stringValue = email
-                self.activeEmailLabel.toolTip = "\(email) · \(finalStatus)"
+                self.activeEmailLabel.toolTip = finalStatus.isEmpty ? email : "\(email) · \(finalStatus)"
             }
             self.tierBadge.title = tier
-            self.tierBadge.tint = tier == "ULTRA" ? .systemPurple : tier == "PRO" ? .systemBlue : .secondaryLabelColor
+            self.tierBadge.tint = tier == "ULTRA" ? .systemPurple : tier == "PRO" ? .systemBlue : Design.inactivePill
             self.tierBadge.isHidden = tier.isEmpty
 
             // F04: titles state that the percentage is the remaining quota, not a share/total.
@@ -660,7 +661,7 @@ final class DashboardPage: NSObject {
             if !quotaWarning.isEmpty {
                 self.accountStatusLabel.isHidden = false
                 self.accountStatusLabel.stringValue = "配额未更新"
-                self.accountStatusLabel.textColor = .systemOrange
+                self.accountStatusLabel.textColor = accessibleWarningColor()
                 self.accountStatusLabel.toolTip = (self.accountStatusLabel.toolTip ?? "") + "\n" + quotaContract.quotaWarnings.joined(separator: "\n")
             }
         } else {
