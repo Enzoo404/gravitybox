@@ -151,8 +151,21 @@ export function renderReleaseConsistency(result) {
 }
 
 /** Bind every packaged script and the build runtime to the verified source snapshot. */
+export async function listCompiledScripts(root) {
+  const results = [];
+  async function walk(relative = '') {
+    for (const entry of await readdir(join(root, 'src', relative), { withFileTypes: true })) {
+      const next = relative ? join(relative, entry.name) : entry.name;
+      if (entry.isDirectory()) await walk(next);
+      else if (entry.isFile() && entry.name.endsWith('.ts')) results.push(next.replace(/\.ts$/, '.js').split('\\').join('/'));
+    }
+  }
+  await walk();
+  return results.concat('engine.js').sort();
+}
+
 export async function collectReleaseArtifacts(root) {
-  const names=(await readdir(join(root,'src'))).filter(n=>n.endsWith('.ts')).map(n=>n.replace(/\.ts$/,'.js')).concat('engine.js').sort();
+  const names = await listCompiledScripts(root);
   const scripts={};for(const name of names)scripts[name]=await fileSha256(join(root,'dist',name));
   return {scripts,nodeSha256:await fileSha256(process.execPath)};
 }

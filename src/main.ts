@@ -115,6 +115,22 @@ export function normalizeSubscriptionTier(value: unknown): 'FREE' | 'PRO' | 'ULT
   return '待确认';
 }
 
+/** 合并本机实时语言服务配额与已保存账号配额：当实时探测未返回分组或套餐回退 FREE 时，保留已存分组与真实高级套餐。 */
+function mergeLiveQuotaWithSaved(savedQuota: any, liveQuota: any): any {
+  if (!liveQuota) return savedQuota;
+  if (!savedQuota) return liveQuota;
+  const hasLiveGroups = Array.isArray(liveQuota.quota_groups) && liveQuota.quota_groups.length > 0;
+  return {
+    ...savedQuota,
+    ...liveQuota,
+    quota_groups: hasLiveGroups ? liveQuota.quota_groups : (savedQuota.quota_groups ?? []),
+    stale_groups: liveQuota.stale_groups?.length ? liveQuota.stale_groups : savedQuota.stale_groups,
+    subscription_tier: (liveQuota.subscription_tier && liveQuota.subscription_tier !== 'FREE')
+      ? liveQuota.subscription_tier
+      : (savedQuota.subscription_tier || liveQuota.subscription_tier),
+  };
+}
+
 /** 账号 IPC 投影后统一套餐字段，避免 accounts.ts 的空串/未知值穿透到 UI。 */
 function projectAccountForIpcNormalized(account: any): Record<string, any> | null {
   const projected = projectAccountForIpc(account);
@@ -182,16 +198,7 @@ export async function buildDashboardAggregate(deps: DashboardAggregateDeps): Pro
           const matchedSummary = listRes.accounts.find((a: any) => a.email.toLowerCase() === liveAccountEmail.toLowerCase());
           const matchedSaved = matchedSummary ? await deps.getAccount(matchedSummary.id) : null;
           if (matchedSaved) {
-            const mergedQuota = liveLs?.quota && matchedSaved.quota
-              ? {
-                  ...matchedSaved.quota,
-                  ...liveLs.quota,
-                  stale_groups: liveLs.quota.stale_groups?.length ? liveLs.quota.stale_groups : matchedSaved.quota.stale_groups,
-                  subscription_tier: (liveLs.quota.subscription_tier && liveLs.quota.subscription_tier !== "FREE")
-                    ? liveLs.quota.subscription_tier
-                    : (matchedSaved.quota.subscription_tier || liveLs.quota.subscription_tier),
-                }
-              : (liveLs?.quota ?? matchedSaved.quota);
+            const mergedQuota = mergeLiveQuotaWithSaved(matchedSaved.quota, liveLs?.quota);
             sourceAcc = { ...matchedSaved, ...(mergedQuota ? { quota: mergedQuota } : {}) };
             currentAccountId = matchedSaved.id;
             activeEmail = matchedSaved.email;
@@ -290,6 +297,7 @@ export async function buildDashboardAggregate(deps: DashboardAggregateDeps): Pro
           scanScopeDescription: (summary as any).scan_scope_description ?? '',
           hasError: (summary as any).has_error ?? false,
           failedDatabasesCount: (summary as any).failed_databases_count ?? 0,
+          skippedLargeRecords: (summary as any).skipped_large_records ?? 0,
           availability: (summary as any).availability ?? 'complete',
           unknownTimeRecords: (summary as any).unknown_time_records ?? 0,
           unknownTimeTokens: (summary as any).unknown_time_tokens ?? 0,
@@ -331,7 +339,10 @@ async function run() {
   if (!stateInfo.isDirectory() || stateInfo.isSymbolicLink() || stateInfo.uid !== process.getuid?.()) throw new Error('助手数据目录身份不匹配');
   await chmod(stateDir, 0o700);
   backendLease = await acquireProcessLease(join(stateDir, 'backend.lock'), 0);
+  const earlySignalExit = () => { backendLease?.releaseSync(); process.exit(0); };
   process.once('exit', () => backendLease?.releaseSync());
+  process.once('SIGTERM', earlySignalExit);
+  process.once('SIGINT', earlySignalExit);
   // Preserve the original config once before migrating the retired channel.
   if (configuredChannel === 'insiders') {
     const configPath = join(stateDir, 'config.json');
@@ -473,7 +484,8 @@ async function run() {
               const matchedSaved = matchedSummary ? await accountsManager.getAccount(matchedSummary.id) : null;
               if (matchedSaved) {
                 activeAccountEmail = matchedSaved.email;
-                const q = accountsManager.getAccountQuotaOverview({ ...matchedSaved, quota: (liveLs?.email?.toLowerCase() === detectedEmail.toLowerCase() ? liveLs.quota : null) ?? matchedSaved.quota });
+                const liveQuotaForMatched = liveLs?.email?.toLowerCase() === detectedEmail.toLowerCase() ? liveLs.quota : null;
+                const q = accountsManager.getAccountQuotaOverview({ ...matchedSaved, quota: mergeLiveQuotaWithSaved(matchedSaved.quota, liveQuotaForMatched) });
                 activeFiveHourQuota = q.fiveHourRemaining;
                 activeSubscriptionTier = normalizeSubscriptionTier(q.subscriptionTier);
               } else if (liveLs?.email) {
@@ -505,7 +517,7 @@ async function run() {
             runningTasks: all.filter(t => t.state === 'running').length,
             ...(parsed.includeTasks === false || parsed.tasksSince === revision ? {} : { tasks: all })
           });
-        })();
+        })().catch(error => reply({ ok: false, error: sanitizeErrorMessage(error) }));
         return;
       }
       if (command === 'task_list') {ipcMetrics.taskPayloadReplies++; reply({ ok: true, tasks: tasks.list() }); return; }
@@ -580,7 +592,9 @@ async function run() {
                 credentialReadiness: { state: 'needs_authorization', message: '请先核对账号数据文件' } }; }
               if (!saved) return { id: summary.id, email: summary.email, name: summary.name, disabled: true,
                 quota: null, quota_refresh_error: '账号文件不存在，请重新读取或保存当前账号' };
-              const acc = { ...summary, ...projectAccountForIpcNormalized(saved ?? summary), ...(live?.email?.toLowerCase() === summary.email.toLowerCase() && live.quota ? { quota: live.quota } : {}) };
+              const projectedSaved = projectAccountForIpcNormalized(saved ?? summary);
+              const isLiveMatched = live?.email?.toLowerCase() === summary.email.toLowerCase() && live.quota;
+              const acc = { ...summary, ...projectedSaved, ...(isLiveMatched ? { quota: mergeLiveQuotaWithSaved(projectedSaved?.quota ?? saved.quota, live.quota) } : {}) };
               const q = accountsManager.getAccountQuotaOverview(acc, { nowMs: listNowMs });
               const resetTimeStr = formatResetTime(q.resetTime);
               const rev = computeAccountRevision(acc);
@@ -662,7 +676,11 @@ async function run() {
           let appRunning = false;
           let hasRunningTask = false;
           let taskReason = '';
-          const candidateTargets = [target, ...allApplicationTargets().filter(t => t.appPath !== target.appPath)];
+          const candidateTargets = [
+            target,
+            ...allApplicationTargets().filter(t => t.appPath !== target.appPath),
+            { appPath: '/Applications/Antigravity - Insiders.app', executable: 'Electron' },
+          ];
           try {
             const { stdout: psOut } = await execFileAsync('/bin/ps', ['-ax', '-ww', '-o', 'pid=,pcpu=,args='], { timeout: 3000 });
             for (const line of psOut.split('\n')) {
@@ -988,6 +1006,7 @@ async function run() {
     if (stopping) return; stopping = true;
     await accountLogin.close(); await tasks.stop();store.close(); await controller.stop(); await writeChain; await cacheChain.catch(() => {}); server.close(); await unlink(socketPath).catch(() => {}); await backendLease?.release(); process.exit(code);
   };
+  process.off('SIGTERM', earlySignalExit); process.off('SIGINT', earlySignalExit);
   process.on('SIGTERM', () => void stop()); process.on('SIGINT', () => void stop());
   // A single bad payload must not take the whole localisation helper down; log it and keep serving.
   process.on('uncaughtException', error => { console.error(`[GravityBox] ${error.stack ?? error.message}`); if (stopping) void stop(1); });

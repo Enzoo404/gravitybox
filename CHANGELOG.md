@@ -6,6 +6,22 @@
 
 ## [Unreleased]
 
+## [1.0.5] - 2026-11-09
+
+### Added
+- **i18n / Dictionary**：为 Antigravity 2.30.0 设置面板新增的“界面布局 (Interface Layout)”模块提供标准化汉化支持，收录“界面布局”、“知识工作”、“软件工程”及对应精简/完整界面的说明文案。
+
+### Fixed
+- **Maintenance / Cleanup**：修复在 Antigravity 运行时点击“清理选中缓存… -> 退出并清理”因应用退出刷盘改变缓存指纹而报错“缓存内容或路径已变化，请重新扫描”的问题，在应用退出静止后自动重新获取最新扫描令牌再执行清理，并引入互斥锁防止并发扫描与清理/恢复交错。
+- **Updater / Lifecycle**：修复后台静默检查更新遇到非 200 响应（如 GitHub API 403 限流）时未复位状态、导致更新弹窗长期停留在 `.checking` 状态的问题；修复静默预下载进行中点击“立即更新 / 安装更新”被忽略的问题，支持预下载完成后自动衔接安装。
+- **Updater / Storage**：将 `UpdateInstaller.acknowledge` 移入后台队列并与 `isConfirmed` 确认等待衔接，消除主线程全量哈希计算开销；扩展 `cleanupObsoleteUpdateArtifacts` 扫描 `updates/transactions/` 目录，清理中断的 `install-*` 目录及已确认事务中残留的暂存 `GravityBox.app` 与 `installer` 副本，保留 `install-receipt.json` 恢复凭证。
+- **Accounts / State Sync**：修复 `watchState()` 提前更新 `statusValue.accountsRevision` 与 `liveAccountEmail` 导致后续 `refresh()` 漏判账号变更的问题；修复运行未保存账号时清空已配置 `activeId` 导致主窗口与菜单栏状态分裂的问题；统一 `dashboard_summary`、`status` 与 `account_list` 对本机实时配额与已保存套餐/分组的合并逻辑。
+- **Accounts / Quota**：仅在存在未验证配额数据时归档 `quota-rejected` 快照并限制保留最近 20 份记录，避免定时的重复 403 错误导致目录无限堆积；在 `account_switch_preflight` 中同步检查 `Antigravity - Insiders.app` 运行态，与切号守卫保持一致。
+- **i18n / Controller**：修复后台界面包探测（`inspectBundleInBackground`）在用户暂停汉化后完成时把状态误覆写回 `connected` / `adaptive` 的竞态；为窗口本地服务尚未就绪的场景增加有界延迟重同步，并消除初次注入失败时的重复错误追加；为原生 `setTranslationEnabled` 增加请求代数保护，防止快速连续拨动开关时旧回调覆写新状态。
+- **i18n / Engine**：移除 `injectMicroPatch` 对 `[data-agzh-loc="1"], [data-agzh-ui]` 注入的硬编码 `font-family` 与 `-webkit-font-smoothing: antialiased` 覆盖规则，使所有汉化节点自然继承宿主的 `--font-family` 与 `--editor-font-family` 设置，并消除查看用量弹窗异步刷新前后因 GPU 合成图层切换导致的字体先粗后细跳变。
+- **SQLite / IPC**：为 `SqliteReadSnapshot` 空闲 Worker 池增加 `exit` 与 `error` 守护监听，并在 `close()` 时清理在途挂起请求与定时器，防止复用已退出 Worker 导致 8 秒超时或未捕获异常；完善 `IdempotencyStore` 超时回收与容量淘汰策略，补齐 `main.ts` 早期信号锁释放与 `dashboard_summary` 的 `skippedLargeRecords` 字段透传。
+- **UI / Layout**：修复菜单栏配额卡片将未标明周期的 Gemini 4 Argon 默认显示为“每周”的问题；统一主窗口账号页与菜单栏账号页中“已选记录”徽章为 `Design.inactivePill`；修复菜单栏配额空态按钮“前往账号页添加…”跳往总览页的问题；优化 880pt 最小窗口宽度下 `QuotaBarView` 间距与重置倒计时布局、弹窗头部副标题换行抗压缩及多级 Sheet 关闭顺序。
+
 ## [1.0.4] - 2026-11-08
 
 ### Added
@@ -101,7 +117,9 @@
 ### Fixed
 - **Native UI**：保持菜单栏状态图标在不同翻译开关状态下的不透明度一致（`b9921e8`，已包含于 1.0.0）。
 
-[Unreleased]: https://github.com/Enzoo404/gravitybox/compare/v1.0.3...HEAD
+[Unreleased]: https://github.com/Enzoo404/gravitybox/compare/v1.0.5...HEAD
+[1.0.5]: https://github.com/Enzoo404/gravitybox/compare/v1.0.4...v1.0.5
+[1.0.4]: https://github.com/Enzoo404/gravitybox/compare/v1.0.3...v1.0.4
 [1.0.3]: https://github.com/Enzoo404/gravitybox/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/Enzoo404/gravitybox/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/Enzoo404/gravitybox/compare/v1.0.0...v1.0.1

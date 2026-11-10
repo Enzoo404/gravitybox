@@ -282,6 +282,9 @@ try {
   await check('一键中英双语热切换（Toggle）、CSS Micro-Patch 及 data-agzh-loc 生效验证', async () => {
     const hasStyle = await main.evaluate('!!document.getElementById("__agzh_micro_patch__")');
     assert.equal(hasStyle, true);
+    const patchCss = await main.evaluate('document.getElementById("__agzh_micro_patch__")?.textContent ?? ""');
+    assert.equal(patchCss.includes('font-family'), false, 'CSS Micro-Patch 不得覆盖宿主 font-family 继承链');
+    assert.equal(patchCss.includes('-webkit-font-smoothing'), false, 'CSS Micro-Patch 不得覆盖宿主字体抗锯齿模式');
 
     // 验证 [data-agzh-loc="1"] 自动打标且应用了 white-space: nowrap
     const btnLoc = await main.evaluate('document.querySelector("#plain-btn")?.dataset?.agzhLoc');
@@ -743,6 +746,161 @@ ${engine}`,auth.executionContextId);assert.equal(await cdp.evaluate('!!globalThi
       await cdp.evaluate('globalThis.__AGZH_ENGINE_V1__.dispose()');
       assert.equal(await text(cdp,'#flash-inline'),'Type / and select plan to have the agent generate a plan.');
     } finally { cdp?.close();await browserCommand('Target.closeTarget',{targetId:target.targetId}).catch(error => { chromeErrors += '\nTarget cleanup: ' + error.message; }); }
+  });
+  await check('对话底部常驻状态 HUD 挂载、28px 垫高、窄屏单行极紧凑模式、向上弹出 Popover 及输入框零焦点争夺', async () => {
+    const tree = await main.send('Page.getFrameTree');
+    const ctx = await main.send('Page.createIsolatedWorld', { frameId: tree.frameTree.frame.id, worldName: 'AGZH-localization-v1' });
+    await main.evaluate(`(() => {
+      const convView = document.createElement('div');
+      convView.id = 'hud-e2e-fixture';
+      convView.setAttribute('data-testid', 'conversation-view');
+      convView.setAttribute('data-cascade-id', 'cascade-e2e');
+      convView.setAttribute('data-conversation-id', '4ec6348d-0f58-49db-8aed-6f67dbb78f5d');
+      convView.style.cssText = 'display:flex;flex-direction:column;width:640px;margin:20px auto;';
+      convView.innerHTML = '<div data-testid="agent-input-box" id="hud-e2e-box" style="display:flex;flex-direction:column;width:100%;"><div class="surface-composer" id="hud-e2e-composer" style="height:82px;border-radius:21px;"><div id="hud-e2e-editor" contenteditable="true" aria-label="Message input">Draft text</div><button data-testid="model-selector-trigger" data-model-id="gemini-4-argon">Gemini 4 Argon</button></div></div>';
+      document.body.appendChild(convView);
+    })()`);
+    await main.evaluate('globalThis.__GRAVITYBOX_HUD_V1__?.reconcileMounts()', ctx.executionContextId);
+    await until(async () => await main.evaluate('!!document.querySelector("#__gravitybox_hud_host__")'));
+
+    // 1. 验证挂载位置紧随 .surface-composer 之后，且净垫高为 28px (height 24px + marginTop 4px)
+    const layoutInfo = await main.evaluate(`(() => {
+      const composer = document.querySelector('#hud-e2e-composer');
+      const host = document.querySelector('#__gravitybox_hud_host__');
+      const cRect = composer.getBoundingClientRect();
+      const hRect = host.getBoundingClientRect();
+      return {
+        isSiblingAfter: composer.nextElementSibling === host,
+        gapTop: Math.round(hRect.top - cRect.bottom),
+        hostHeight: Math.round(hRect.height),
+        elevation: Math.round(hRect.bottom - cRect.bottom),
+        protectedAttr: host.getAttribute('data-agzh-protect')
+      };
+    })()`);
+    assert.equal(layoutInfo.isSiblingAfter, true);
+    assert.equal(layoutInfo.gapTop, 4);
+    assert.equal(layoutInfo.hostHeight, 24);
+    assert.equal(layoutInfo.elevation, 28);
+    assert.equal(layoutInfo.protectedAttr, 'true');
+
+    // 2. 注入实测基准指标并验证 3 胶囊与向上展开 Popover
+    await main.evaluate(`globalThis.__gravityboxUpdateHudMetrics({
+      conversationId: '4ec6348d-0f58-49db-8aed-6f67dbb78f5d',
+      sessionRevision: 1,
+      updatedAt: Date.now(),
+      isStreaming: false,
+      session: {
+        turns: 1,
+        steps: 142,
+        modelDurationSeconds: 3959,
+        modelDurationFormatted: '65 分 59 秒',
+        modelDurationFormattedEn: '65m 59s',
+        toolDurationSeconds: 751,
+        toolDurationFormatted: '12 分 31 秒',
+        toolDurationFormattedEn: '12m 31s',
+        averageTtftSeconds: 19.7,
+        averageTtftFormatted: '19.7 秒',
+        averageTtftFormattedEn: '19.7s',
+        outputTps: 90,
+        outputTpsFormatted: '90 tok/s'
+      },
+      tokens: {
+        totalTokens: 58593793,
+        totalTokensCompact: '58.6M tok',
+        totalTokensFormatted: '58,593,793 tok',
+        cacheHitRate: 0.9665,
+        cacheHitRateFormatted: '97%',
+        uncachedInputTokens: 1961501,
+        uncachedInputFormatted: '1,961,501 tok',
+        cachedReadTokens: 56526799,
+        cachedReadFormatted: '56,526,799 tok',
+        outputTokens: 105493,
+        outputFormatted: '105,493 tok'
+      },
+      context: {
+        modelId: 'gemini-4-argon',
+        modelDisplayName: 'Gemini 4 Argon',
+        usedTokens: 672000,
+        usedTokensCompact: '~672K',
+        capacityTokens: 1048576,
+        capacityTokensCompact: '1M',
+        usedRatio: 0.6408,
+        usedRatioFormatted: '64%',
+        breakdown: {
+          systemTokens: 1900,
+          systemTokensCompact: '~1.9K',
+          systemRatio: 0.181,
+          toolTokens: 7600,
+          toolTokensCompact: '~7.6K',
+          toolRatio: 0.725,
+          messageTokens: 662500,
+          messageTokensCompact: '~662K',
+          messageRatio: 63.181
+        }
+      }
+    })`, ctx.executionContextId);
+
+    const rendered = await main.evaluate(`(() => {
+      const sr = document.querySelector('#__gravitybox_hud_host__').shadowRoot;
+      const caps = [...sr.querySelectorAll('.capsule')];
+      return {
+        c1: sr.querySelector('#hud-txt-session').textContent.replace(/\\s+/g, ' ').trim(),
+        c2: sr.querySelector('#hud-txt-tokens').textContent.replace(/\\s+/g, ' ').trim(),
+        c3: sr.querySelector('#hud-txt-context').textContent.trim(),
+        sameRow: caps.every(c => c.offsetTop === caps[0].offsetTop)
+      };
+    })()`);
+    assert.equal(rendered.c1, '1 轮 142 步 · 90 tok/s');
+    assert.equal(rendered.c2, '58.6M tok · 缓存命中 97%');
+    assert.equal(rendered.c3, '64%');
+    assert.equal(rendered.sameRow, true);
+
+    // 3. 验证输入框焦点零争夺与向上展开 Popover
+    const focusAndPopover = await main.evaluate(`(() => {
+      const editor = document.querySelector('#hud-e2e-editor');
+      editor.focus();
+      const sr = document.querySelector('#__gravitybox_hud_host__').shadowRoot;
+      const cap1 = sr.querySelector('.capsule-session');
+      const mdEvt = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
+      cap1.dispatchEvent(mdEvt);
+      cap1.click();
+      const pop1 = sr.querySelector('#hud-popover-session');
+      const popRect = pop1.getBoundingClientRect();
+      const capRect = cap1.getBoundingClientRect();
+      return {
+        defaultPrevented: mdEvt.defaultPrevented,
+        editorStillFocused: document.activeElement === editor,
+        popoverVisible: !pop1.hasAttribute('hidden'),
+        isUpward: popRect.bottom <= capRect.top,
+        outerOverflow: getComputedStyle(pop1).overflow
+      };
+    })()`);
+    assert.equal(focusAndPopover.defaultPrevented, true, 'mousedown 必须阻止默认行为以防输入框失焦');
+    assert.equal(focusAndPopover.editorStillFocused, true, '点击胶囊后输入框必须保持焦点');
+    assert.equal(focusAndPopover.popoverVisible, true);
+    assert.equal(focusAndPopover.isUpward, true, 'Popover 必须向上展开');
+    assert.equal(focusAndPopover.outerOverflow, 'visible', 'Popover 外层必须为 overflow:visible 防止裁切底部小三角');
+
+    // 4. 验证 < 360px 窄屏分栏自动切换 .is-ultra-compact 且保持单行
+    await main.evaluate(`document.querySelector('#hud-e2e-fixture').style.width = '340px'`);
+    await until(async () => await main.evaluate(`document.querySelector('#__gravitybox_hud_host__').shadowRoot.querySelector('.hud-container').classList.contains('is-ultra-compact')`));
+    const ultraCompactInfo = await main.evaluate(`(() => {
+      const sr = document.querySelector('#__gravitybox_hud_host__').shadowRoot;
+      const caps = [...sr.querySelectorAll('.capsule')];
+      return {
+        turnsDisplay: getComputedStyle(sr.querySelector('.hud-turns')).display,
+        speedDisplay: getComputedStyle(sr.querySelector('.hud-speed')).display,
+        cacheDisplay: getComputedStyle(sr.querySelector('.hud-tok-cache')).display,
+        sameRow: caps.every(c => c.offsetTop === caps[0].offsetTop)
+      };
+    })()`);
+    assert.equal(ultraCompactInfo.turnsDisplay, 'none');
+    assert.equal(ultraCompactInfo.speedDisplay, 'none');
+    assert.equal(ultraCompactInfo.cacheDisplay, 'none');
+    assert.equal(ultraCompactInfo.sameRow, true);
+
+    await main.evaluate('document.querySelector("#hud-e2e-fixture").remove()');
+    await main.evaluate('globalThis.__GRAVITYBOX_HUD_V1__?.reconcileMounts()', ctx.executionContextId);
   });
   const resources = (await execute('/bin/ps', ['-p', String(backend.pid), '-o', 'rss=,%cpu=,time='])).stdout.trim();
   const finalStatus = await status();

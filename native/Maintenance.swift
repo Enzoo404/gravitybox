@@ -962,8 +962,30 @@ final class CachePage: NSObject {
 
         app.quitAntigravityAndWait { [weak self] in
             guard let self else { return }
-            self.busy = false
-            self.performClear(token: token, selected: selected, restartAfter: true)
+            // Antigravity 退出期间会刷写日志与缓存文件，需在进程完全静止后重新扫描最新指纹再执行安全清理
+            self.app.bridge.send(["command": "maintenance_scan"]) { [weak self] scanRes in
+                guard let self else { return }
+                switch scanRes {
+                case .success(let scanPayload):
+                    if scanPayload["running"] as? Bool == true {
+                        self.busy = false
+                        self.scanButton.setBusy(false, available: self.app.reachable)
+                        let msg = "请先保存工作并退出 Antigravity，再清理缓存。"
+                        self.feedbackLabel.isHidden = false
+                        self.feedbackLabel.textColor = accessibleWarningColor()
+                        self.feedbackLabel.stringValue = msg
+                        self.app.showMessage(msg, error: true)
+                        self.fetch(force: true)
+                        return
+                    }
+                    let freshToken = (scanPayload["token"] as? String) ?? token
+                    self.busy = false
+                    self.performClear(token: freshToken, selected: selected, restartAfter: true)
+                case .failure:
+                    self.busy = false
+                    self.performClear(token: token, selected: selected, restartAfter: true)
+                }
+            }
         }
     }
 

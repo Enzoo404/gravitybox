@@ -88,10 +88,13 @@ final class AddAccountSheet: NSObject {
         feedback = horizontal([spinner, status], spacing: 8)
         feedback.isHidden = true
         let headerBadge = iconBadge("person.badge.plus", tint: Design.blue, size: 32)
+        let headerSub = text("支持直接导入当前登录的 Antigravity 账号，或通过浏览器添加备用账号", size: 11, color: Design.secondary, wrap: true)
         let headerTitle = vertical([
             text("添加账号", size: 16, weight: .semibold, color: .labelColor),
-            text("支持直接导入当前登录的 Antigravity 账号，或通过浏览器添加备用账号", size: 11.5, color: Design.secondary)
+            headerSub
         ], spacing: 2)
+        headerTitle.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        fillWidth(headerSub, in: headerTitle)
         let headerRow = horizontal([headerBadge, headerTitle, flexibleSpace()], spacing: 10)
         headerRow.alignment = .centerY
         let root = vertical([
@@ -109,7 +112,8 @@ final class AddAccountSheet: NSObject {
         window.backgroundColor = .clear
         window.contentView = surface
         Design.applyControls(surface)
-        window.setContentSize(NSSize(width: Self.sheetWidth, height: Self.collapsedHeight))
+        surface.layoutSubtreeIfNeeded()
+        window.setContentSize(NSSize(width: Self.sheetWidth, height: max(Self.collapsedHeight, ceil(content.fittingSize.height))))
     }
 
     deinit {
@@ -131,7 +135,10 @@ final class AddAccountSheet: NSObject {
 
     func busy(_ value: Bool) {
         feedback.isHidden = status.stringValue.isEmpty
-        window.setContentSize(NSSize(width: Self.sheetWidth, height: feedback.isHidden ? Self.collapsedHeight : Self.expandedHeight))
+        window.contentView?.layoutSubtreeIfNeeded()
+        let fittingH = ceil(window.contentView?.fittingSize.height ?? 0)
+        let targetH = feedback.isHidden ? max(Self.collapsedHeight, fittingH) : max(Self.expandedHeight, fittingH)
+        window.setContentSize(NSSize(width: Self.sheetWidth, height: targetH))
         currentButton.isEnabled = !value
         googleButton.isEnabled = !value
         spinner.isHidden = !value
@@ -198,9 +205,12 @@ final class AddAccountSheet: NSObject {
                 }
                 #endif
                 self.status.stringValue = "请在浏览器中完成 Google 授权。"
-                self.pollTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+                self.pollTimer?.invalidate()
+                let timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
                     self?.checkLogin()
                 }
+                RunLoop.main.add(timer, forMode: .common)
+                self.pollTimer = timer
             }
         }
     }

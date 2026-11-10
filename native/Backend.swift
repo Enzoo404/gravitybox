@@ -14,6 +14,7 @@ final class BackendBridge {
     let resources: URL
     private var child: Process?
     private var generation = 0
+    private(set) var isLaunching = false
     private(set) var isRestarting = false
     private let queue = DispatchQueue(label: "local.gravitybox.bridge", qos: .userInitiated)
     private let controlQueue = DispatchQueue(label:"local.gravitybox.control",qos:.userInitiated,attributes:.concurrent)
@@ -23,7 +24,7 @@ final class BackendBridge {
     #endif
     var onExit: ((String) -> Void)?
     var ownedPID: Int32? { child?.processIdentifier }
-    var isOwnedProcessRunning: Bool { child?.isRunning == true }
+    var isOwnedProcessRunning: Bool { isLaunching || child?.isRunning == true }
 
     init(resources: URL, state: URL) { self.resources = resources; self.state = state }
 
@@ -33,9 +34,13 @@ final class BackendBridge {
         #if NATIVE_UI_TEST
         completion?(.success(()))
         #else
+        isLaunching = true
         queue.async { [self] in
             let result = Result { try startChildProcess() }
-            DispatchQueue.main.async { completion?(result) }
+            DispatchQueue.main.async {
+                self.isLaunching = false
+                completion?(result)
+            }
         }
         #endif
     }

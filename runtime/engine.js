@@ -243,6 +243,7 @@
     const excluded = !routeAllowedNow();
     if (excluded === routeExcluded && !force) return routeExcluded;
     routeExcluded = excluded;
+    try { globalThis.__GRAVITYBOX_HUD_V1__?.setRouteExcluded?.(routeExcluded); } catch {}
     if (excluded) {
       if (timer !== null) { clearTimeout(timer); timer = null; }
       pending.clear(); waiting.clear(); settingsWaiting.clear(); requeueDocument = false; reconcileRequested = false; reconcileQueue = null;
@@ -317,10 +318,6 @@
       const style = document.createElement('style');
       style.id = '__agzh_micro_patch__';
       style.textContent = `
-        [data-agzh-loc="1"], [data-agzh-ui] {
-          -webkit-font-smoothing: antialiased;
-          font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-        }
         button[data-agzh-loc="1"], [role="button"][data-agzh-loc="1"], [role="tab"][data-agzh-loc="1"],
         button[data-agzh-ui], [role="button"][data-agzh-ui], [role="tab"][data-agzh-ui] {
           white-space: nowrap;
@@ -1966,6 +1963,7 @@
         }
       }
       try{globalThis.__agzhLanguageChanged?.(languageMode);}catch{}
+      try{globalThis.__GRAVITYBOX_HUD_V1__?.setLanguage?.(languageMode);}catch{}
       return { mode: languageMode, activeNodes: activeNodes.size, groups: 0 };
     },
     getLanguageMode() { return languageMode; },
@@ -2104,6 +2102,7 @@
       };
     },
     dispose() {
+      try { globalThis.__GRAVITYBOX_HUD_V1__?.dispose?.(); } catch {}
       auditKeys = null; auditTrail.clear();
       active = false; observer.disconnect(); clearTimeout(timer); timer = null; reconcileQueue = null;
       if (routeTimer) { clearInterval(routeTimer); routeTimer = null; }

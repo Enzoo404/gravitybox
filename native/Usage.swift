@@ -167,6 +167,14 @@ final class UsagePage: NSObject {
         InterfaceText.formatUsd(value)
     }
 
+    private func syncExportButtonState(for period: String) {
+        let summary = latestReport["summary"] as? [String: Any] ?? [:]
+        exportButton.isEnabled = !loading
+            && (latestReport["period"] as? String) == period
+            && latestReport["snapshotId"] != nil
+            && (summary["availability"] as? String) != "unavailable"
+    }
+
     func fetch(force: Bool = false) {
         guard !loading else { return }
         loading = true
@@ -189,6 +197,7 @@ final class UsagePage: NSObject {
             case .failure(let error):
                 // 失败同样进入 15s 退避，避免每个 3s tick 反复请求。
                 self.metricsKey = requestKey
+                self.syncExportButtonState(for: period)
                 self.statusSummary.stringValue = "读取失败，页面保留上次结果：\(error.localizedDescription)"
                 self.statusSummary.textColor = accessibleWarningColor()
             case .success(let value):
@@ -196,9 +205,9 @@ final class UsagePage: NSObject {
                 self.latestReport = value
                 let summary = value["summary"] as? [String: Any] ?? [:]
                 let snapshotKey = "\(value["snapshotId"] ?? ""):\(period):\(summary["availability"] ?? ""):\(summary["failedDatabasesCount"] ?? 0):\(summary["skippedLargeRecords"] ?? 0):\(summary["unknownTimeRecords"] ?? 0)"
-                if !snapshotKey.hasPrefix(":") && snapshotKey == self.renderedSnapshotKey { self.exportButton.isEnabled = true; return }
+                if !snapshotKey.hasPrefix(":") && snapshotKey == self.renderedSnapshotKey { self.syncExportButtonState(for: period); return }
                 self.renderedSnapshotKey = snapshotKey
-                self.exportButton.isEnabled = (value["period"] as? String) == period && value["snapshotId"] != nil && (summary["availability"] as? String) != "unavailable"
+                self.syncExportButtonState(for: period)
                 if (summary["availability"] as? String) == "unavailable" {
                     for label in [self.totalTokensMetric, self.usdMetric, self.cacheRateMetric, self.requestsMetric] { label.stringValue = "—" }
                     self.tokensDetail.stringValue = "当前无法读取统计"; self.usdDetail.stringValue = "暂无可用估算"; self.requestsDetail.stringValue = "无法判断调用次数"; self.cacheRateDetail.stringValue = "暂无可用数据"

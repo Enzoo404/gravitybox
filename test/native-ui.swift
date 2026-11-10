@@ -211,6 +211,11 @@ import Cocoa
             func quotaBars(_ view:NSView)->[QuotaBarView] { (view as? QuotaBarView).map{[$0]} ?? view.subviews.flatMap{quotaBars($0)} }
             let modelBars = quotaBars(window.contentView!).filter{$0.titleLabel.stringValue.contains("模型配额")}
             check(modelBars.count == 2 && modelBars.allSatisfy{$0.percentageKnown && $0.percentage == 100}, "FREE model quota must render known on both account rows")
+            for bar in modelBars where !bar.resetLabel.stringValue.isEmpty {
+                let naturalW = (bar.resetLabel.stringValue as NSString).size(withAttributes: [.font: bar.resetLabel.font!]).width
+                check(bar.resetLabel.bounds.width + 1.0 >= floor(naturalW), "Model quota resetLabel (\(bar.resetLabel.stringValue)) must not truncate at 880pt minimum width (\(bar.resetLabel.bounds.width) < \(naturalW))")
+            }
+            check(assistant.accountsPage?.activeId == "c", "AccountsPage must preserve configured activeId when liveAccountEmail is not in saved accounts")
             try capture(window.contentView!,output.appendingPathComponent("\(theme)-free-model-quota.png"))
             let freeCard = MenuStatusCard(target:assistant,account:accounts[0],enabled:true)
             card.removeFromSuperview(); surface.addSubview(freeCard); freeCard.frame.origin = .zero; freeCard.updateHeight()
@@ -538,10 +543,18 @@ import Cocoa
             let currUpdateDir = state.appendingPathComponent("updates/v1.0.4", isDirectory: true)
             let newerUpdateDir = state.appendingPathComponent("updates/v1.1.0", isDirectory: true)
             let staleInstallDir = state.appendingPathComponent("updates/install-stale", isDirectory: true)
+            let staleTxDir = state.appendingPathComponent("updates/transactions/install-aborted", isDirectory: true)
+            let confirmedTxDir = state.appendingPathComponent("updates/transactions/install-confirmed", isDirectory: true)
             let fakeDownloadsDir = state.appendingPathComponent("test-downloads", isDirectory: true)
-            for dir in [oldUpdateDir, currUpdateDir, newerUpdateDir, staleInstallDir, fakeDownloadsDir] {
+            for dir in [oldUpdateDir, currUpdateDir, newerUpdateDir, staleInstallDir, staleTxDir, confirmedTxDir, fakeDownloadsDir] {
                 try fm.createDirectory(at: dir, withIntermediateDirectories: true)
             }
+            let confirmedReceipt = UpdateInstallReceipt(phase: "confirmed", token: "tok", targetPath: "/Applications/GravityBox.app", backupPath: "/Applications/.GravityBox-backup-test.app", expectedVersion: "1.0.5", newAppHash: "abc", oldAppHash: "def", dmgPath: "")
+            try confirmedReceipt.save(to: confirmedTxDir.appendingPathComponent(UpdateInstaller.receiptName))
+            let confirmedStagedApp = confirmedTxDir.appendingPathComponent("GravityBox.app")
+            let confirmedHelper = confirmedTxDir.appendingPathComponent("installer")
+            try fm.createDirectory(at: confirmedStagedApp, withIntermediateDirectories: true)
+            try Data("helper".utf8).write(to: confirmedHelper)
             let oldCachedDMG = oldUpdateDir.appendingPathComponent("GravityBox-1.0.3-arm64.dmg")
             let currCachedDMG = currUpdateDir.appendingPathComponent("GravityBox-1.0.4-arm64.dmg")
             let newerCachedDMG = newerUpdateDir.appendingPathComponent("GravityBox-1.1.0-arm64.dmg")
@@ -574,7 +587,8 @@ import Cocoa
                 detachMountedVolumes: false
             )
             check(cleanedCount >= 6, "cleanupObsoleteUpdateArtifacts must clean obsolete update folders, part files, and <=1.0.4 Downloads DMGs")
-            check(!fm.fileExists(atPath: oldUpdateDir.path) && !fm.fileExists(atPath: currUpdateDir.path) && !fm.fileExists(atPath: staleInstallDir.path), "Obsolete updates/v<=1.0.4 and install-* directories must be removed")
+            check(!fm.fileExists(atPath: oldUpdateDir.path) && !fm.fileExists(atPath: currUpdateDir.path) && !fm.fileExists(atPath: staleInstallDir.path) && !fm.fileExists(atPath: staleTxDir.path), "Obsolete updates/v<=1.0.4 and install-* directories must be removed")
+            check(!fm.fileExists(atPath: confirmedStagedApp.path) && !fm.fileExists(atPath: confirmedHelper.path) && fm.fileExists(atPath: confirmedTxDir.appendingPathComponent(UpdateInstaller.receiptName).path), "Confirmed transaction must clean staged GravityBox.app and installer while retaining install-receipt.json")
             check(fm.fileExists(atPath: newerCachedDMG.path) && !fm.fileExists(atPath: newerPartDMG.path), "Newer pre-downloaded DMG (v1.1.0 > 1.0.4) must be preserved while .dmg.part is cleaned")
             check(!fm.fileExists(atPath: dlOldDMG.path) && !fm.fileExists(atPath: dlCurrDMG.path) && !fm.fileExists(atPath: dlCurrSha.path), "Downloads DMGs and .sha256 for versions <= 1.0.4 must be cleaned")
             check(fm.fileExists(atPath: dlNewerDMG.path) && fm.fileExists(atPath: dlUnrelated.path), "Downloads DMGs for newer versions (>1.0.4) and unrelated apps must be preserved")
@@ -588,16 +602,16 @@ import Cocoa
                 try capture(updateSheet.sheet.contentView!, output.appendingPathComponent("\(theme)-update-sheet-available.png"))
             }
             // Verify checking state spinner is embedded inside primaryBtn and button stays bright blue (no dark navy blue flash)
-            updateSheet.primaryBtn.title = "检查中…"
-            updateSheet.primaryBtn.showsSpinner = true
-            updateSheet.primaryBtn.isEnabled = false
+            let savedRelease = assistant.updateManager.availableRelease
+            assistant.updateManager.simulateChecking()
+            check(updateSheet.primaryBtn.title == "检查中…" && updateSheet.closeBtn.title == "关闭" && updateSheet.changelogHeading.stringValue == "版本说明", "Checking state must render 版本说明 heading, 关闭 button and 检查中… primary button")
             check(updateSheet.spinner.superview === updateSheet.primaryBtn && !updateSheet.spinner.isHidden, "Checking spinner must be embedded inside primaryBtn")
             for (theme, appearance) in [("light", NSAppearance.Name.aqua), ("dark", NSAppearance.Name.darkAqua)] {
                 updateSheet.sheet.appearance = NSAppearance(named: appearance)
                 updateSheet.sheet.contentView?.layoutSubtreeIfNeeded(); pump()
                 try capture(updateSheet.sheet.contentView!, output.appendingPathComponent("\(theme)-update-sheet-checking.png"))
             }
-            updateSheet.renderState()
+            assistant.updateManager.simulateRelease(savedRelease)
 
             check(updateSheet.autoUpdateSwitch.state == .off, "Auto update switch in sheet footer must default to off")
             updateSheet.autoUpdateSwitch.state = .off

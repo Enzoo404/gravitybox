@@ -198,7 +198,7 @@ final class AccountsPage: NSObject {
         let titleRow = horizontal([policyTitle, autoSwitchStatusBadge], spacing: 6)
         titleRow.alignment = .centerY
 
-        let policySub = text("当前账号配额耗尽或偏低时，自动无缝轮换至充裕备用账号", size: 11, color: Design.secondary)
+        let policySub = text("当前账号配额耗尽或偏低时，智能评估并推荐充裕备用账号，确认后安全切换", size: 11, color: Design.secondary)
         policySub.lineBreakMode = .byTruncatingTail
         policySub.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         policySub.toolTip = policySub.stringValue
@@ -451,13 +451,13 @@ final class AccountsPage: NSObject {
 
         let bar1 = quotaBar(title: "Gemini · 5 小时", percentage: nil, resetText: "", icon: "bolt.fill")
         let bar2 = quotaBar(title: "Gemini · 每周", percentage: nil, resetText: "", icon: "calendar")
-        let qRow1 = horizontal([bar1, bar2], spacing: 18)
+        let qRow1 = horizontal([bar1, bar2], spacing: 14)
         qRow1.distribution = .fillEqually
         qRow1.alignment = .top
 
         let barClaude5h = quotaBar(title: "Claude/GPT · 5 小时", percentage: nil, resetText: "", icon: "cpu")
         let barClaudeWeek = quotaBar(title: "Claude/GPT · 每周", percentage: nil, resetText: "", icon: "calendar")
-        let qRow2 = horizontal([barClaude5h, barClaudeWeek], spacing: 18)
+        let qRow2 = horizontal([barClaude5h, barClaudeWeek], spacing: 14)
         qRow2.distribution = .fillEqually
         qRow2.alignment = .top
 
@@ -540,8 +540,10 @@ final class AccountsPage: NSObject {
         card.tierPill.isHidden = tier.isEmpty
 
         if isActive {
-            card.statusBadge.title = app.statusValue.liveAccountEmail.isEmpty ? "已选记录" : "当前账号"
-            card.statusBadge.tint = Design.blue
+            let liveEmail = app.statusValue.liveAccountEmail.trimmingCharacters(in: .whitespacesAndNewlines)
+            let isLiveVerified = !liveEmail.isEmpty && liveEmail.caseInsensitiveCompare(email) == .orderedSame
+            card.statusBadge.title = isLiveVerified ? "当前账号" : "已选记录"
+            card.statusBadge.tint = isLiveVerified ? Design.blue : Design.inactivePill
             card.statusBadge.isHidden = false
         } else if id == recommendedAccountId {
             card.statusBadge.title = "推荐备用"
@@ -851,7 +853,6 @@ final class AccountsPage: NSObject {
                 if recovered { self.renderedFingerprint = "" }
                 self.accounts = value["accounts"] as? [[String: Any]] ?? []
                 self.activeId = value["activeId"] as? String ?? (value["currentAccountId"] as? String ?? "")
-                if !self.app.statusValue.liveAccountEmail.isEmpty { self.activeId = "" }
                 if !self.app.statusValue.liveAccountEmail.isEmpty,
                    let live = self.accounts.first(where: { ($0["email"] as? String ?? "").caseInsensitiveCompare(self.app.statusValue.liveAccountEmail) == .orderedSame }),
                    let liveID = live["id"] as? String { self.activeId = liveID }
@@ -859,7 +860,7 @@ final class AccountsPage: NSObject {
                     let l = left.element["id"] as? String == self.activeId, r = right.element["id"] as? String == self.activeId
                     return l == r ? left.offset < right.offset : l
                 }.map(\.element)
-                let newFingerprint = "\(self.activeId):" + self.accounts.map { item in
+                let newFingerprint = "\(self.activeId):\(self.app.statusValue.liveAccountEmail):" + self.accounts.map { item in
                     let id = item["id"] as? String ?? ""
                     let rev = item["revision"] as? String ?? ""
                     let g5Cd = item["geminiFiveHourResetCountdown"] as? String ?? ""
@@ -868,8 +869,11 @@ final class AccountsPage: NSObject {
                     let aWCd = item["argonWeeklyResetCountdown"] as? String ?? ""
                     let models = item["models"] as? [[String: Any]] ?? []
                     let modelsCd = models.map { ($0["reset_countdown"] as? String) ?? "" }.joined(separator: ",")
+                    let dis = (item["disabled"] as? Bool == true) ? "1" : "0"
+                    let vblk = (item["validation_blocked"] as? Bool == true) ? "1" : "0"
+                    let credState = (item["credentialReadiness"] as? [String: Any])?["state"] as? String ?? ""
                     if !rev.isEmpty {
-                        return "\(id):\(item["name"] as? String ?? ""):\(rev):\(g5Cd):\(gWCd):\(cWCd):\(aWCd):\(modelsCd):\(QuotaPresentation.fingerprint(item))"
+                        return "\(id):\(item["name"] as? String ?? ""):\(rev):\(dis):\(vblk):\(credState):\(g5Cd):\(gWCd):\(cWCd):\(aWCd):\(modelsCd):\(QuotaPresentation.fingerprint(item))"
                     }
                     let g5h = item["geminiFiveHourRemaining"] as? Int ?? -1
                     let gWk = item["geminiWeeklyRemaining"] as? Int ?? -1
@@ -879,7 +883,6 @@ final class AccountsPage: NSObject {
                     let label = item["custom_label"] as? String ?? ""
                     
                     let tier = item["subscription_tier"] as? String ?? ""
-                    let dis = (item["disabled"] as? Bool == true) ? "1" : "0"
                     let err = item["quota_refresh_error"] as? String ?? ""
                     let lastUp = item["quota_last_updated"] as? Int ?? (item["quotaLastUpdated"] as? Int ?? ((item["quota"] as? [String: Any])?["last_updated"] as? Int ?? 0))
                     let modelsKey = models.map { m in
@@ -913,6 +916,7 @@ final class AccountsPage: NSObject {
                 for id in Array(self.accountRefreshErrorStamps.keys) where self.quotaStamp(for: id) != self.accountRefreshErrorStamps[id] {
                     self.accountRefreshErrors[id] = nil
                     self.accountRefreshErrorStamps[id] = nil
+                    self.app.singleAccountRefreshErrors[id] = nil
                 }
                 self.applyCardRefreshState()
             }
@@ -1057,6 +1061,7 @@ final class AccountsPage: NSObject {
         let app = self.app
         accountRefreshErrors[id] = nil
         accountRefreshErrorStamps[id] = nil
+        app.singleAccountRefreshErrors[id] = nil
         app.refreshingAccountIds.insert(id)
         let targetAccount = accounts.first(where: { ($0["id"] as? String) == id })
         let email = targetAccount?["email"] as? String ?? "账号"
@@ -1069,10 +1074,12 @@ final class AccountsPage: NSObject {
             case .failure(let error):
                 self.accountRefreshErrors[id] = error.localizedDescription
                 self.accountRefreshErrorStamps[id] = self.quotaStamp(for: id)
+                self.app.singleAccountRefreshErrors[id] = error.localizedDescription
                 self.app.showMessage("刷新 \(email) 配额失败：\(error.localizedDescription)", error: true)
             case .success(let value):
                 self.accountRefreshErrors[id] = nil
                 self.accountRefreshErrorStamps[id] = nil
+                self.app.singleAccountRefreshErrors[id] = nil
                 self.app.showMessage(value["message"] as? String ?? "已读取 \(email) 的配额，未返回的数据会单独标明。")
                 self.fetch()
                 self.app.refresh()
@@ -1137,7 +1144,7 @@ final class AccountsPage: NSObject {
     }
 
     @objc func rollbackSwitch() {
-        guard let window = app.window else { return }
+        guard let window = app.window, window.activeSheetWindow == nil else { return }
         let alert = NSAlert(); alert.messageText = "撤销上次账号切换？"
         alert.informativeText = "请先手动退出 Antigravity。将恢复上次切换前的登录记录；若其他程序已更新记录，会停止恢复以保留新状态。"
         alert.addButton(withTitle: "恢复原账号"); alert.addButton(withTitle: "取消")
@@ -1286,7 +1293,7 @@ final class AccountsPage: NSObject {
     }
 
     @objc func exportAccounts() {
-        guard let window = app.window else { return }
+        guard let window = app.window, window.activeSheetWindow == nil else { return }
         // C03：导出前明确说明是否包含长期凭据；默认不静默导出 refresh_token。
         let alert = NSAlert()
         alert.messageText = "导出账号备份？"
@@ -1341,7 +1348,7 @@ final class AccountsPage: NSObject {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.json]
         panel.canChooseDirectories = false
-        guard let window = app.window else { return }
+        guard let window = app.window, window.activeSheetWindow == nil else { return }
         panel.beginSheetModal(for: window) { [weak self] res in
             guard let self, res == .OK, let url = panel.url else { return }
             do {

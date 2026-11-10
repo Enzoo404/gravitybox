@@ -3,12 +3,13 @@ import { randomUUID } from 'node:crypto';
 
 const MAX_IDLE_WORKERS = 8;
 const IDLE_WORKER_TTL_MS = 35_000;
-const idleWorkers: Array<{ worker: Worker; timer: NodeJS.Timeout }> = [];
+const idleWorkers: Array<{ worker: Worker; timer: NodeJS.Timeout; cleanup: () => void }> = [];
 
 function acquirePooledWorker(path: string): Worker {
   while (idleWorkers.length > 0) {
     const entry = idleWorkers.pop()!;
-    clearTimeout(entry.timer);
+    entry.cleanup();
+    if (entry.worker.threadId < 0) continue;
     entry.worker.ref();
     entry.worker.postMessage({ id: 'open', open: path });
     return entry.worker;
@@ -21,18 +22,30 @@ function acquirePooledWorker(path: string): Worker {
 }
 
 function releasePooledWorker(worker: Worker) {
-  if (idleWorkers.length >= MAX_IDLE_WORKERS) {
+  if (idleWorkers.length >= MAX_IDLE_WORKERS || worker.threadId < 0) {
     void worker.terminate();
     return;
   }
   worker.unref();
-  const timer = setTimeout(() => {
+  const removeIdle = () => {
     const idx = idleWorkers.findIndex(item => item.worker === worker);
-    if (idx >= 0) idleWorkers.splice(idx, 1);
+    if (idx >= 0) {
+      const [removed] = idleWorkers.splice(idx, 1);
+      clearTimeout(removed!.timer);
+    }
+    worker.removeListener('exit', onIdleExit);
+    worker.removeListener('error', onIdleError);
+  };
+  const onIdleExit = () => removeIdle();
+  const onIdleError = () => { removeIdle(); void worker.terminate(); };
+  worker.once('exit', onIdleExit);
+  worker.once('error', onIdleError);
+  const timer = setTimeout(() => {
+    removeIdle();
     void worker.terminate();
   }, IDLE_WORKER_TTL_MS);
   timer.unref();
-  idleWorkers.push({ worker, timer });
+  idleWorkers.push({ worker, timer, cleanup: removeIdle });
 }
 
 /** One background, read-only SQLite transaction per database scan. */
@@ -110,6 +123,10 @@ export class SqliteReadSnapshot {
   }
   async close() {
     this.signal?.removeEventListener('abort', this.abort);
+    if (this.pending) {
+      this.tainted = true;
+      this.fail('SQLite 读取连接已关闭');
+    }
     if (!this.ended && !this.tainted) {
       const closeId = `close-${randomUUID()}`;
       let timer: NodeJS.Timeout | undefined;

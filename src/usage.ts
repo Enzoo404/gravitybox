@@ -550,7 +550,37 @@ export class UsageStatsManager {
   private mergePricingEntries(merged: Record<string, ApiPricingEntry>, entries: object, warning: string): void {
     for (const [key, value] of Object.entries(entries)) {
       try {
-        Object.assign(merged, this.validateRawPrices({ [key]: value }));
+        const validated = this.validateRawPrices({ [key]: value });
+        const incoming = validated[key];
+        const base = merged[key];
+        const baseProv = base && !Array.isArray(base) ? base.provenance : undefined;
+        if (incoming && baseProv) {
+          if (Array.isArray(incoming)) {
+            for (const iv of incoming) {
+              iv.provenance = {
+                ...baseProv,
+                ...(iv.provenance ?? {}),
+                ...(iv.validUntil && !iv.provenance?.validUntil ? { validUntil: iv.validUntil } : {}),
+              };
+            }
+          } else {
+            if (incoming.provenance) {
+              incoming.provenance = { ...baseProv, ...incoming.provenance };
+            } else {
+              incoming.provenance = { ...baseProv };
+            }
+            if (Array.isArray(incoming.intervals)) {
+              for (const iv of incoming.intervals) {
+                iv.provenance = {
+                  ...baseProv,
+                  ...(iv.provenance ?? {}),
+                  ...(iv.validUntil && !iv.provenance?.validUntil ? { validUntil: iv.validUntil } : {}),
+                };
+              }
+            }
+          }
+        }
+        Object.assign(merged, validated);
       } catch {
         this.pricingWarnings.push(warning + key);
       }
@@ -608,22 +638,25 @@ export class UsageStatsManager {
     if (!force && now - this.lastRemoteSyncAt < 86_400_000) {
       return { synced: false, error: '检查频率限制（24小时）' };
     }
-    this.lastRemoteSyncAt = now;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 6000);
     try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 6000);
       const res = await fetch(targetUrl, { signal: controller.signal, headers: { 'User-Agent': `GravityBox/${APP_VERSION}` } });
-      clearTimeout(timer);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       const prices = data && typeof data === 'object' && data.prices ? data.prices : data;
       const validated = this.validateRawPrices(prices);
       await atomicJson(this.remotePricingCachePath, { version: 1, syncedAt: new Date().toISOString(), prices: validated });
+      this.lastRemoteSyncAt = now;
       this.cachedSummary = null;
       this.lastAggregationKey = '';
       return { synced: true, count: Object.keys(validated).length };
     } catch (err: any) {
+      // 失败后退避 5 分钟再允许自动重试，避免离线启动锁死整整 24 小时
+      this.lastRemoteSyncAt = now - 86_400_000 + 300_000;
       return { synced: false, error: err?.message ?? String(err) };
+    } finally {
+      clearTimeout(timer);
     }
   }
 
@@ -1036,6 +1069,9 @@ export class UsageStatsManager {
     }
 
     if ((allEvents.length === 0 || cachedDatabasesCount === dbPaths.length) && failedDatabasesCount > 0 && this.cachedSummary?.data) {
+      if (this.cachedSummary.data.snapshot_id && this.snapshots.has(this.cachedSummary.data.snapshot_id)) {
+        this.snapshots.get(this.cachedSummary.data.snapshot_id)!.expires = Date.now() + 600000;
+      }
       return {
         ...this.cachedSummary.data,
         failed_databases_count: failedDatabasesCount,

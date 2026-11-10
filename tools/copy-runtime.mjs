@@ -7,9 +7,37 @@ import { pathToFileURL } from 'node:url';
  */
 export const GENERATED_DIST_FILES = ['engine.js'];
 
+const HUD_RUNTIME_FILES = [
+  'hud-styles.js',
+  'hud-popover.js',
+  'hud-instance.js',
+  'hud-manager.js',
+];
+
+/**
+ * 将支持 Node.js ESM import 的 runtime/hud-*.js 转换为可在 CDP Isolated World 经典脚本上下文直接执行的 IIFE
+ */
+function stripEsmForClassicRuntime(code) {
+  return code
+    .replace(/^\s*import\s+[\s\S]*?from\s+['"]\.\/hud-[^'"]+['"];?\s*$/gm, '')
+    .replace(/^\s*export\s+(?=(?:const|let|var|function|class)\s+)/gm, '')
+    .replace(/^\s*export\s*\{[^}]*\};?\s*$/gm, '');
+}
+
 export async function copyRuntime(distUrl = new URL('../dist/', import.meta.url)) {
-  const sources = await Promise.all(['engine.js', 'deep-scan.js'].map(name => readFile(new URL('../runtime/' + name, import.meta.url), 'utf8')));
-  await writeFile(new URL('engine.js', distUrl), sources.join('\n'));
+  const baseSources = await Promise.all(
+    ['engine.js', 'deep-scan.js'].map((name) =>
+      readFile(new URL('../runtime/' + name, import.meta.url), 'utf8')
+    )
+  );
+  const hudSources = await Promise.all(
+    HUD_RUNTIME_FILES.map(async (name) => {
+      const raw = await readFile(new URL('../runtime/' + name, import.meta.url), 'utf8');
+      return stripEsmForClassicRuntime(raw);
+    })
+  );
+  const hudBundle = `(function bootstrapGravityBoxHud() {\n'use strict';\n${hudSources.join('\n')}\n})();`;
+  await writeFile(new URL('engine.js', distUrl), [...baseSources, hudBundle].join('\n'));
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await copyRuntime();

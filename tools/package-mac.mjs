@@ -4,7 +4,7 @@ import { promisify } from 'node:util';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { join, relative } from 'node:path';
 import { createHash } from 'node:crypto';
-import { sourceDigest, includeDictionaryPath, assertReleaseArtifacts, writeSha256Sidecar, verifySha256Sidecar } from './release-integrity.mjs';
+import { sourceDigest, includeDictionaryPath, assertReleaseArtifacts, listCompiledScripts, writeSha256Sidecar, verifySha256Sidecar } from './release-integrity.mjs';
 import { buildInfoPayload, describeValidationScope, resolvePackagingScope } from './release-scope.mjs';
 const run = promisify(execFile), root = fileURLToPath(new URL('../', import.meta.url));
 
@@ -33,7 +33,11 @@ async function main() {
   await mkdir(join(resources, 'icons'), { recursive: true }); await copyFile(join(root, 'assets/icons/menu-connected.png'), join(resources, 'icons/menu-connected.png'));
   await cp(join(root, 'assets/model-icons'), join(resources, 'model-icons'), { recursive: true });
   // Copy only build outputs derived from the current source list; stale experimental scripts stay out.
-  for (const name of (await readdir(join(root, 'src'))).filter(n => n.endsWith('.ts')).map(n => n.replace(/\.ts$/, '.js')).concat('engine.js')) await copyFile(join(root, 'dist', name), join(resources, 'core/dist', name));
+  for (const name of await listCompiledScripts(root)) {
+    const dest = join(resources, 'core/dist', name);
+    await mkdir(join(dest, '..'), { recursive: true });
+    await copyFile(join(root, 'dist', name), dest);
+  }
   await mkdir(join(resources,'core/assets'),{recursive:true});
   await copyFile(join(root,'assets/model-catalog.json'),join(resources,'core/assets/model-catalog.json'));
   await copyFile(join(root,'assets/model-catalog.json'),join(resources,'model-catalog.json'));
