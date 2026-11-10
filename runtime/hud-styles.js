@@ -261,7 +261,9 @@ export const HUD_STYLES_CSS = `
 /* ==================== 弹性收缩权重阶梯与保底尺寸 ==================== */
 .capsule-context {
   flex-shrink: 0;
-  min-width: fit-content;
+  min-width: 88px;
+  justify-content: center;
+  padding-inline: 12px;
 }
 
 .capsule-session {
@@ -302,6 +304,10 @@ export const HUD_STYLES_CSS = `
 }
 
 @container hud (max-width: 360px) {
+  .capsule-context {
+    min-width: fit-content;
+    padding-inline: 7px;
+  }
   .hud-turns,
   .hud-speed,
   .hud-subagent-tag,
@@ -395,6 +401,7 @@ export const HUD_STYLES_CSS = `
 
 .hud-popover-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
@@ -409,9 +416,9 @@ export const HUD_STYLES_CSS = `
   font-weight: 600;
   color: var(--hud-text-primary);
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  flex-wrap: wrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .hud-popover-title-regular {
@@ -435,8 +442,10 @@ export const HUD_STYLES_CSS = `
   font-weight: 600;
   color: var(--hud-text-primary);
   font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  flex-shrink: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .hud-popover-badge-muted {
@@ -449,8 +458,10 @@ export const HUD_STYLES_CSS = `
   font-weight: 500;
   color: var(--hud-text-secondary);
   font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  flex-shrink: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .hud-popover-divider {
@@ -467,9 +478,9 @@ export const HUD_STYLES_CSS = `
 }
 
 .hud-popover-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+  align-items: start;
   gap: 8px;
   line-height: 1.35;
 }
@@ -486,9 +497,8 @@ export const HUD_STYLES_CSS = `
   font-size: 11.5px;
   font-weight: 400;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .hud-popover-val {
@@ -496,11 +506,10 @@ export const HUD_STYLES_CSS = `
   font-size: 11.5px;
   font-weight: 500;
   font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  flex-shrink: 0;
-  max-width: 175px;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  min-width: 0;
+  text-align: right;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 @media (prefers-reduced-motion: reduce) {

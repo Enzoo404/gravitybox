@@ -794,7 +794,7 @@ ${engine}`,auth.executionContextId);assert.equal(await cdp.evaluate('!!globalThi
         session: {
           turns: 1,
           steps: 142,
-          modelDurationSeconds: 3959,
+          modelDurationSeconds: 3959.126,
           modelDurationFormatted: '65 分 59 秒',
           modelDurationFormattedEn: '65m 59s',
           toolDurationSeconds: 751,
@@ -803,8 +803,8 @@ ${engine}`,auth.executionContextId);assert.equal(await cdp.evaluate('!!globalThi
           averageTtftSeconds: 19.7,
           averageTtftFormatted: '19.7 秒',
           averageTtftFormattedEn: '19.7s',
-          outputTps: 90,
-          outputTpsFormatted: '90 tok/s'
+          outputTps: 90.126,
+          outputTpsFormatted: '90.13 tok/s'
         },
         tokens: {
           totalTokens: 58593793,
@@ -856,9 +856,24 @@ ${engine}`,auth.executionContextId);assert.equal(await cdp.evaluate('!!globalThi
       };
     })()`);
     assert.equal(rendered.c1, '1 轮 142 步 · 90 tok/s');
-    assert.equal(rendered.c2, '58.6M tok · 缓存命中 97%');
+    assert.equal(rendered.c2, '59M tok · 缓存命中 97%');
     assert.equal(rendered.c3, '64%');
     assert.equal(rendered.sameRow, true);
+    const precision = await main.evaluate(`(() => {
+      const sr = document.querySelector('#__gravitybox_hud_host__').shadowRoot;
+      return {
+        speed: sr.querySelector('#val-tps').textContent,
+        duration: sr.querySelector('#val-model-dur').textContent,
+        cache: sr.querySelector('#val-cache-hit').textContent,
+        context: sr.querySelector('#pop-ctx-pct').textContent,
+        capsuleWidth: sr.querySelector('.capsule-context').getBoundingClientRect().width,
+      };
+    })()`);
+    assert.equal(precision.speed, '90.13 tok/s');
+    assert.equal(precision.duration, '65 分 59.13 秒');
+    assert.equal(precision.cache, '96.65%');
+    assert.equal(precision.context, '64.08%');
+    assert.ok(precision.capsuleWidth >= 88);
 
     // 3. 验证输入框焦点零争夺与向上展开 Popover
     const focusAndPopover = await main.evaluate(`(() => {

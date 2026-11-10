@@ -1,41 +1,54 @@
-# Antigravity 对话常驻状态栏（Conversation Status HUD）架构设计规范 (v2.2)
+# Conversation Status HUD 指标与展示合同
 
-## 1. 核心目标与 v2.2 全量审计升级要点
-针对 Antigravity `2.30.0` 真机实测与全栈深度代码审计，`feature/conversation-status-hud` 分支完成了 v2.2 架构升级：
-1. **移除原生悬浮提示与 Top Layer 顶层防遮挡（`popover="manual"`）**：
-   - 移除状态栏 3 个胶囊按钮上的原生 HTML `title="..."` 属性（保留无障碍 `aria-label`），消除系统 Tooltip 遮挡。
-   - 针对宿主输入框位于 `div.relative.z-10` 层叠上下文内导致外层 `z-index: 20`「滚动到底部」悬浮按钮压盖详情卡片的实机缺陷，3 个 `.hud-popover` 全面升级为 Chromium 原生 **Top Layer (`popover="manual"`)**，彻底突破祖先层叠上下文、`overflow: hidden` 与 `transform` 包含块限制，并采用无横缝双路径 SVG 指示三角与捕获阶段（`capture: true`）点击外部收起机制。
-2. **子智能体（Subagent）工作状态全链路感知与指标聚合**：
-   - **DOM 层实时探针与子智能体侧栏（`subpane`）独立挂载**：识别 `[data-testid="idle-status-text"]`、`[data-testid="running-subagent-steps-toggle"]`、中英文全角/半角 `Open Subagent:` / `打开子智能体：` 活跃芯片与 `停止子智能体` 按钮；当右侧子智能体对话面板（`[data-media-drop-scope="subpane"]`）展开可见时自动为其挂载独立 HUD 实例。
-   - **SQLite 真实列映射与双向归属校验**：对接 Antigravity `2.30.0` 真实的 `steps.render_info` / `steps.step_payload` 列与子会话 `trajectory_metadata_blob` 父会话反向引用，仅对子智能体调度工具提取并校验归属 UUID，彻底阻断普通工具参数（如 `run_command`）中无关会话 UUID 的串号污染，并在状态栏第一分段展示 `· 子智能体运行中` 及呼吸脉冲动画。
-3. **全指标 Protobuf 逆向溯源与推理模型（Thinking Model）TTFT / TPS 物理校准**：
-   - 从 `vendor/antigravity/2.30.0/main.js` 完整解码 `CortexStepMetadata`、`ModelUsageStats`、`ChatModelMetadata` 与 `ContextWindowMetadata` 官方 Protobuf 描述符。
-   - **根除推理模型 `355 tok/s` 与 `8.0s TTFT` 失真**：通过稳态持续流式窗口（$\Delta t_{\text{post}} \ge 0.5\text{s}$）校准思维链生成耗时 $\Delta t_{\text{thinking}}$，并对超过 `64KB` 的超大 `gen_metadata` / `steps` 记录自动切换 `projectProtobuf` 分块流式投影与 24 会话有界 LRU 缓存，守护 `128MB` 堆上限。
-4. **macOS 原生设置开关与全生命周期闭环**：
-   - 在 GravityBox 原生「设置」页新增「对话状态栏」实时开关（`hudEnabled` + `hud_set` IPC），支持持久化与毫秒级热启停、无损恢复宿主内边距，并打通 `addScriptToEvaluateOnNewDocument` 整页重载挂起与 `session.contextId` 导航重同步闭环。
+适用分支：feature/conversation-status-hud。更新日期：2026-11-10。
 
-## 2. 全量指标数据源、Protobuf 字段映射与计算公式审计表
+## 统计范围
 
-| 模块 | 指标名称 | 底层真实数据源（SQLite 表 / 列 / DOM） | Protobuf 消息与精确字段编号 | 计算公式与物理校准逻辑 |
-| :--- | :--- | :--- | :--- | :--- |
-| **分段 1 & 卡片 1** | **实时状态呼吸灯** | DOM + `steps.status` | `CortexStepStatus` (`1=PENDING, 2=RUNNING, 8=GENERATING, 9=WAITING`) | 主智能体流式生成或子智能体运行（`isSubagentRunning`）时激活 `#3186FF` 脉冲动画 |
-| **分段 1 & 卡片 1** | **对话轮次 (`N 轮`)** | `steps.step_type` | `CortexStepType.USER_INPUT = 14`（回退 `101`） | $\text{turns} = \text{COUNT}(14) > 0 \ ? \ \text{COUNT}(14) : \text{COUNT}(101)$ |
-| **分段 1 & 卡片 1** | **执行步数 (`M 步`)** | `steps` 主表 + 关联子会话 `steps` | `CortexStep` 行记录 | $\text{steps} = \text{COUNT}(\text{main.steps}) + \sum \text{COUNT}(\text{child.steps})$ |
-| **分段 1 & 卡片 1** | **模型用时** | `steps.metadata` (`step_type = 15`) | `CortexStepMetadata`: `field 1` (`created_at`), `field 7` (`finished_generating_at`), `field 22` (`last_completed_chunk_at`), `field 8` (`completed_at`) | $\sum_{s \in S_{15}} \max(0, t_{\text{gen\_end}, s} - t_{\text{created}, s})$，其中 $t_{\text{gen\_end}} = f_7 \ ?? \ f_{22} \ ?? \ f_8$ |
-| **分段 1 & 卡片 1** | **工具调用用时** | `steps.metadata`（工具步 `step_type`） | `CortexStepMetadata`: `field 32` (`started_at`), `field 1` (`created_at`), `field 8` (`completed_at`) | $\sum_{s \in S_{\text{tool}}} \max(0, t_{\text{completed}, s} - t_{\text{start}, s})$，优先取 $f_{32}$ (`started_at`) 剔除排队与审批等待时间 |
-| **分段 1 & 卡片 1** | **首 token 平均 (TTFT)** | `gen_metadata.data` / `steps.metadata` | `ChatModelMetadata.field 11` (`time_to_first_token`) / `CortexStepMetadata` `field 1, 6` | 无思维链步取 $f_6 - f_1$；含思维链步剥离思维链耗时 $\text{TTFT}_s = (f_6 - f_1) - \Delta t_{\text{thinking}, s}$ |
-| **分段 1 & 卡片 1** | **输出速度 (TPS)** | `steps.metadata` (`step_type = 15`) | `ModelUsageStats.field 3` (`output_tokens`) / `CortexStepMetadata` `field 1, 6, 7` | $\text{TPS} = \frac{\sum \text{output\_tokens}}{\sum (\Delta t_{\text{thinking}, s} + (t_{\text{gen\_end}, s} - t_{\text{viewable}, s}))}$，含 $0.1\text{s}$ 窗口保护与 $500\text{ tok/s}$ 上限 |
-| **分段 1 & 卡片 1** | **子智能体状态** | DOM + `steps.render_info` + `trajectory_metadata_blob` | `CortexStepType` `127/132` + `ChatToolCall.field 2` | 双向归属核验子智能体会话并实时显示 `· 子智能体运行中` 及子会话步数 |
-| **分段 2 & 卡片 2** | **Token 用量总计** | `steps.metadata` (`step_type = 15`) | `CortexStepMetadata.field 9` (`ModelUsageStats` `field 2, 3, 4, 5`) | $\sum (f_2 + f_5 + f_4 + f_3)$（未缓存输入 + 缓存读取 + 缓存写入 + 输出） |
-| **分段 2 & 卡片 2** | **缓存命中率** | `steps.metadata` (`step_type = 15`) | `ModelUsageStats`: `field 5`, `field 2`, `field 4` (`cache_write_tokens`) | $\frac{\sum \text{cache\_read\_tokens}}{\sum \text{input\_tokens} + \sum \text{cache\_read\_tokens} + \sum \text{cache\_write\_tokens}} \times 100\%$ |
-| **分段 2 & 卡片 2** | **未缓存输入** | `steps.metadata` (`step_type = 15`) | `ModelUsageStats.field 2` (`input_tokens`) | $\sum \text{input\_tokens}$ |
-| **分段 2 & 卡片 2** | **缓存读取** | `steps.metadata` (`step_type = 15`) | `ModelUsageStats.field 5` (`cache_read_tokens`) | $\sum \text{cache\_read\_tokens}$ |
-| **分段 2 & 卡片 2** | **缓存写入** | `steps.metadata` (`step_type = 15`) | `ModelUsageStats.field 4` (`cache_write_tokens`) | $\sum \text{cache\_write\_tokens} > 0$ 时动态展示（如 Claude 系列） |
-| **分段 2 & 卡片 2** | **输出** | `steps.metadata` (`step_type = 15`) | `ModelUsageStats.field 3` (`output_tokens`) | $\sum \text{output\_tokens}$ |
-| **分段 2 & 卡片 2** | **思维链 / 回复** | `steps.metadata` (`step_type = 15`) | `ModelUsageStats`: `field 9` (`thinking_output_tokens`), `field 10` (`response_output_tokens`) | 分别汇总 $\sum f_9$（思维链推理）与 $\sum f_{10}$（正文及工具调用回复），恒满足 $f_9 + f_{10} = f_3$ |
-| **分段 3 & 卡片 3** | **当前上下文占比与容量** | 最新 `step_type = 15` + `gen_metadata.data` | `ContextWindowMetadata` (`field 1, 4`) / `CascadePlannerConfig.field 14` / `ModelInfo.field 4` | $\text{usedTokens} = \max(f_2+f_4+f_5, \text{estimated\_tokens\_used})$；$\text{usedRatio} = \min(1, \text{usedTokens} / \text{capacityTokens})$ |
-| **分段 3 & 卡片 3** | **缓存复用上下文** | 最新一步 `step_type = 15` | `ModelUsageStats.field 5` (`cache_read_tokens`) | 最新单步 `cache_read_tokens` |
-| **分段 3 & 卡片 3** | **本步新增输入** | 最新一步 `step_type = 15` | `ModelUsageStats`: `field 2` (`input_tokens`) + `field 4` (`cache_write_tokens`) | $\text{usedTokens} - \text{cachedContextTokens}$ |
-| **分段 3 & 卡片 3** | **本步生成输出** | 最新一步 `step_type = 15` | `ModelUsageStats.field 3` (`output_tokens`) | 最新单步 `output_tokens` |
-| **分段 3 & 卡片 3** | **会话历史峰值与压缩次数** | 全表 `steps` | `ModelUsageStats` (`field 2, 4, 5`) + `CortexStepType.CHECKPOINT = 23` | $\max_{s \in S_{15}}(f_2 + f_4 + f_5)$；压缩次数 = $\text{COUNT}(\text{step\_type} = 23)$ |
-| **分段 3 & 卡片 3** | **当前模型** | DOM 模型选择器 + `gen_metadata.data` | `ChatModelMetadata.field 19, 21` | 优先响应前端模型切换，同模型时展示底层权威 `model_display_name` |
+保留现有三枚胶囊及展开后的所有项目。会话轮次、当前上下文、上下文历史峰值和压缩次数仅取主会话；累计执行步数、耗时及 Token 纳入已关联的子智能体与嵌套子智能体。
+
+子会话必须由明确的子智能体调用引用；具备 trajectory_metadata_blob 时，按其顶层 field 5 / field 6 的精确 UUID 核对父会话或根会话。普通正文提及 UUID 不构成归属。递归用已访问集合消除重复与环，不依赖当前是否展开子会话面板。没有父元数据的旧格式库仅接受显式工具引用，不接受单独的 DOM 提示。
+
+## 请求关联
+
+gen_metadata.idx 是生成记录序号，不是 steps.idx。读取 CortexStepGeneratorMetadata.field 2 的 packed/unpacked step_indices，并核对 field 4 执行标识与 steps.metadata.field 12，以及 ChatModelMetadata.field 4 用量与 steps.metadata.field 9 用量。执行标识可被多个步骤共用，不能仅按它去重。
+
+Token 账本仅从步骤用量累计一次。生成记录用于匹配计时和上下文元数据，不重复加用量。字段缺失、未完成请求与零值分别处理。完整账本无法证明未记录尝试的消耗，不补造额外重试用量。
+
+## 三个胶囊的计算
+
+| 项目 | 计算规则 |
+| --- | --- |
+| 对话轮次 | 主会话 step_type=14 的用户输入，不以系统回执 step_type=101 代替 |
+| 执行步数 | 主会话与去重后的关联子会话全部步骤数 |
+| 模型用时 | 已完成请求的原始 timeToFirstToken + streamingDuration；缺少完整计时对时，回退有效的模型步骤起止时间 |
+| 工具调用用时 | 已结束工具步骤的有效起止时间，起点优先 started_at；不把活跃、缺失或逆序区间算成已完成耗时 |
+| 首 token 平均（TTFT） | 已完成请求的宿主原始 timeToFirstToken 平均值，缺失时回退有效 viewable_at - created_at；不是推算的思维链首 Token 延迟 |
+| 输出速度（TPS） | 同一批已完成且同时具备用量和完整正耗时的请求：sum(outputTokens) / sum(durationSeconds)，包含等待与思考 |
+| 子智能体状态 | DOM 与数据库明确状态联合展示；陈旧或有完成时间的残留记录不能单凭活跃枚举当作运行证据 |
+| 累计 Token | 未缓存输入 + 缓存读取 + 缓存写入 + 输出 |
+| 缓存命中率 | 缓存读取 /（未缓存输入 + 缓存读取 + 缓存写入） |
+| 思维链 / 回复 | 展示记录中已有拆分，不推算思维链时长、不将 reasoning 再加到总输出 |
+| 当前上下文 | 最新有实际用量的主会话请求：未缓存输入 + 缓存读取 + 缓存写入；不与 estimated_tokens_used 取最大值 |
+| 当前容量 | 对应请求明确返回的容量优先；否则使用带 ~ 标识的参考容量，不根据观测峰值猜测 256K |
+| 上下文比例 | 实际输入 / 容量；文本允许超过 100%，图形夹紧到可绘制范围 |
+| 缓存复用上下文 | 当前请求的 cache_read_tokens |
+| 本步新增输入 | 当前请求 input_tokens + cache_write_tokens |
+| 本步生成输出 | 当前请求 output_tokens；独立列示，不加入输入上下文进度条 |
+| 历史峰值 / 压缩次数 | 主会话实际输入峰值 / 已完成的 CHECKPOINT 步骤数 |
+| 当前模型 | 优先标识当前统计所属请求的模型，避免用新选择的模型名覆盖旧请求统计 |
+
+输出速度不使用 0.88、0.82 等经验系数，也不设置所谓 500 tok/s 物理上限。无有效请求时显示“—”，有任务但尚无可核验速度时显示“计算中…”。
+
+## 数值精度与布局
+
+- 胶囊：速度、百分比、K/M 紧凑单位数值显示整数；实际底层计算不先舍入。
+- 展开详情：速度、TTFT、用时秒数及百分比显示两位小数。
+- 轮次、步数、Token 是离散计数，详情保留整数千分位；当前输入与容量显示精确整数。
+- 当前上下文胶囊常规最小宽度 88px，窄屏退回紧凑宽度；详情随输入框扩展至 400–480px，并受视口边界约束。
+- 保留向上展开、Top Layer 防遮挡、键盘与焦点保护及中英文展示；没有增加或删除统计行。
+
+## 数据读取与验证边界
+
+只读 SQLite，使用 DB/WAL 变化检查、并发同库单飞、有界 LRU 和超大 BLOB 字段投影。每条数据库语句结束后释放读取状态；不持有长期快照。跨库统计不是全库同一时刻的原子快照。数据库替换、步骤缩减和父关联补写须使相应缓存失效。
+
+回归包括真实列名的合成 SQLite、请求关联与计时配对、嵌套归属及循环、缺失与零值、缓存更新、整数/两位展示和窄屏布局。合成测试不代替实机验收。2026-11-10 已执行当前会话的只读独立对账及隔离世界临时 UI 预览；该预览未覆盖已安装应用文件，不代表已经部署。

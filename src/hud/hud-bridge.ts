@@ -198,34 +198,18 @@ export class CdpHudBridge implements ICdpHudBridge {
     const latestSession = this.activePanes.get(paneKey);
     if (
       !latestSession ||
+      latestSession !== session ||
       latestSession.conversationId !== metrics.conversationId ||
       latestSession.sessionRevision > metrics.sessionRevision
     ) {
       return;
     }
 
-    const fingerprint = [
-      metrics.conversationId,
-      metrics.sessionRevision,
-      metrics.isStreaming ? 1 : 0,
-      metrics.isSubagentRunning ? 1 : 0,
-      metrics.runningSubagentCount ?? 0,
-      metrics.session.turns,
-      metrics.session.steps,
-      metrics.session.subagentCount ?? 0,
-      metrics.session.subagentSteps ?? 0,
-      Math.round(metrics.session.modelDurationSeconds),
-      Math.round(metrics.session.toolDurationSeconds),
-      metrics.session.outputTps,
-      metrics.tokens.totalTokens,
-      metrics.tokens.cachedReadTokens,
-      metrics.tokens.cacheWriteTokens ?? 0,
-      metrics.tokens.outputTokens,
-      metrics.context.modelId,
-      metrics.context.usedTokens,
-      metrics.context.peakContextTokens ?? 0,
-      metrics.context.capacityTokens,
-    ].join(':');
+    const fingerprint = JSON.stringify({
+      session: metrics.session, tokens: metrics.tokens, context: metrics.context,
+      isStreaming: metrics.isStreaming, isSubagentRunning: metrics.isSubagentRunning,
+      runningSubagentCount: metrics.runningSubagentCount,
+    });
 
     if (!forcePush && latestSession.lastMetricsKey === fingerprint) {
       return;
@@ -257,7 +241,7 @@ export class CdpHudBridge implements ICdpHudBridge {
     const serialized = JSON.stringify(metrics);
     try {
       await target.cdp.evaluate(
-        `(globalThis.__gravityboxUpdateHudMetrics?.(${serialized}), globalThis.__GRAVITYBOX_HUD_V1__?.dispatchMetrics?.(${serialized}))`,
+        `(globalThis.__gravityboxUpdateHudMetrics ? globalThis.__gravityboxUpdateHudMetrics(${serialized}) : globalThis.__GRAVITYBOX_HUD_V1__?.dispatchMetrics?.(${serialized}))`,
         contextId
       );
     } catch {

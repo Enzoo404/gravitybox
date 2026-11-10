@@ -12,12 +12,51 @@ import { computeUpwardPopoverPosition, applyPopoverGeometry } from './hud-popove
  */
 
 const POPOVER_WIDTHS = {
-  session: 276,
-  tokens: 292,
-  context: 288,
+  session: 316,
+  tokens: 340,
+  context: 400,
 };
 
 const DONUT_CIRCUMFERENCE = 37.699;
+
+function isRawNumber(value) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
+function formatInteger(value) {
+  return Math.floor(value).toLocaleString('en-US');
+}
+
+function formatTokenCount(value, fallback) {
+  return isRawNumber(value) ? `${formatInteger(value)} tok` : fallback || '0 tok';
+}
+
+function formatCompactCount(value, fallback = '0') {
+  if (!isRawNumber(value)) {
+    return String(fallback).replace(/\d+\.\d+/g, (number) => String(Math.round(Number(number))));
+  }
+  if (value >= 999_500) return `${Math.round(value / 1_000_000)}M`;
+  if (value >= 1_000) return `${Math.round(value / 1_000)}K`;
+  return formatInteger(value);
+}
+
+function formatMetric(value, formatted, digits, suffix) {
+  if (formatted === '—' || !isRawNumber(value)) return '—';
+  return `${digits === 0 ? Math.round(value) : value.toFixed(digits)}${suffix}`;
+}
+
+function formatPercent(value, formatted, digits) {
+  return formatMetric(isRawNumber(value) ? value * 100 : NaN, formatted, digits, '%');
+}
+
+function formatDuration(value, formatted, isEn) {
+  if (formatted === '—' || !isRawNumber(value)) return '—';
+  const hundredths = Math.round(value * 100);
+  const minutes = Math.floor(hundredths / 6000);
+  const seconds = ((hundredths % 6000) / 100).toFixed(2);
+  if (!minutes) return isEn ? `${seconds}s` : `${seconds} 秒`;
+  return isEn ? `${minutes}m ${seconds}s` : `${minutes} 分 ${seconds} 秒`;
+}
 
 function createDefaultMetrics(conversationId = 'default', sessionRevision = 1) {
   return {
@@ -62,6 +101,7 @@ function createDefaultMetrics(conversationId = 'default', sessionRevision = 1) {
       outputFormatted: '0 tok',
     },
     context: {
+      hasUsageData: false,
       modelId: 'gemini-3.8-flash',
       modelDisplayName: 'Gemini 3.8 Flash',
       usedTokens: 0,
@@ -70,8 +110,8 @@ function createDefaultMetrics(conversationId = 'default', sessionRevision = 1) {
       peakContextTokens: 0,
       peakContextCompact: '0',
       peakContextFormatted: '0 tok',
-      capacityTokens: 200000,
-      capacityTokensCompact: '200K',
+      capacityTokens: 0,
+      capacityTokensCompact: '—',
       usedRatio: 0,
       usedRatioFormatted: '0%',
       stepCacheRatio: 0,
@@ -560,7 +600,7 @@ export class HudInstance {
         </div>
       </div>
 
-      <!-- 向上展开详情卡片 1: 会话统计 (276px) -->
+      <!-- 向上展开详情卡片 1: 会话统计 -->
       <div class="hud-popover" id="hud-popover-session" data-popover-id="session" popover="manual" role="dialog" aria-label="会话统计明细" hidden>
         <div class="hud-popover-inner">
           <div class="hud-popover-header">
@@ -602,7 +642,7 @@ export class HudInstance {
         </div>
       </div>
 
-      <!-- 向上展开详情卡片 2: Token 用量 (292px) -->
+      <!-- 向上展开详情卡片 2: Token 用量 -->
       <div class="hud-popover" id="hud-popover-tokens" data-popover-id="tokens" popover="manual" role="dialog" aria-label="Token 用量明细" hidden>
         <div class="hud-popover-inner">
           <div class="hud-popover-header">
@@ -650,7 +690,7 @@ export class HudInstance {
         </div>
       </div>
 
-      <!-- 向上展开详情卡片 3: 当前上下文实况 (288px, 100% 真实会话底层数据) -->
+      <!-- 向上展开详情卡片 3: 当前上下文实况 -->
       <div class="hud-popover" id="hud-popover-context" data-popover-id="context" popover="manual" role="dialog" aria-label="当前上下文实况明细" hidden>
         <div class="hud-popover-inner">
           <div class="hud-popover-header">
@@ -658,7 +698,7 @@ export class HudInstance {
               <span class="hud-popover-title-regular" id="pop-ctx-prefix">当前上下文 </span>
               <span class="hud-popover-title-strong" id="pop-ctx-pct">0%</span>
             </span>
-            <span class="hud-popover-badge-muted" id="pop-ctx-capacity">0 / 200K</span>
+            <span class="hud-popover-badge-muted" id="pop-ctx-capacity">— / —</span>
           </div>
           <div class="hud-progress-track" id="pop-ctx-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
             <div class="hud-progress-seg hud-seg-sys" id="seg-sys" style="width: 0%"></div>
@@ -778,6 +818,7 @@ export class HudInstance {
     const t = metrics.tokens || {};
     const c = metrics.context || {};
     const b = c.breakdown || {};
+    const hasContextUsage = c.hasUsageData !== false;
 
     const subagentRunning = Boolean(
       metrics.isSubagentRunning ||
@@ -798,14 +839,15 @@ export class HudInstance {
     const stepsEl = q('#hud-txt-session .hud-steps');
     const speedEl = q('#hud-txt-session .hud-speed');
     const subagentTagEl = q('#hud-txt-session .hud-subagent-tag');
-    const turnsCount = s.turns ?? 0;
-    const stepsCount = s.steps ?? 0;
-    const rawTpsText = s.outputTpsFormatted || '—';
-    const tpsText = isEn && rawTpsText === '计算中...' ? 'Measuring…' : rawTpsText;
+    const turnsCount = formatInteger(isRawNumber(s.turns) ? s.turns : 0);
+    const stepsCount = formatInteger(isRawNumber(s.steps) ? s.steps : 0);
+    const tpsText = (digits) => s.outputTpsFormatted === '计算中...'
+      ? (isEn ? 'Measuring…' : '计算中...')
+      : formatMetric(s.outputTps, s.outputTpsFormatted, digits, ' tok/s');
 
     if (turnsEl) turnsEl.textContent = isEn ? `${turnsCount}T ` : `${turnsCount} 轮 `;
     if (stepsEl) stepsEl.textContent = isEn ? `${stepsCount}S` : `${stepsCount} 步`;
-    if (speedEl) speedEl.textContent = ` · ${tpsText}`;
+    if (speedEl) speedEl.textContent = ` · ${tpsText(0)}`;
     if (subagentTagEl) {
       if (subagentRunning) {
         subagentTagEl.textContent = isEn
@@ -825,18 +867,19 @@ export class HudInstance {
     const cachePrefixEl = q('#hud-txt-tokens .hud-cache-prefix');
     const cacheLabelEl = q('#hud-txt-tokens .hud-cache-label');
     const cacheValEl = q('#hud-txt-tokens .hud-cache-val');
-    if (tokTotalEl) tokTotalEl.textContent = t.totalTokensCompact || '0 tok';
+    if (tokTotalEl) tokTotalEl.textContent = `${formatCompactCount(t.totalTokens, String(t.totalTokensCompact || '0').replace(/ tok$/, ''))} tok`;
     if (cachePrefixEl) cachePrefixEl.textContent = isEn ? 'Cache' : '缓存';
     if (cacheLabelEl) cacheLabelEl.textContent = isEn ? ' Hit' : '命中';
-    if (cacheValEl) cacheValEl.textContent = t.cacheHitRateFormatted || '0%';
+    if (cacheValEl) cacheValEl.textContent = formatPercent(t.cacheHitRate, t.cacheHitRateFormatted, 0);
 
     // 3. 更新分段 3 (上下文实况)
     const ctxTxtEl = q('#hud-txt-context');
     const donutValEl = q('#hud-donut-val');
     const meterFillEl = q('#hud-meter-fill');
-    const ratioClamped = Math.min(1.0, Math.max(0, Number(c.usedRatio) || 0));
-    const usedCompact = String(c.usedTokensCompact || '0').replace(/^~/, '');
-    const pctText = c.usedRatioFormatted || '0%';
+    const ratioClamped = hasContextUsage ? Math.min(1.0, Math.max(0, Number(c.usedRatio) || 0)) : 0;
+    const usedCompact = hasContextUsage ? formatCompactCount(c.usedTokens, c.usedTokensCompact) : '—';
+    const contextRatio = hasContextUsage ? c.usedRatio : undefined;
+    const pctText = formatPercent(contextRatio, c.usedRatioFormatted, 0);
 
     if (ctxTxtEl) {
       ctxTxtEl.textContent = pctText;
@@ -874,26 +917,26 @@ export class HudInstance {
     setTxt('#lbl-model-dur', isEn ? 'Model Duration' : '模型用时');
     setTxt(
       '#val-model-dur',
-      isEn
-        ? s.modelDurationFormattedEn || s.modelDurationFormatted || '0s'
-        : s.modelDurationFormatted || '0 秒'
+      formatDuration(s.modelDurationSeconds, s.modelDurationFormatted, isEn)
     );
     setTxt('#lbl-tool-dur', isEn ? 'Tool Duration' : '工具调用用时');
     setTxt(
       '#val-tool-dur',
-      isEn
-        ? s.toolDurationFormattedEn || s.toolDurationFormatted || '0s'
-        : s.toolDurationFormatted || '0 秒'
+      formatDuration(s.toolDurationSeconds, s.toolDurationFormatted, isEn)
     );
     setTxt('#lbl-ttft', isEn ? 'Avg TTFT' : '首 token 平均（TTFT）');
     setTxt(
       '#val-ttft',
-      isEn
-        ? s.averageTtftFormattedEn || s.averageTtftFormatted || '—'
-        : s.averageTtftFormatted || '—'
+      formatMetric(s.averageTtftSeconds, s.averageTtftFormatted, 2, isEn ? 's' : ' 秒')
     );
     setTxt('#lbl-tps', isEn ? 'Output Speed (TPS)' : '输出速度（TPS）');
-    setTxt('#val-tps', tpsText);
+    setTxt('#val-tps', tpsText(2));
+    q('#val-ttft')?.setAttribute('aria-description', isEn
+      ? 'Average of the host’s original TTFT field.'
+      : '按宿主原始 TTFT 字段统计的平均值。');
+    q('#val-tps')?.setAttribute('aria-description', isEn
+      ? 'Calculated from host generation time, including waiting time.'
+      : '按宿主生成时间计算，包含等待时间。');
 
     const subagentRow = q('#row-subagent-status');
     const subStepsCount = Math.max(0, Number(s.subagentSteps) || 0);
@@ -925,13 +968,13 @@ export class HudInstance {
 
     // 5. 更新 Popover 2 (Token 用量)
     setTxt('#pop-tokens-title', isEn ? 'Token Usage' : 'Token 用量');
-    setTxt('#pop-tokens-badge', t.totalTokensFormatted || '0 tok');
+    setTxt('#pop-tokens-badge', formatTokenCount(t.totalTokens, t.totalTokensFormatted));
     setTxt('#lbl-cache-hit', isEn ? 'Cache Hit' : '缓存命中');
-    setTxt('#val-cache-hit', t.cacheHitRateFormatted || '0%');
+    setTxt('#val-cache-hit', formatPercent(t.cacheHitRate, t.cacheHitRateFormatted, 2));
     setTxt('#lbl-uncached-in', isEn ? 'Uncached Input' : '未缓存输入');
-    setTxt('#val-uncached-in', t.uncachedInputFormatted || '0 tok');
+    setTxt('#val-uncached-in', formatTokenCount(t.uncachedInputTokens, t.uncachedInputFormatted));
     setTxt('#lbl-cached-read', isEn ? 'Cached Read' : '缓存读取');
-    setTxt('#val-cached-read', t.cachedReadFormatted || '0 tok');
+    setTxt('#val-cached-read', formatTokenCount(t.cachedReadTokens, t.cachedReadFormatted));
     const cacheWriteRow = q('#row-cache-write');
     if (cacheWriteRow) {
       if (Number(t.cacheWriteTokens) > 0) {
@@ -939,14 +982,14 @@ export class HudInstance {
         setTxt('#lbl-cache-write', isEn ? 'Cache Write' : '缓存写入');
         setTxt(
           '#val-cache-write',
-          t.cacheWriteFormatted || `${Number(t.cacheWriteTokens || 0).toLocaleString('en-US')} tok`
+          formatTokenCount(t.cacheWriteTokens, t.cacheWriteFormatted)
         );
       } else {
         cacheWriteRow.setAttribute('hidden', '');
       }
     }
     setTxt('#lbl-output-tok', isEn ? 'Output' : '输出');
-    setTxt('#val-output-tok', t.outputFormatted || '0 tok');
+    setTxt('#val-output-tok', formatTokenCount(t.outputTokens, t.outputFormatted));
 
     const reasoningRow = q('#row-reasoning-tok');
     if (reasoningRow) {
@@ -955,7 +998,7 @@ export class HudInstance {
         setTxt('#lbl-reasoning-tok', isEn ? 'Reasoning / Reply' : '思维链 / 回复');
         setTxt(
           '#val-reasoning-tok',
-          `${(t.reasoningTokens || 0).toLocaleString('en-US')} / ${(t.candidateTokens || 0).toLocaleString('en-US')} tok`
+          `${formatInteger(t.reasoningTokens)} / ${formatInteger(t.candidateTokens || 0)} tok`
         );
       } else {
         reasoningRow.setAttribute('hidden', '');
@@ -964,49 +1007,43 @@ export class HudInstance {
 
     // 6. 更新 Popover 3 (当前上下文实况 - 100% 真实底层数据)
     setTxt('#pop-ctx-prefix', isEn ? 'Current Context ' : '当前上下文 ');
-    setTxt('#pop-ctx-pct', pctText);
+    setTxt('#pop-ctx-pct', formatPercent(contextRatio, c.usedRatioFormatted, 2));
+    const capacityText = isRawNumber(c.capacityTokens) && c.capacityTokens > 0
+      ? `${c.isFallbackCapacity ? '~' : ''}${formatInteger(c.capacityTokens)}` : '—';
+    const usedText = hasContextUsage && isRawNumber(c.usedTokens) ? formatInteger(c.usedTokens) : '—';
     setTxt(
       '#pop-ctx-capacity',
-      `${usedCompact} / ${c.capacityTokensCompact || '200K'}`
+      `${usedText} / ${capacityText}`
     );
 
     const trackEl = q('#pop-ctx-track');
     if (trackEl) {
       trackEl.setAttribute('aria-valuenow', String(Math.round(ratioClamped * 100)));
+      trackEl.setAttribute('aria-valuetext', formatPercent(contextRatio, c.usedRatioFormatted, 2));
     }
     const segSysEl = q('#seg-sys');
     const segToolEl = q('#seg-tool');
     const segMsgEl = q('#seg-msg');
-    const wSys = Math.max(0, Number(b.cachedContextRatio ?? b.systemRatio) || 0);
-    const wTool = Math.max(0, Number(b.uncachedContextRatio ?? b.toolRatio) || 0);
-    const latestOutTok = Math.max(0, Number(b.latestOutputTokens ?? b.messageTokens) || 0);
-    const capTok = Math.max(1, Number(c.capacityTokens) || 200000);
-    const rawWMsg = Math.max(0, Number(b.messageRatio) || 0);
-    const wMsg =
-      rawWMsg > 0
-        ? rawWMsg
-        : latestOutTok > 0
-        ? Math.min(Math.max(0, 100 - wSys - wTool), Math.max(0.4, (latestOutTok / capTok) * 100))
-        : 0;
+    const wSys = hasContextUsage ? Math.max(0, Number(b.cachedContextRatio ?? b.systemRatio) || 0) : 0;
+    const wTool = hasContextUsage ? Math.max(0, Number(b.uncachedContextRatio ?? b.toolRatio) || 0) : 0;
     if (segSysEl) segSysEl.style.width = `${wSys.toFixed(3)}%`;
     if (segToolEl) segToolEl.style.width = `${wTool.toFixed(3)}%`;
-    if (segMsgEl) segMsgEl.style.width = `${wMsg.toFixed(3)}%`;
+    if (segMsgEl) segMsgEl.style.width = '0%';
 
     setTxt('#lbl-seg-sys', isEn ? 'Cached Context' : '缓存复用上下文');
-    setTxt('#val-seg-sys', b.cachedContextFormatted || b.systemTokensCompact || '0 tok');
+    setTxt('#val-seg-sys', hasContextUsage ? formatTokenCount(b.cachedContextTokens ?? b.systemTokens, b.cachedContextFormatted || b.systemTokensCompact) : '—');
     setTxt('#lbl-seg-tool', isEn ? 'New Uncached Input' : '本步新增输入');
-    setTxt('#val-seg-tool', b.uncachedContextFormatted || b.toolTokensCompact || '0 tok');
+    setTxt('#val-seg-tool', hasContextUsage ? formatTokenCount(b.uncachedContextTokens ?? b.toolTokens, b.uncachedContextFormatted || b.toolTokensCompact) : '—');
     setTxt('#lbl-seg-msg', isEn ? 'Latest Step Output' : '本步生成输出');
-    setTxt('#val-seg-msg', b.latestOutputFormatted || b.messageTokensCompact || '0 tok');
+    setTxt('#val-seg-msg', hasContextUsage ? formatTokenCount(b.latestOutputTokens ?? b.messageTokens, b.latestOutputFormatted || b.messageTokensCompact) : '—');
 
     const peakRow = q('#row-ctx-peak');
     if (peakRow) {
       setTxt('#lbl-ctx-peak', isEn ? 'Session Peak Context' : '会话历史峰值');
-      const peakVal =
-        c.peakContextFormatted ||
-        (Number(c.peakContextTokens) > 0
-          ? `${Number(c.peakContextTokens).toLocaleString('en-US')} tok`
-          : c.usedTokensFormatted || `${Number(c.usedTokens || 0).toLocaleString('en-US')} tok`);
+      const peakVal = formatTokenCount(
+        c.peakContextTokens ?? c.usedTokens,
+        c.peakContextFormatted || c.usedTokensFormatted
+      );
       const compCount = Number(s.compactionCount) || 0;
       const compSuffix =
         compCount > 0 ? (isEn ? ` (${compCount}x compacted)` : ` (已压缩 ${compCount} 次)`) : '';
@@ -1262,7 +1299,10 @@ export class HudInstance {
     const arrow = this.shadow.querySelector(`#arrow-${id}`);
     if (!capsule || !popover) return;
 
-    const standardWidth = POPOVER_WIDTHS[id] || 280;
+    const composerWidth = this.targetComposer?.getBoundingClientRect?.().width || 0;
+    const standardWidth = id === 'context'
+      ? Math.max(POPOVER_WIDTHS.context, Math.min(480, composerWidth))
+      : POPOVER_WIDTHS[id] || 280;
     const calcFn =
       typeof computeUpwardPopoverPosition === 'function'
         ? computeUpwardPopoverPosition

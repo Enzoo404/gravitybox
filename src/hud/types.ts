@@ -1,7 +1,6 @@
 /**
  * 会话状态 HUD 与向上展开详情卡片 (Popover Panels) 核心类型与接口契约
- * 遵循 GRAVITYBOX-SPEC-HUD-001 (v2.1 Antigravity 原生真实数据与子智能体协同版)
- * 所有展示指标 100% 源自会话 SQLite (steps / gen_metadata) 与宿主 DOM 真实状态，零虚构基线
+ * 指标来源、统计范围与缺失值遵循 CONVERSATION_STATUS_HUD_ARCHITECTURE.md。
  */
 
 export interface ConversationHudMetrics {
@@ -48,13 +47,13 @@ export interface ConversationHudMetrics {
     toolDurationFormatted: string;
     /** 工具调用用时英文格式化展示 (如 "6m 0s") */
     toolDurationFormattedEn?: string;
-    /** 首 Token 平均响应时间 (秒) */
+    /** 宿主原始 TTFT（可见回复等待）平均值，未经思维链估算修正 */
     averageTtftSeconds: number;
     /** 首 Token 平均响应时间中文格式化 (如 "3.8 秒" 或 "—") */
     averageTtftFormatted: string;
     /** 首 Token 平均响应时间英文格式化 (如 "3.8s" 或 "—") */
     averageTtftFormattedEn?: string;
-    /** 令牌输出速度 (tok/s, 物理上限 500, 窗口不足时为 0) */
+    /** 完整有效请求的总输出 / 总耗时，保留未舍入 tok/s；缺失状态见格式化字段 */
     outputTps: number;
     /** 输出速度格式化展示 (如 "82 tok/s" 或 "—") */
     outputTpsFormatted: string;
@@ -100,6 +99,7 @@ export interface ConversationHudMetrics {
 
   /** 模块 3 & Popover 3: 当前上下文实况 (100% 源自最近一步生成记录与会话真实峰值，零虚构 1M/1.9K/7.6K) */
   context: {
+    hasUsageData?: boolean;
     /** 当前激活模型 ID (如 "gemini-3.8-flash") */
     modelId: string;
     /** 模型展示名称 (如 "Gemini 3.8 Flash") */
@@ -202,10 +202,23 @@ export interface ParsedConversationStep {
   isSubagentStep?: boolean;
   /** 从步骤元数据/载荷中提取出的关联子智能体会话 UUID 列表 */
   childConversationIds?: string[];
+  executionId?: string;
+  hasUsage?: boolean;
+  generation?: ParsedGenMetadata;
 }
 
 /** 从 gen_metadata 提取的真实会话配置、权威流式耗时与上下文元数据 */
 export interface ParsedGenMetadata {
+  stepIndices?: number[];
+  executionId?: string;
+  usage?: {
+    rawInputTokens: number;
+    outputTokens: number;
+    cacheWriteTokens: number;
+    cachedReadTokens: number;
+    reasoningTokens: number;
+    candidateTokens: number;
+  };
   responseModel?: string;
   modelDisplayName?: string;
   plannerModelName?: string;

@@ -321,6 +321,147 @@ class FakeShadowRoot {
   }
 }
 
+describe('HUD raw 数值精度与缺值展示', () => {
+  function render(metrics, languageMode = 'zh') {
+    const instance = new HudInstance('formatting', { languageMode });
+    instance.shadow = new FakeShadowRoot('open', null);
+    instance.shadow.innerHTML = instance.buildHudHtml();
+    instance.applyMetricsToDom(metrics);
+    return { instance, text: (selector) => instance.shadow.querySelector(selector).textContent };
+  }
+
+  const metrics = {
+    session: {
+      turns: 12, steps: 1234, outputTps: 82.7364, outputTpsFormatted: '82.74 tok/s',
+      averageTtftSeconds: 3.8462, averageTtftFormatted: '3.85 秒',
+      modelDurationSeconds: 1348.126, modelDurationFormatted: '22 分 28 秒',
+      toolDurationSeconds: 59.999, toolDurationFormatted: '1 分 0 秒',
+      compactionCount: 2,
+    },
+    tokens: {
+      totalTokens: 61234567, totalTokensCompact: '61.2M tok', totalTokensFormatted: 'rounded',
+      cacheHitRate: 0.96943, cacheHitRateFormatted: '96.94%',
+      uncachedInputTokens: 1234567, cachedReadTokens: 59876543, outputTokens: 123457,
+      cacheWriteTokens: 1001, reasoningTokens: 12345, candidateTokens: 111112,
+    },
+    context: {
+      hasUsageData: true, usedTokens: 226412, usedTokensCompact: '226.4K',
+      usedRatio: 1.13206, usedRatioFormatted: '113.21%',
+      capacityTokens: 200000, capacityTokensCompact: '~200K', isFallbackCapacity: true,
+      peakContextTokens: 1234567,
+      modelDisplayName: 'Gemini Very Long Model Name With Extended Context Preview',
+      breakdown: {
+        cachedContextTokens: 218100, cachedContextRatio: 109.05,
+        uncachedContextTokens: 8312, uncachedContextRatio: 4.156,
+        latestOutputTokens: 1240, messageRatio: 20,
+      },
+    },
+  };
+
+  for (const languageMode of ['zh', 'en']) {
+    it(`${languageMode}: 胶囊整数、详情两位、Token 千分位，保留全部既有项目`, () => {
+      const { instance, text } = render(metrics, languageMode);
+      assert.equal(text('#hud-txt-session .hud-speed'), ' · 83 tok/s');
+      assert.equal(text('#hud-txt-session .hud-steps'), languageMode === 'en' ? '1,234S' : '1,234 步');
+      assert.equal(text('#hud-txt-tokens .hud-tok-total'), '61M tok');
+      assert.equal(text('#hud-txt-tokens .hud-cache-val'), '97%');
+      assert.equal(text('#hud-txt-context'), '113%');
+      assert.equal(text('#val-tps'), '82.74 tok/s');
+      assert.equal(text('#val-ttft'), languageMode === 'en' ? '3.85s' : '3.85 秒');
+      assert.equal(text('#val-model-dur'), languageMode === 'en' ? '22m 28.13s' : '22 分 28.13 秒');
+      assert.equal(text('#val-tool-dur'), languageMode === 'en' ? '1m 0.00s' : '1 分 0.00 秒');
+      assert.equal(text('#val-cache-hit'), '96.94%');
+      assert.equal(text('#pop-tokens-badge'), '61,234,567 tok');
+      assert.equal(text('#val-uncached-in'), '1,234,567 tok');
+      assert.equal(text('#val-cached-read'), '59,876,543 tok');
+      assert.equal(text('#val-output-tok'), '123,457 tok');
+      assert.equal(text('#val-cache-write'), '1,001 tok');
+      assert.equal(text('#val-reasoning-tok'), '12,345 / 111,112 tok');
+      assert.equal(text('#pop-ctx-pct'), '113.21%');
+      assert.equal(text('#pop-ctx-capacity'), '226,412 / ~200,000');
+      assert.equal(text('#val-seg-sys'), '218,100 tok');
+      assert.equal(text('#val-seg-tool'), '8,312 tok');
+      assert.equal(text('#val-seg-msg'), '1,240 tok');
+      assert.equal(text('#val-ctx-peak'), languageMode === 'en'
+        ? '1,234,567 tok (2x compacted)' : '1,234,567 tok (已压缩 2 次)');
+      assert.equal(text('#val-ctx-model'), metrics.context.modelDisplayName);
+      assert.equal(instance.shadow.querySelector('#seg-msg').style.width, '0%');
+      assert.equal(instance.shadow.querySelector('#pop-ctx-track').getAttribute('aria-valuenow'), '100');
+      assert.equal(instance.shadow.querySelector('#pop-ctx-track').getAttribute('aria-valuetext'), '113.21%');
+      assert.match(instance.shadow.querySelector('#val-tps').getAttribute('aria-description'), /等待|waiting/);
+      assert.match(instance.shadow.querySelector('#val-ttft').getAttribute('aria-description'), /原始|original/);
+      assert.equal((instance.buildHudHtml().match(/class="hud-popover-row"/g) || []).length, 16);
+    });
+  }
+
+  it('缺失与实测零严格区分，流式 measuring 信号保持双语', () => {
+    for (const missing of [null, undefined, NaN, Infinity]) {
+      const { text } = render({
+        session: { outputTps: missing, averageTtftSeconds: missing },
+        tokens: { cacheHitRate: missing }, context: { usedRatio: missing },
+      });
+      for (const selector of ['#val-tps', '#val-ttft', '#val-cache-hit', '#pop-ctx-pct']) {
+        assert.equal(text(selector), '—');
+      }
+    }
+    const zero = render({ session: { outputTps: 0, averageTtftSeconds: 0, modelDurationSeconds: 0 },
+      tokens: { cacheHitRate: 0 }, context: { usedRatio: 0 } });
+    assert.equal(zero.text('#val-tps'), '0.00 tok/s');
+    assert.equal(zero.text('#val-ttft'), '0.00 秒');
+    assert.equal(zero.text('#val-model-dur'), '0.00 秒');
+    assert.equal(zero.text('#val-cache-hit'), '0.00%');
+    assert.equal(zero.text('#pop-ctx-pct'), '0.00%');
+    const absent = render({ session: { outputTps: 0, outputTpsFormatted: '—',
+      averageTtftSeconds: 0, averageTtftFormatted: '—' } });
+    assert.equal(absent.text('#val-tps'), '—');
+    assert.equal(absent.text('#val-ttft'), '—');
+    for (const lang of ['zh', 'en']) {
+      const { text } = render({ session: { outputTps: 0, outputTpsFormatted: '计算中...' } }, lang);
+      assert.equal(text('#val-tps'), lang === 'en' ? 'Measuring…' : '计算中...');
+    }
+  });
+
+  it('缺少上下文用量不显示伪零或猜测容量；实测输入进度不计入输出', () => {
+    const absent = render({ context: { hasUsageData: false, usedRatio: 0, usedTokens: 0 } });
+    assert.equal(absent.text('#hud-txt-context'), '—');
+    assert.equal(absent.text('#pop-ctx-capacity'), '— / —');
+    assert.equal(absent.text('#val-seg-sys'), '—');
+    for (const output of [1, 1000000]) {
+      const { instance, text } = render({ context: { ...metrics.context, usedRatio: 0.5,
+        capacityTokensCompact: '200K', breakdown: { cachedContextRatio: 40,
+          uncachedContextRatio: 10, latestOutputTokens: output } } });
+      assert.equal(text('#pop-ctx-capacity'), '226,412 / ~200,000');
+      assert.equal(instance.shadow.querySelector('#seg-sys').style.width, '40.000%');
+      assert.equal(instance.shadow.querySelector('#seg-tool').style.width, '10.000%');
+      assert.equal(instance.shadow.querySelector('#seg-msg').style.width, '0%');
+      assert.equal(text('#val-seg-msg'), `${output.toLocaleString('en-US')} tok`);
+    }
+  });
+
+  it('上下文卡片利用输入框宽度并在窄视口保留两侧留白', () => {
+    const { instance } = render(metrics);
+    const previousWindow = globalThis.window;
+    try {
+      instance.targetComposer = { getBoundingClientRect: () => ({ width: 520 }) };
+      instance.activePopoverId = 'context';
+      globalThis.window = { innerWidth: 1024, innerHeight: 800 };
+      const popover = instance.shadow.querySelector('#hud-popover-context');
+      popover.getBoundingClientRect = () => ({
+        left: parseFloat(popover.style.left), width: parseFloat(popover.style.width),
+        bottom: globalThis.window.innerHeight - parseFloat(popover.style.bottom), height: 190,
+      });
+      instance.repositionActivePopover();
+      assert.equal(popover.style.width, '480px');
+      globalThis.window.innerWidth = 260;
+      instance.repositionActivePopover();
+      assert.equal(popover.style.width, '236px');
+      assert.equal(popover.style.left, '12px');
+    } finally {
+      globalThis.window = previousWindow;
+    }
+  });
+});
+
 describe('HudInstance 与 AntigravityHudManager 生产模块生命周期、垂直居中平衡与防篡改测试', () => {
   it('验证双分栏独立挂载、pb-4 底部包装器垂直居中平衡与恢复、无原生 title、子智能体工作状态感知、sessionRevision 防篡改及 AbortController 50 次重挂载零泄漏', () => {
     const windowListeners = new Set();
@@ -493,7 +634,7 @@ describe('HudInstance 与 AntigravityHudManager 生产模块生命周期、垂�
     assert.equal(instA.updateMetrics(sampleMetrics('conv-3', rev4)), true);
 
     // 验证 Popover 3 展示真实上下文明细而非 1.9K/7.6K 假数据
-    assert.equal(instA.shadow.querySelector('#pop-ctx-capacity').textContent, '226K / 256K');
+    assert.equal(instA.shadow.querySelector('#pop-ctx-capacity').textContent, '226,412 / 262,144');
     assert.equal(instA.shadow.querySelector('#lbl-seg-sys').textContent, '缓存复用上下文');
     assert.equal(instA.shadow.querySelector('#val-seg-sys').textContent, '218,100 tok');
     assert.equal(instA.shadow.querySelector('#lbl-seg-tool').textContent, '本步新增输入');

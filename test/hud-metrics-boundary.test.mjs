@@ -22,12 +22,12 @@ test('Case A: 新会话空状态 (0 Token, 0 轮次, 0 步数) - 真实引擎模
   assert.equal(m.session.outputTpsFormatted, '—');
   assert.equal(Number.isFinite(m.session.outputTps), true);
   assert.equal(m.context.usedRatio, 0);
-  assert.equal(m.context.usedRatioFormatted, '0%');
+  assert.equal(m.context.usedRatioFormatted, '0.00%');
   assert.equal(m.context.capacityTokens, 200000, 'Antigravity 标准上下文容量应为 200K 而非虚假 1M');
-  assert.equal(m.context.capacityTokensCompact, '200K');
+  assert.equal(m.context.capacityTokensCompact, '~200K');
 });
 
-test('Case B: 超瞬时生成 (活跃时间 <= 0 或极小 0.001s < 0.1s 窗口保护) - 真实引擎模块验证', () => {
+test('Case B: 进行中的步骤不参与已完成请求的速度计算 - 真实引擎模块验证', () => {
   const steps = [{
     idx: 1,
     stepType: 15,
@@ -51,7 +51,7 @@ test('Case B: 超瞬时生成 (活跃时间 <= 0 或极小 0.001s < 0.1s 窗口�
     isStreaming: false
   });
   assert.equal(Number.isFinite(m.session.outputTps), true, 'TPS 不能为 Infinity');
-  assert.equal(m.session.outputTpsFormatted, '—', '瞬时窗口 < 0.1s 无历史步时应安全展示破折号');
+  assert.equal(m.session.outputTpsFormatted, '—', '未完成请求没有可核验完整耗时，显示破折号');
 
   // 流式状态下瞬时窗口展示 "计算中..."
   const mStreaming = buildConversationHudMetrics({
@@ -88,8 +88,9 @@ test('Case C: 真实单步上下文构成 (缓存复用 vs 本步新增输入) -
   });
   assert.equal(m.context.usedTokens, 226412);
   assert.equal(m.context.peakContextTokens, 226412);
-  assert.equal(m.context.capacityTokens, 262144, '当峰值处于 200K~256K 压缩区间时自动对齐 256K 真实上限');
-  assert.equal(m.context.capacityTokensCompact, '256K');
+  assert.equal(m.context.capacityTokens, 200000, '观测峰值不得推导窗口容量');
+  assert.equal(m.context.capacityTokensCompact, '~200K');
+  assert.equal(m.context.isFallbackCapacity, true);
   assert.equal(m.context.breakdown.cachedContextTokens, 218100, '缓存复用上下文必须 100% 源自最后一步 cachedReadTokens');
   assert.equal(m.context.breakdown.uncachedContextTokens, 8312, '本步新增输入必须 100% 源自最后一步 rawInputTokens');
   assert.equal(m.context.breakdown.latestOutputTokens, 1240, '本步生成输出必须 100% 源自最后一步 outputTokens');
@@ -123,7 +124,7 @@ test('Case D: 超出默认阈值与未知模型 ~200K 回退及显式 DB 容量�
   assert.equal(mUnknown.context.capacityTokens, 200000);
   assert.equal(mUnknown.context.capacityTokensCompact, '~200K', '未知模型容量应回退为 ~200K 而非虚假 1M');
   assert.equal(mUnknown.context.usedRatio, 0.75);
-  assert.equal(mUnknown.context.usedRatioFormatted, '75%');
+  assert.equal(mUnknown.context.usedRatioFormatted, '75.00%');
 
   // 当底层 gen_metadata 显式提供 maxContextTokens 时严格以底层数据为准
   const mExplicit = buildConversationHudMetrics({
@@ -146,7 +147,7 @@ test('Case E: 客户端时间戳逆序、多类型工具步耗时聚合与实机
     {
       idx: 1,
       stepType: 15,
-      status: 2,
+      status: 3,
       startTimeSeconds: 105.0,
       firstTokenSeconds: null,
       endTimeSeconds: 102.0, // 逆序
@@ -160,7 +161,7 @@ test('Case E: 客户端时间戳逆序、多类型工具步耗时聚合与实机
     {
       idx: 2,
       stepType: 132,
-      status: 2,
+      status: 3,
       startTimeSeconds: 200.0,
       firstTokenSeconds: null,
       endTimeSeconds: 195.0, // 工具逆序
@@ -174,7 +175,7 @@ test('Case E: 客户端时间戳逆序、多类型工具步耗时聚合与实机
     {
       idx: 3,
       stepType: 21, // CORTEX_STEP_TYPE_RUN_COMMAND
-      status: 2,
+      status: 3,
       startTimeSeconds: 300.0,
       firstTokenSeconds: null,
       endTimeSeconds: 304.5
@@ -182,7 +183,7 @@ test('Case E: 客户端时间戳逆序、多类型工具步耗时聚合与实机
     {
       idx: 4,
       stepType: 23, // CORTEX_STEP_TYPE_CHECKPOINT (上下文压缩)
-      status: 2,
+      status: 3,
       startTimeSeconds: 305.0,
       firstTokenSeconds: null,
       endTimeSeconds: 305.2
@@ -202,8 +203,8 @@ test('Case E: 客户端时间戳逆序、多类型工具步耗时聚合与实机
 
   // 实机真机测试截图 3 对账: 708,929 + 22,416,293 + 70,856 = 23,196,078 (97% 命中)
   const realMachineSteps = [
-    { idx: 1, stepType: 101, status: 2, startTimeSeconds: 1, firstTokenSeconds: null, endTimeSeconds: 1, rawInputTokens: 0, cachedReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0, reasoningTokens: 0, candidateTokens: 0 },
-    { idx: 2, stepType: 15, status: 2, startTimeSeconds: 10, firstTokenSeconds: 15.6, endTimeSeconds: 237.0, rawInputTokens: 708929, cachedReadTokens: 22416293, cacheWriteTokens: 0, outputTokens: 70856, reasoningTokens: 20856, candidateTokens: 50000 }
+    { idx: 1, stepType: 101, status: 3, startTimeSeconds: 1, firstTokenSeconds: null, endTimeSeconds: 1, rawInputTokens: 0, cachedReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0, reasoningTokens: 0, candidateTokens: 0 },
+    { idx: 2, stepType: 15, status: 3, startTimeSeconds: 10, firstTokenSeconds: 15.6, endTimeSeconds: 237.0, rawInputTokens: 708929, cachedReadTokens: 22416293, cacheWriteTokens: 0, outputTokens: 70856, reasoningTokens: 20856, candidateTokens: 50000 }
   ];
   const mRef = buildConversationHudMetrics({
     conversationId: 'conv-real-machine',
@@ -214,9 +215,9 @@ test('Case E: 客户端时间戳逆序、多类型工具步耗时聚合与实机
   assert.equal(mRef.tokens.totalTokens, 23196078);
   assert.equal(mRef.tokens.totalTokensCompact, '23.2M tok');
   assert.equal(mRef.tokens.totalTokensFormatted, '23,196,078 tok');
-  assert.equal(mRef.tokens.cacheHitRateFormatted, '97%');
-  assert.equal(mRef.session.averageTtftFormatted, '5.6 秒');
-  assert.equal(mRef.session.outputTpsFormatted, '320 tok/s');
+  assert.equal(mRef.tokens.cacheHitRateFormatted, '96.93%');
+  assert.equal(mRef.session.averageTtftFormatted, '5.60 秒');
+  assert.equal(mRef.session.outputTpsFormatted, '312.14 tok/s');
   assert.equal(mRef.context.modelId, 'gemini-3.8-flash');
   assert.equal(mRef.context.modelDisplayName, 'Gemini 3.8 Flash');
 
@@ -227,7 +228,7 @@ test('Case E: 客户端时间戳逆序、多类型工具步耗时聚合与实机
   assert.equal(resolveModelCapacity('gpt-4o').capacityCompact, '128K');
 });
 
-test('Case F (v2.1 核心校准): 推理模型 (Gemini 3.8 Flash High) viewable_at 处于思维链之后时的 TPS 与 TTFT 真实校准 (杜绝 355 tok/s 虚高)', () => {
+test('Case F: 推理输出使用完整请求耗时，不推算思维链时间或改写原始可见等待', () => {
   // 复现用户实机截图数据:
   // 模型总用时 = 22 分 43 秒 (1,363s)，其中 viewable_at - created_at = 1,179s (含 TTFT + 50,329 思维链 token)，
   // completed_at - viewable_at = 184.09s (仅含 15,023 回复 token)，总输出 = 65,352 tok (50,329 思维链 + 15,023 回复)
@@ -257,10 +258,10 @@ test('Case F (v2.1 核心校准): 推理模型 (Gemini 3.8 Flash High) viewable_
   });
 
   assert.equal(m.tokens.totalTokens, 15504736);
-  assert.equal(m.tokens.cacheHitRateFormatted, '97%');
+  assert.equal(m.tokens.cacheHitRateFormatted, '97.14%');
   assert.equal(m.session.modelDurationFormatted, '22 分 43 秒');
   // 校准后 TPS 必须反映真实物理流式速率 (~82 tok/s)，绝不再出现将 65,352 除以 184s 得出的 355 tok/s
-  assert.equal(m.session.outputTps, 82, '经思维链相位校准后真实 TPS 应为 82 tok/s 而非虚高的 355 tok/s');
-  assert.equal(m.session.outputTpsFormatted, '82 tok/s');
-  assert.ok(m.session.averageTtftSeconds < 600, 'TTFT 已剥离 616.8s 的思维链生成耗时');
+  assert.equal(m.session.outputTps, 65352 / 1363);
+  assert.equal(m.session.outputTpsFormatted, '47.95 tok/s');
+  assert.equal(m.session.averageTtftFormatted, '1178.91 秒');
 });

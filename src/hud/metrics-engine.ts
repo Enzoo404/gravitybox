@@ -24,7 +24,7 @@ process.emitWarning = ((warning: string | Error, ...args: any[]) => {
 
 const { DatabaseSync } = await import('node:sqlite');
 
-const UUID_REGEX_GLOBAL = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
+const UUID_REGEX_GLOBAL = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
 const ACTIVE_STEP_STATUSES = new Set([1, 2, 8, 9]);
 const SUBAGENT_TOOL_NAMES = new Set([
   'invoke_subagent',
@@ -44,6 +44,7 @@ const HUD_STEP_METADATA_PROJECTION: ProtoSelection = {
   7: true,
   8: true,
   9: true,
+  12: true,
   22: true,
   24: { 4: true, 8: true, 12: true, 20: true },
   32: true,
@@ -51,12 +52,15 @@ const HUD_STEP_METADATA_PROJECTION: ProtoSelection = {
 
 const HUD_GEN_METADATA_PROJECTION: ProtoSelection = {
   1: {
+    4: true,
     9: { 10: { 1: true, 3: true, 4: true } },
     11: true,
     12: true,
     19: true,
     21: true,
   },
+  2: true,
+  4: true,
   3: {
     14: true,
     27: { 4: true, 8: true, 12: true, 20: true },
@@ -275,6 +279,28 @@ function extractUuidsFromBlob(buf: Uint8Array | null | undefined, maxBytes = 655
   return [...found];
 }
 
+function parentReferences(buf: Uint8Array): Set<string> {
+  const references = new Set<string>();
+  const cursor = { pos: 0 };
+  while (cursor.pos < buf.length) {
+    const tag = Number(decodeVarint64(buf, cursor));
+    const field = tag >>> 3;
+    const wire = tag & 7;
+    if ((field === 5 || field === 6) && wire === 2) {
+      const length = Number(decodeVarint64(buf, cursor));
+      if (!Number.isSafeInteger(length) || cursor.pos + length > buf.length) break;
+      if (length === 36) {
+        const value = Buffer.from(buf.subarray(cursor.pos, cursor.pos + length)).toString('utf8');
+        if (/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value)) references.add(value.toLowerCase());
+      }
+      cursor.pos += length;
+    } else if (!skipProtobufField(buf, cursor, wire)) {
+      break;
+    }
+  }
+  return references;
+}
+
 /**
  * 解析单行 steps.metadata BLOB (CortexStepMetadata)：
  * - field 1: created_at (Timestamp)
@@ -312,6 +338,7 @@ export function parseStepMetadataBlob(
     cachedReadTokens: 0,
     reasoningTokens: 0,
     candidateTokens: 0,
+    hasUsage: false,
     isSubagentStep: stepType === 127,
   };
 
@@ -362,12 +389,15 @@ export function parseStepMetadataBlob(
           if (ts > 0) field8CompletedTs = ts;
         } else if (fieldNum === 9 && stepType === 15) {
           const usage = parseModelUsageStatsField9(subBuf);
+          result.hasUsage = true;
           result.rawInputTokens = usage.rawInputTokens;
           result.outputTokens = usage.outputTokens;
           result.cacheWriteTokens = usage.cacheWriteTokens;
           result.cachedReadTokens = usage.cachedReadTokens;
           result.reasoningTokens = usage.reasoningTokens;
           result.candidateTokens = usage.candidateTokens;
+        } else if (fieldNum === 12) {
+          result.executionId = Buffer.from(subBuf).toString('hex');
         } else if (fieldNum === 22 && stepType === 15) {
           const ts = parseProtobufTimestamp(subBuf);
           if (ts > 0) field22LastChunkTs = ts;
@@ -473,7 +503,18 @@ export function parseLatestGenMetadataBlob(
       const subBuf = buf.subarray(cursor.pos, cursor.pos + len);
       cursor.pos += len;
 
-      if (fieldNum === 1) {
+      if (fieldNum === 2) {
+        const packed = { pos: 0 };
+        out.stepIndices ??= [];
+        while (packed.pos < subBuf.length && out.stepIndices.length < 10000) {
+          const value = Number(decodeVarint64(subBuf, packed));
+          if (Number.isSafeInteger(value) && value >= 0 && value <= 0xffffffff) {
+            out.stepIndices.push(value);
+          }
+        }
+      } else if (fieldNum === 4) {
+        out.executionId = Buffer.from(subBuf).toString('hex');
+      } else if (fieldNum === 1) {
         // ChatModelMetadata
         const c1 = { pos: 0 };
         while (c1.pos < subBuf.length) {
@@ -485,22 +526,24 @@ export function parseLatestGenMetadataBlob(
             const l1 = Number(decodeVarint64(subBuf, c1));
             if (!Number.isSafeInteger(l1) || l1 < 0 || c1.pos + l1 > subBuf.length) break;
             const fieldSlice = subBuf.subarray(c1.pos, c1.pos + l1);
-            if ((fn1 === 19 || fn1 === 21) && l1 > 0 && l1 < 256) {
+            if (fn1 === 4) {
+              out.usage = parseModelUsageStatsField9(fieldSlice);
+            } else if ((fn1 === 19 || fn1 === 21) && l1 > 0 && l1 < 256) {
               const str = decoder.decode(fieldSlice).trim();
               if (str) {
                 if (fn1 === 19) out.responseModel = str;
                 else if (fn1 === 21) out.modelDisplayName = str;
               }
-            } else if (fn1 === 11 && l1 > 0 && l1 <= 32) {
+            } else if (fn1 === 11 && l1 <= 32) {
               // field 11: time_to_first_token (google.protobuf.Duration)
               const ttftSec = parseProtobufTimestamp(fieldSlice);
-              if (ttftSec > 0 && Number.isFinite(ttftSec)) {
+              if (ttftSec >= 0 && Number.isFinite(ttftSec)) {
                 out.timeToFirstTokenSeconds = ttftSec;
               }
-            } else if (fn1 === 12 && l1 > 0 && l1 <= 32) {
+            } else if (fn1 === 12 && l1 <= 32) {
               // field 12: streaming_duration (google.protobuf.Duration)
               const streamSec = parseProtobufTimestamp(fieldSlice);
-              if (streamSec > 0 && Number.isFinite(streamSec)) {
+              if (streamSec >= 0 && Number.isFinite(streamSec)) {
                 out.streamingDurationSeconds = streamSec;
               }
             } else if (fn1 === 9) {
@@ -621,6 +664,11 @@ export function parseLatestGenMetadataBlob(
           }
         }
       }
+    } else if (fieldNum === 2 && wireType === 0) {
+      const value = Number(decodeVarint64(buf, cursor));
+      if (Number.isSafeInteger(value) && value >= 0 && value <= 0xffffffff) {
+        (out.stepIndices ??= []).push(value);
+      }
     } else {
       if (!skipProtobufField(buf, cursor, wireType)) break;
     }
@@ -675,20 +723,19 @@ export function computeCascadeContextBreakdown(
 }
 
 /**
- * TPS 时间窗口保护 (minWindow = 0.1s) 与物理上限拦截 (maxTpsCap = 500 tok/s)
+ * 有效输出速度：只对匹配的 Token 与完整正耗时计算，保留未舍入结果。
  */
 export function computeTps(
   activeSec: number,
   totalOutputTokens: number,
-  minWindow: number = 0.1,
-  maxTpsCap: number = 500
+  minWindow: number = 0
 ): {
   status: 'pending_or_fallback' | 'calculated';
   rawTps: number | null;
   outputTps: number;
   formatted: string;
 } {
-  if (!Number.isFinite(activeSec) || activeSec < minWindow || totalOutputTokens <= 0) {
+  if (!Number.isFinite(activeSec) || activeSec <= 0 || activeSec < minWindow || !Number.isFinite(totalOutputTokens) || totalOutputTokens < 0) {
     return {
       status: 'pending_or_fallback',
       rawTps: null,
@@ -697,12 +744,11 @@ export function computeTps(
     };
   }
   const rawTps = totalOutputTokens / activeSec;
-  const clampedTps = Math.min(maxTpsCap, Math.max(0, Math.round(rawTps)));
   return {
     status: 'calculated',
     rawTps,
-    outputTps: clampedTps,
-    formatted: `${clampedTps} tok/s`,
+    outputTps: rawTps,
+    formatted: `${rawTps.toFixed(2)} tok/s`,
   };
 }
 
@@ -765,6 +811,7 @@ export interface ComputeHudMetricsInput {
   modelId?: string;
   modelCapacity?: number;
   genMetadata?: ParsedGenMetadata;
+  contextSteps?: ComputeHudMetricsInput['steps'];
   steps: Array<{
     idx?: number;
     step_type?: number;
@@ -788,48 +835,34 @@ export interface ComputeHudMetricsInput {
     modelName?: string;
     toolCallName?: string;
     isSubagentStep?: boolean;
+    hasUsage?: boolean;
+    generation?: ParsedGenMetadata;
   }>;
 }
 
 const NON_TOOL_STEP_TYPES = new Set([0, 1, 2, 14, 15, 23, 81, 98, 99, 101, 102, 104]);
 
-interface StepTimingRecord {
-  dtTotal: number;
-  dtPre: number;
-  dtPost: number;
-  hasViewableTs: boolean;
-  stepOut: number;
-  stepReasoning: number;
-  stepCandidate: number;
-  isViewableAfterThinking: boolean;
+function validSeconds(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
 }
 
-/**
- * 从步骤列表与 gen_metadata 聚合 100% 真实的 ConversationHudMetrics 快照
- * 1. 修正 CortexStepMetadata.field 6 (viewable_at) 在推理模型下处于思维链结束后的物理特性，彻底消除 355 tok/s 与 8.0s TTFT 失真
- * 2. 支持检测与聚合子智能体运行状态与子会话步骤
- */
+function safeTokens(value: number | undefined): number {
+  return Number.isSafeInteger(value) && value! >= 0 ? value! : 0;
+}
 export function buildConversationHudMetrics(input: ComputeHudMetricsInput): ConversationHudMetrics {
-  const conversationId = input.conversationId || 'default';
-  const sessionRevision = input.sessionRevision ?? 1;
   const steps = input.steps || [];
-  const allowActiveStepInference = input.allowDbActiveStepInference !== false;
-
-  let turns101 = 0;
-  let turns14 = 0;
-  const totalSteps =
-    typeof input.totalStepsOverride === 'number' && input.totalStepsOverride >= 0
-      ? input.totalStepsOverride
-      : steps.length + Math.max(0, input.subagentSteps ?? 0);
+  const contextSteps = input.contextSteps ?? steps;
   let modelSteps = 0;
   let toolSteps = 0;
-  let compactionCount = 0;
-  let detectedSubagentSteps = 0;
-  let detectedRunningSubagents = 0;
-
   let modelDurationSeconds = 0;
   let toolDurationSeconds = 0;
-
+  let timedOutputTokens = 0;
+  let timedOutputSeconds = 0;
+  let timedOutputCount = 0;
+  let validTtftSum = 0;
+  let validTtftCount = 0;
+  let detectedSubagents = 0;
+  let detectedRunningSubagents = 0;
   let uncachedInputTokens = 0;
   let cachedReadTokens = 0;
   let cacheWriteTokens = 0;
@@ -837,295 +870,127 @@ export function buildConversationHudMetrics(input: ComputeHudMetricsInput): Conv
   let reasoningTokens = 0;
   let candidateTokens = 0;
 
-  let lastStep15PromptTokens = 0;
-  let lastStep15CachedTokens = 0;
-  let lastStep15UncachedTokens = 0;
-  let lastStep15OutputTokens = 0;
-  let peakContextTokens = 0;
-  let stepModelMaxTokens: number | undefined;
-  let stepModelName: string | undefined;
-
-  const modelStepTimings: StepTimingRecord[] = [];
-  let sustainedCandidateTokensSum = 0;
-  let sustainedCandidateSecondsSum = 0;
-  let postViewableCandidateTokensSum = 0;
-  let postViewableCandidateSecondsSum = 0;
-
-  for (const s of steps) {
-    const stepType = s.step_type ?? s.stepType ?? 0;
-    const status = s.status ?? 3;
-    const tStart = s.t_start ?? s.startTimeSeconds ?? null;
-    const tFirst = s.t_first_token ?? s.firstTokenSeconds ?? null;
-    const tEnd = s.t_end ?? s.endTimeSeconds ?? null;
-
-    const isSubagentInvocation =
-      Boolean(s.isSubagentStep) ||
-      stepType === 127 ||
-      (typeof s.toolCallName === 'string' && SUBAGENT_TOOL_NAMES.has(s.toolCallName));
-
-    if (isSubagentInvocation) {
-      detectedSubagentSteps++;
-      if (allowActiveStepInference && ACTIVE_STEP_STATUSES.has(status)) {
+  for (const step of steps) {
+    const stepType = step.step_type ?? step.stepType ?? 0;
+    const start = step.t_start ?? step.startTimeSeconds;
+    const first = step.t_first_token ?? step.firstTokenSeconds;
+    const end = step.t_end ?? step.endTimeSeconds;
+    const complete = (step.status ?? 3) === 3;
+    const hasInterval = validSeconds(start) && validSeconds(end) && end > start;
+    const subagent = Boolean(step.isSubagentStep) || stepType === 127 ||
+      Boolean(step.toolCallName && SUBAGENT_TOOL_NAMES.has(step.toolCallName));
+    if (subagent) {
+      detectedSubagents++;
+      if (input.allowDbActiveStepInference !== false && ACTIVE_STEP_STATUSES.has(step.status ?? 3)) {
         detectedRunningSubagents++;
       }
     }
-
-    if (stepType === 101) {
-      turns101++;
-    } else if (stepType === 14) {
-      turns14++;
-    } else if (stepType === 23) {
-      compactionCount++;
-    } else if (stepType === 15) {
+    if (stepType === 15) {
       modelSteps++;
-      const dtTotal = tStart != null && tEnd != null ? Math.max(0, tEnd - tStart) : 0;
-      modelDurationSeconds += dtTotal;
+      const rawInput = safeTokens(step.rawInput ?? step.rawInputTokens);
+      const cached = safeTokens(step.cachedTokens ?? step.cachedReadTokens);
+      const written = safeTokens(step.cacheWriteTokens);
+      const output = safeTokens(step.outputTokens);
+      uncachedInputTokens += rawInput;
+      cachedReadTokens += cached;
+      cacheWriteTokens += written;
+      outputTokens += output;
+      reasoningTokens += safeTokens(step.reasoningTokens);
+      candidateTokens += safeTokens(step.candidateTokens);
 
-      const stepRawIn = Math.max(0, s.rawInput ?? s.rawInputTokens ?? 0);
-      const stepCachedRead = Math.max(0, s.cachedTokens ?? s.cachedReadTokens ?? 0);
-      const stepCacheWrite = Math.max(0, s.cacheWriteTokens ?? 0);
-      const stepOut = Math.max(0, s.outputTokens ?? 0);
-      const stepReasoning = Math.max(0, s.reasoningTokens ?? 0);
-      const stepCandidate = Math.max(0, s.candidateTokens ?? 0);
-
-      uncachedInputTokens += stepRawIn;
-      cachedReadTokens += stepCachedRead;
-      cacheWriteTokens += stepCacheWrite;
-      outputTokens += stepOut;
-      reasoningTokens += stepReasoning;
-      candidateTokens += stepCandidate;
-
-      const hasViewableTs = tStart != null && tFirst != null && tFirst >= tStart;
-      const dtPre = hasViewableTs ? Math.max(0, tFirst! - tStart!) : 0;
-      const dtPost =
-        hasViewableTs && tEnd != null
-          ? Math.max(0, tEnd - tFirst!)
-          : dtTotal;
-
-      /**
-       * 判定 CortexStepMetadata.field 6 (viewable_at) 是否记录在思维链生成结束之后：
-       * 在 Antigravity 真实会话中，推理模型（stepReasoning > 0）的 viewable_at 是可见回复/工具块开始展示的时刻，
-       * 即 [tStart, viewable_at] 包含了 TTFT + 全部思维链 (stepReasoning) 生成时间，而 [viewable_at, tEnd] 仅包含可见回复 (stepCandidate) 生成时间。
-       */
-      const isViewableAfterThinking =
-        hasViewableTs &&
-        stepReasoning > 0 &&
-        dtTotal > 0 &&
-        (stepCandidate === 0 ||
-          dtPost < 0.1 ||
-          (stepOut > 0 && dtPost / dtTotal < (stepCandidate / stepOut) * 0.95) ||
-          (dtPre > dtPost && dtPost > 0 && stepOut / dtPost > 1.8 * (stepOut / dtTotal)));
-
-      if (isViewableAfterThinking && stepCandidate > 0 && dtPost >= 0.1) {
-        postViewableCandidateTokensSum += stepCandidate;
-        postViewableCandidateSecondsSum += dtPost;
-        if (dtPost >= 0.5 && stepCandidate >= 80) {
-          sustainedCandidateTokensSum += stepCandidate;
-          sustainedCandidateSecondsSum += dtPost;
+      const gen = step.generation;
+      const rawTtft = gen?.timeToFirstTokenSeconds;
+      const rawStreaming = gen?.streamingDurationSeconds;
+      const duration = validSeconds(rawTtft) && validSeconds(rawStreaming) && rawTtft + rawStreaming > 0
+        ? rawTtft + rawStreaming
+        : hasInterval ? end! - start! : null;
+      if (complete && duration !== null) {
+        modelDurationSeconds += duration;
+        if (step.hasUsage !== false && Number.isSafeInteger(step.outputTokens) && step.outputTokens! >= 0) {
+          timedOutputTokens += output;
+          timedOutputSeconds += duration;
+          timedOutputCount++;
         }
       }
-
-      modelStepTimings.push({
-        dtTotal,
-        dtPre,
-        dtPost,
-        hasViewableTs,
-        stepOut,
-        stepReasoning,
-        stepCandidate,
-        isViewableAfterThinking,
-      });
-
-      const stepPromptTotal = stepRawIn + stepCachedRead + stepCacheWrite;
-      if (stepPromptTotal > 0) {
-        lastStep15PromptTokens = stepPromptTotal;
-        lastStep15CachedTokens = stepCachedRead;
-        lastStep15UncachedTokens = stepRawIn + stepCacheWrite;
-        lastStep15OutputTokens = stepOut;
-        if (stepPromptTotal > peakContextTokens) {
-          peakContextTokens = stepPromptTotal;
-        }
-      }
-      if (s.modelMaxTokens && s.modelMaxTokens > 0) {
-        stepModelMaxTokens = s.modelMaxTokens;
-      }
-      if (s.modelName) {
-        stepModelName = s.modelName;
+      const ttft = validSeconds(rawTtft)
+        ? rawTtft
+        : hasInterval && validSeconds(first) && first >= start! && first <= end!
+        ? first - start! : null;
+      if (complete && ttft !== null) {
+        validTtftSum += ttft;
+        validTtftCount++;
       }
     } else if (!NON_TOOL_STEP_TYPES.has(stepType)) {
       toolSteps++;
-      if (tStart != null && tEnd != null) {
-        toolDurationSeconds += Math.max(0, tEnd - tStart);
+      if (hasInterval && !ACTIVE_STEP_STATUSES.has(step.status ?? 3)) {
+        toolDurationSeconds += end! - start!;
       }
     }
   }
 
-  // 计算经思维链相位校准后的真实 TTFT 与真实流式生成时长 (activeGenerationSeconds)
-  // 优先采用持续流式生成段 (dtPost >= 0.5s, candidate >= 80 tok) 的稳态速率，避免短小工具调用块单帧冲刷拉高观测速率
-  const observedCandidateRate =
-    sustainedCandidateSecondsSum >= 0.5 && sustainedCandidateTokensSum > 0
-      ? Math.min(180, Math.max(20, sustainedCandidateTokensSum / sustainedCandidateSecondsSum))
-      : postViewableCandidateSecondsSum >= 0.1 && postViewableCandidateTokensSum > 0
-      ? Math.min(180, Math.max(20, postViewableCandidateTokensSum / postViewableCandidateSecondsSum))
-      : null;
-
-  let validTtftSum = 0;
-  let validTtftCount = 0;
-  let activeGenerationSeconds = 0;
-
-  for (const rec of modelStepTimings) {
-    if (!rec.hasViewableTs) {
-      activeGenerationSeconds += rec.dtTotal;
-      continue;
-    }
-
-    if (!rec.isViewableAfterThinking) {
-      validTtftSum += rec.dtPre;
-      validTtftCount++;
-      activeGenerationSeconds += rec.dtPost;
-    } else {
-      let dtThinking = 0;
-      if (observedCandidateRate !== null && rec.stepReasoning > 0) {
-        dtThinking = Math.min(rec.dtPre * 0.88, rec.stepReasoning / observedCandidateRate);
-      } else if (rec.stepOut > 0 && rec.dtTotal > 0) {
-        const thinkingShare = rec.stepReasoning / rec.stepOut;
-        dtThinking = rec.dtPre * thinkingShare * 0.82;
-      }
-      const stepTrueTtft = Math.max(0.05, rec.dtPre - dtThinking);
-      validTtftSum += stepTrueTtft;
-      validTtftCount++;
-      activeGenerationSeconds += dtThinking + rec.dtPost;
+  let latestStep: ComputeHudMetricsInput['steps'][number] | undefined;
+  let peakContextTokens = 0;
+  let turns = 0;
+  let compactionCount = 0;
+  for (const step of contextSteps) {
+    const stepType = step.step_type ?? step.stepType ?? 0;
+    if (stepType === 14) turns++;
+    if (stepType === 23 && (step.status ?? 3) === 3) compactionCount++;
+    if (stepType !== 15 || step.hasUsage === false) continue;
+    const prompt = safeTokens(step.rawInput ?? step.rawInputTokens) +
+      safeTokens(step.cachedTokens ?? step.cachedReadTokens) + safeTokens(step.cacheWriteTokens);
+    if (step.hasUsage === true || prompt > 0) {
+      latestStep = step;
+      peakContextTokens = Math.max(peakContextTokens, prompt);
     }
   }
-
-  const genMeta = input.genMetadata;
-  if (validTtftCount === 0 && genMeta?.timeToFirstTokenSeconds && genMeta.timeToFirstTokenSeconds > 0) {
-    validTtftSum = genMeta.timeToFirstTokenSeconds;
-    validTtftCount = 1;
-  }
-  if (
-    activeGenerationSeconds <= 0 &&
-    genMeta?.streamingDurationSeconds &&
-    genMeta.streamingDurationSeconds > 0
-  ) {
-    activeGenerationSeconds = genMeta.streamingDurationSeconds;
-  }
-
-  const turns = turns14 > 0 ? turns14 : turns101;
-
+  const genMeta = latestStep?.generation ?? input.genMetadata;
+  const historicalModel = genMeta?.modelDisplayName || genMeta?.responseModel ||
+    genMeta?.plannerModelName || latestStep?.modelName;
+  const modelSpec = resolveModelCapacity(historicalModel || input.modelId);
+  const explicitCapacity = [
+    input.modelCapacity, genMeta?.maxContextTokens, latestStep?.modelMaxTokens,
+  ].find(value => typeof value === 'number' && Number.isSafeInteger(value) && value > 0);
+  const capacityTokens = explicitCapacity ?? modelSpec.capacityTokens;
+  const capacityTokensCompact = explicitCapacity
+    ? formatCompactTokenNumber(explicitCapacity)
+    : `~${formatCompactTokenNumber(capacityTokens)}`;
+  const stepCached = safeTokens(latestStep?.cachedTokens ?? latestStep?.cachedReadTokens);
+  const stepUncached = safeTokens(latestStep?.rawInput ?? latestStep?.rawInputTokens) +
+    safeTokens(latestStep?.cacheWriteTokens);
+  const usedTokens = stepCached + stepUncached;
+  const usedRatio = capacityTokens > 0 ? usedTokens / capacityTokens : 0;
+  const stepCacheRatio = usedTokens > 0 ? stepCached / usedTokens : 0;
+  const denominator = Math.max(capacityTokens, usedTokens, 1);
+  const cachedBarRatio = stepCached / denominator * 100;
+  const uncachedBarRatio = stepUncached / denominator * 100;
+  const latestOutput = safeTokens(latestStep?.outputTokens);
   const runningSubagentCount = Math.max(
-    input.runningSubagentCount ?? 0,
-    detectedRunningSubagents,
-    input.isSubagentRunning ? 1 : 0
+    input.runningSubagentCount ?? 0, detectedRunningSubagents, input.isSubagentRunning ? 1 : 0
   );
   const isSubagentRunning = Boolean(input.isSubagentRunning || runningSubagentCount > 0);
   const isStreaming = Boolean(input.isStreaming || isSubagentRunning);
-  const subagentCount =
-    typeof input.subagentCount === 'number'
-      ? Math.max(input.subagentCount, runningSubagentCount)
-      : Math.max(detectedSubagentSteps, runningSubagentCount);
-
-  const effectiveModelInput =
-    input.modelId && input.modelId !== 'default'
-      ? input.modelId
-      : genMeta?.modelDisplayName ||
-        genMeta?.responseModel ||
-        genMeta?.plannerModelName ||
-        stepModelName ||
-        input.modelId;
-  const modelSpec = resolveModelCapacity(effectiveModelInput);
-  const dbModelRaw =
-    genMeta?.responseModel || genMeta?.modelDisplayName || genMeta?.plannerModelName || stepModelName;
-  const dbModelSpec = dbModelRaw ? resolveModelCapacity(dbModelRaw) : null;
-  const dbDisplaySpec = genMeta?.modelDisplayName
-    ? resolveModelCapacity(genMeta.modelDisplayName)
-    : null;
-  const isSameAsDbModel =
-    !input.modelId ||
-    input.modelId === 'default' ||
-    !dbModelSpec ||
-    dbModelSpec.modelId === modelSpec.modelId ||
-    dbModelSpec.displayName === modelSpec.displayName ||
-    dbDisplaySpec?.modelId === modelSpec.modelId;
-
-  const explicitDbCapacity =
-    (typeof input.modelCapacity === 'number' && input.modelCapacity > 0
-      ? input.modelCapacity
-      : undefined) ??
-    (isSameAsDbModel && genMeta?.maxContextTokens && genMeta.maxContextTokens > 0
-      ? genMeta.maxContextTokens
-      : undefined) ??
-    (isSameAsDbModel ? stepModelMaxTokens : undefined);
-
-  const usedTokens =
-    genMeta?.estimatedTokensUsed && genMeta.estimatedTokensUsed > lastStep15PromptTokens
-      ? genMeta.estimatedTokensUsed
-      : lastStep15PromptTokens;
-  if (usedTokens > peakContextTokens) {
-    peakContextTokens = usedTokens;
-  }
-
-  let capacityTokens = explicitDbCapacity ?? modelSpec.capacityTokens;
-  if (!explicitDbCapacity && capacityTokens === 200_000 && peakContextTokens > 200_000) {
-    capacityTokens = peakContextTokens <= 262_144 ? 262_144 : peakContextTokens;
-  }
-
-  const capacityTokensCompact = explicitDbCapacity
-    ? formatCompactTokenNumber(explicitDbCapacity, false)
-    : capacityTokens === 262_144
-    ? '256K'
-    : capacityTokens > modelSpec.capacityTokens
-    ? formatCompactTokenNumber(capacityTokens, false)
-    : modelSpec.capacityCompact;
-
+  const tpsInfo = computeTps(timedOutputSeconds, timedOutputTokens);
+  const outputTpsFormatted = timedOutputCount > 0 ? tpsInfo.formatted : isStreaming ? '计算中...' : '—';
   const averageTtftSeconds = validTtftCount > 0 ? validTtftSum / validTtftCount : 0;
-  const averageTtftFormatted = validTtftCount > 0 ? `${averageTtftSeconds.toFixed(1)} 秒` : '—';
-  const averageTtftFormattedEn = validTtftCount > 0 ? `${averageTtftSeconds.toFixed(1)}s` : '—';
-
-  const tpsInfo = computeTps(activeGenerationSeconds, outputTokens, 0.1, 500);
-  const outputTpsFormatted =
-    tpsInfo.status === 'calculated'
-      ? tpsInfo.formatted
-      : isStreaming
-      ? '计算中...'
-      : '—';
-
-  const totalTokens = uncachedInputTokens + cachedReadTokens + outputTokens + cacheWriteTokens;
-  const totalTokensCompact = `${formatCompactTokenNumber(totalTokens, false)} tok`;
-  const totalTokensFormatted = formatThousandsTokens(totalTokens);
-
-  const hitDenom = uncachedInputTokens + cachedReadTokens + cacheWriteTokens;
-  const cacheHitRate = hitDenom > 0 ? cachedReadTokens / hitDenom : 0;
-  const cacheHitRateFormatted = `${Math.round(cacheHitRate * 100)}%`;
-
-  const rawUsedRatio = capacityTokens > 0 ? usedTokens / capacityTokens : 0;
-  const usedRatio = Math.min(1.0, Math.max(0, rawUsedRatio));
-  const usedRatioFormatted = `${Math.round(usedRatio * 100)}%`;
-
-  const stepCached = lastStep15CachedTokens;
-  const stepUncached =
-    usedTokens >= stepCached ? usedTokens - stepCached : lastStep15UncachedTokens;
-  const stepCacheRatio = usedTokens > 0 ? stepCached / usedTokens : 0;
-  const stepCacheRatioFormatted = `${Math.round(stepCacheRatio * 100)}%`;
-
-  const denomForBar = Math.max(capacityTokens, usedTokens, 1);
-  const cachedBarRatio = (stepCached / denomForBar) * 100;
-  const uncachedBarRatio = (stepUncached / denomForBar) * 100;
+  const totalTokens = uncachedInputTokens + cachedReadTokens + cacheWriteTokens + outputTokens;
+  const inputTokens = uncachedInputTokens + cachedReadTokens + cacheWriteTokens;
+  const cacheHitRate = inputTokens > 0 ? cachedReadTokens / inputTokens : 0;
 
   return {
-    conversationId,
-    sessionRevision,
+    conversationId: input.conversationId || 'default',
+    sessionRevision: input.sessionRevision ?? 1,
     updatedAt: Date.now(),
     isStreaming,
     isSubagentRunning,
     runningSubagentCount,
     session: {
       turns,
-      steps: totalSteps,
+      steps: input.totalStepsOverride ?? steps.length + Math.max(0, input.subagentSteps ?? 0),
       modelSteps,
       toolSteps,
       compactionCount,
-      subagentCount,
+      subagentCount: Math.max(input.subagentCount ?? detectedSubagents, runningSubagentCount),
       runningSubagentCount,
       subagentSteps: input.subagentSteps ?? 0,
       modelDurationSeconds,
@@ -1135,61 +1000,45 @@ export function buildConversationHudMetrics(input: ComputeHudMetricsInput): Conv
       toolDurationFormatted: formatDurationSeconds(toolDurationSeconds, 'zh'),
       toolDurationFormattedEn: formatDurationSeconds(toolDurationSeconds, 'en'),
       averageTtftSeconds,
-      averageTtftFormatted,
-      averageTtftFormattedEn,
+      averageTtftFormatted: validTtftCount > 0 ? `${averageTtftSeconds.toFixed(2)} 秒` : '—',
+      averageTtftFormattedEn: validTtftCount > 0 ? `${averageTtftSeconds.toFixed(2)}s` : '—',
       outputTps: tpsInfo.outputTps,
       outputTpsFormatted,
     },
     tokens: {
       totalTokens,
-      totalTokensCompact,
-      totalTokensFormatted,
+      totalTokensCompact: `${formatCompactTokenNumber(totalTokens)} tok`,
+      totalTokensFormatted: formatThousandsTokens(totalTokens),
       cacheHitRate,
-      cacheHitRateFormatted,
+      cacheHitRateFormatted: `${(cacheHitRate * 100).toFixed(2)}%`,
       uncachedInputTokens,
       uncachedInputFormatted: formatThousandsTokens(uncachedInputTokens),
       cachedReadTokens,
       cachedReadFormatted: formatThousandsTokens(cachedReadTokens),
-      ...(cacheWriteTokens > 0
-        ? {
-            cacheWriteTokens,
-            cacheWriteFormatted: formatThousandsTokens(cacheWriteTokens),
-          }
-        : {}),
+      ...(cacheWriteTokens > 0 ? { cacheWriteTokens, cacheWriteFormatted: formatThousandsTokens(cacheWriteTokens) } : {}),
       outputTokens,
       outputFormatted: formatThousandsTokens(outputTokens),
-      ...(reasoningTokens > 0
-        ? {
-            reasoningTokens,
-            reasoningFormatted: formatThousandsTokens(reasoningTokens),
-          }
-        : {}),
-      ...(candidateTokens > 0
-        ? {
-            candidateTokens,
-            candidateFormatted: formatThousandsTokens(candidateTokens),
-          }
-        : {}),
+      ...(reasoningTokens > 0 ? { reasoningTokens, reasoningFormatted: formatThousandsTokens(reasoningTokens) } : {}),
+      ...(candidateTokens > 0 ? { candidateTokens, candidateFormatted: formatThousandsTokens(candidateTokens) } : {}),
     },
     context: {
+      hasUsageData: Boolean(latestStep),
       modelId: modelSpec.modelId,
-      modelDisplayName:
-        (isSameAsDbModel && genMeta?.modelDisplayName) ? genMeta.modelDisplayName : modelSpec.displayName,
+      modelDisplayName: genMeta?.modelDisplayName || modelSpec.displayName,
       usedTokens,
-      usedTokensCompact: usedTokens > 0 ? formatCompactTokenNumber(usedTokens, false) : '0',
+      usedTokensCompact: formatCompactTokenNumber(usedTokens),
       usedTokensFormatted: formatThousandsTokens(usedTokens),
       peakContextTokens,
-      peakContextCompact:
-        peakContextTokens > 0 ? formatCompactTokenNumber(peakContextTokens, false) : '0',
+      peakContextCompact: formatCompactTokenNumber(peakContextTokens),
       peakContextFormatted: formatThousandsTokens(peakContextTokens),
       capacityTokens,
       capacityTokensCompact,
-      hasExplicitDbCapacity: Boolean(explicitDbCapacity),
-      isFallbackCapacity: modelSpec.isFallback,
+      hasExplicitDbCapacity: explicitCapacity !== undefined,
+      isFallbackCapacity: explicitCapacity === undefined,
       usedRatio,
-      usedRatioFormatted,
+      usedRatioFormatted: `${(usedRatio * 100).toFixed(2)}%`,
       stepCacheRatio,
-      stepCacheRatioFormatted,
+      stepCacheRatioFormatted: `${(stepCacheRatio * 100).toFixed(2)}%`,
       breakdown: {
         cachedContextTokens: stepCached,
         cachedContextFormatted: formatThousandsTokens(stepCached),
@@ -1197,16 +1046,16 @@ export function buildConversationHudMetrics(input: ComputeHudMetricsInput): Conv
         uncachedContextTokens: stepUncached,
         uncachedContextFormatted: formatThousandsTokens(stepUncached),
         uncachedContextRatio: uncachedBarRatio,
-        latestOutputTokens: lastStep15OutputTokens,
-        latestOutputFormatted: formatThousandsTokens(lastStep15OutputTokens),
+        latestOutputTokens: latestOutput,
+        latestOutputFormatted: formatThousandsTokens(latestOutput),
         systemTokens: stepCached,
         systemTokensCompact: formatThousandsTokens(stepCached),
         systemRatio: cachedBarRatio,
         toolTokens: stepUncached,
         toolTokensCompact: formatThousandsTokens(stepUncached),
         toolRatio: uncachedBarRatio,
-        messageTokens: lastStep15OutputTokens,
-        messageTokensCompact: formatThousandsTokens(lastStep15OutputTokens),
+        messageTokens: latestOutput,
+        messageTokensCompact: formatThousandsTokens(latestOutput),
         messageRatio: 0,
       },
     },
@@ -1214,6 +1063,7 @@ export function buildConversationHudMetrics(input: ComputeHudMetricsInput): Conv
 }
 
 interface CachedConversationState {
+  fileId: string;
   mtimeMs: number;
   size: number;
   walMtimeMs: number;
@@ -1230,6 +1080,7 @@ interface CachedConversationState {
   steps: ParsedConversationStep[];
   childConversationIds: Set<string>;
   genMetadata?: ParsedGenMetadata;
+  generations: Map<number, ParsedGenMetadata>;
   lastMetrics?: ConversationHudMetrics;
 }
 
@@ -1240,6 +1091,7 @@ interface CachedConversationState {
 export class ConversationMetricsEngine {
   private readonly conversationsDir: string;
   private readonly cache = new Map<string, CachedConversationState>();
+  private readonly pendingReads = new Map<string, Promise<CachedConversationState | null>>();
 
   constructor(options?: { geminiDir?: string; conversationsDir?: string }) {
     const baseGemini = options?.geminiDir ?? join(homedir(), '.gemini');
@@ -1317,14 +1169,29 @@ export class ConversationMetricsEngine {
     dbPath: string,
     selfConversationId: string
   ): Promise<CachedConversationState | null> {
+    const pending = this.pendingReads.get(dbPath);
+    if (pending) return pending;
+    const operation = this.loadSingleDbState(dbPath, selfConversationId);
+    this.pendingReads.set(dbPath, operation);
+    try {
+      return await operation;
+    } finally {
+      if (this.pendingReads.get(dbPath) === operation) this.pendingReads.delete(dbPath);
+    }
+  }
+
+  private async loadSingleDbState(
+    dbPath: string,
+    selfConversationId: string
+  ): Promise<CachedConversationState | null> {
     if (!existsSync(dbPath)) return null;
 
-    let dbStat: { mtimeMs: number; size: number } | null = null;
+    let dbStat: { mtimeMs: number; size: number; fileId: string } | null = null;
     let walStat: { mtimeMs: number; size: number } | null = null;
     try {
       const st = await lstat(dbPath);
       if (!st.isFile() || st.isSymbolicLink()) return null;
-      dbStat = { mtimeMs: st.mtimeMs, size: st.size };
+      dbStat = { mtimeMs: st.mtimeMs, size: st.size, fileId: `${st.dev}:${st.ino}` };
       try {
         const wst = await lstat(`${dbPath}-wal`);
         walStat = { mtimeMs: wst.mtimeMs, size: wst.size };
@@ -1335,12 +1202,14 @@ export class ConversationMetricsEngine {
       return null;
     }
 
-    const existing = this.cache.get(dbPath);
+    const cached = this.cache.get(dbPath);
+    const existing = cached?.fileId === dbStat.fileId ? cached : undefined;
     const walMtimeMs = walStat?.mtimeMs ?? 0;
     const walSize = walStat?.size ?? 0;
 
     if (
       existing &&
+      existing.fileId === dbStat.fileId &&
       existing.mtimeMs === dbStat.mtimeMs &&
       existing.size === dbStat.size &&
       existing.walMtimeMs === walMtimeMs &&
@@ -1381,8 +1250,10 @@ export class ConversationMetricsEngine {
         }
       }
 
-      if (hasTrajectoryMeta === undefined) {
+      {
         try {
+          referencedUuidsInMetaBlob.clear();
+          hasParentMetadataBlob = false;
           const tables = db
             .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('trajectory_meta', 'trajectory_metadata_blob')")
             .all() as Array<{ name?: string }>;
@@ -1396,14 +1267,18 @@ export class ConversationMetricsEngine {
               trajectoryId = String(tm.trajectory_id).toLowerCase();
             }
           }
-          if (tableSet.has('trajectory_metadata_blob') && referencedUuidsInMetaBlob.size === 0) {
+          if (tableSet.has('trajectory_metadata_blob')) {
             const tmbRows = db
-              .prepare('SELECT substr(data, 1, 65536) AS slice FROM trajectory_metadata_blob WHERE data IS NOT NULL LIMIT 4')
-              .all() as Array<{ slice?: Uint8Array | null }>;
+              .prepare('SELECT id, length(data) AS size FROM trajectory_metadata_blob WHERE data IS NOT NULL LIMIT 4')
+              .all() as Array<{ id: string; size: number }>;
             if (tmbRows.length > 0) {
               hasParentMetadataBlob = true;
               for (const r of tmbRows) {
-                for (const u of extractUuidsFromBlob(r.slice)) {
+                const statement = db.prepare('SELECT substr(data, ?, ?) AS chunk FROM trajectory_metadata_blob WHERE id = ?');
+                const projected = projectProtobuf(r.size,
+                  (offset, length) => (statement.get(offset + 1, length, r.id) as { chunk: Uint8Array }).chunk,
+                  { 5: true, 6: true });
+                for (const u of parentReferences(projected.data)) {
                   referencedUuidsInMetaBlob.add(u);
                 }
               }
@@ -1430,7 +1305,9 @@ export class ConversationMetricsEngine {
       let lastIdx = -1;
       const childConversationIds = new Set<string>(existing?.childConversationIds ?? []);
 
-      if (existing && existing.lastStepIdx <= maxIdx && existing.steps.length <= totalCount) {
+      const canReuse = existing && existing.fileId === dbStat.fileId &&
+        existing.lastStepIdx <= maxIdx && existing.steps.length <= totalCount;
+      if (canReuse) {
         baseSteps = [...existing.steps];
         lastIdx = existing.lastStepIdx;
       }
@@ -1536,26 +1413,54 @@ export class ConversationMetricsEngine {
         }
       }
 
-      let lastGenIdx = existing?.lastGenIdx ?? -1;
-      let genMetadata = existing?.genMetadata;
+      let lastGenIdx = -1;
+      const generations = new Map<number, ParsedGenMetadata>(
+        canReuse ? existing?.generations : []
+      );
       try {
-        const genMaxRow = db
-          .prepare('SELECT COALESCE(MAX(idx), -1) as maxGenIdx FROM gen_metadata WHERE data IS NOT NULL')
-          .get() as { maxGenIdx?: number } | undefined;
-        const maxGenIdx = Number(genMaxRow?.maxGenIdx ?? -1);
-        if (maxGenIdx >= 0 && (maxGenIdx >= lastGenIdx)) {
-          const parsedGen = this.readGenMetadataSafe(db, maxGenIdx);
-          if (parsedGen) {
-            genMetadata = parsedGen;
-            lastGenIdx = maxGenIdx;
-          }
+        const maxRow = db.prepare('SELECT MAX(idx) AS maxIdx FROM gen_metadata').get() as { maxIdx?: number };
+        lastGenIdx = Number(maxRow?.maxIdx ?? -1);
+        const sameGenerationSeries = canReuse && lastGenIdx >= (existing?.lastGenIdx ?? -1);
+        if (!sameGenerationSeries) generations.clear();
+        const genRows = db.prepare(
+          'SELECT idx FROM gen_metadata WHERE data IS NOT NULL AND idx >= ? ORDER BY idx'
+        ).all(sameGenerationSeries ? existing?.lastGenIdx ?? -1 : -1) as Array<{ idx: number }>;
+        for (const row of genRows) {
+          const parsed = this.readGenMetadataSafe(db, Number(row.idx));
+          if (parsed) generations.set(Number(row.idx), parsed);
+        }
+        for (const key of generations.keys()) {
+          if (key > lastGenIdx) generations.delete(key);
         }
       } catch {}
+
+      baseSteps = baseSteps.map(step => ({ ...step, generation: undefined }));
+      const stepByIndex = new Map(baseSteps.map(step => [step.idx, step]));
+      for (const generation of generations.values()) {
+        const linked = [...new Set(generation.stepIndices ?? [])]
+          .map(index => stepByIndex.get(index)).filter(step => step?.stepType === 15);
+        if (linked.length !== 1 || !generation.usage || !generation.executionId) continue;
+        const step = linked[0]!;
+        if (!step.hasUsage || step.executionId !== generation.executionId) continue;
+        const usageKeys = ['rawInputTokens', 'outputTokens', 'cachedReadTokens', 'cacheWriteTokens',
+          'reasoningTokens', 'candidateTokens'] as const;
+        if (!usageKeys.every(key => step[key] === generation.usage![key])) continue;
+        step.generation = generation;
+      }
+      const latestModelStep = [...baseSteps].reverse().find(step => step.stepType === 15 && step.hasUsage);
+      const genMetadata = latestModelStep?.generation;
+      childConversationIds.clear();
+      for (const step of baseSteps) {
+        for (const childId of step.childConversationIds ?? []) {
+          if (childId !== selfLower && childId !== selfTrajLower) childConversationIds.add(childId);
+        }
+      }
 
       db.close();
       db = null;
 
       const nextState: CachedConversationState = {
+        fileId: dbStat.fileId,
         mtimeMs: dbStat.mtimeMs,
         size: dbStat.size,
         walMtimeMs,
@@ -1572,6 +1477,7 @@ export class ConversationMetricsEngine {
         steps: baseSteps,
         childConversationIds,
         genMetadata,
+        generations,
       };
       this.setCachedState(dbPath, nextState);
       return nextState;
@@ -1639,62 +1545,43 @@ export class ConversationMetricsEngine {
       }
     }
 
-    if (candidateChildIds.size > 0 && !dbPathOverride) {
-      const childModelAndToolSteps: ParsedConversationStep[] = [];
-      for (const childId of candidateChildIds) {
-        if (childId === mainIdLower || (mainTrajLower && childId === mainTrajLower)) continue;
+    if (!dbPathOverride) {
+      const pendingChildren = [...candidateChildIds].map(childId => ({
+        childId, parentId: mainIdLower, explicit: mainState.childConversationIds.has(childId),
+      }));
+      const descendants: ParsedConversationStep[] = [];
+      const processedEdges = new Set<string>();
+      while (pendingChildren.length > 0) {
+        const edge = pendingChildren.shift()!;
+        const childId = edge.childId.toLowerCase();
+        const edgeKey = `${edge.parentId}::${childId}`;
+        if (processedEdges.has(edgeKey) || verifiedChildIds.has(childId) ||
+            childId === mainIdLower || childId === mainTrajLower) continue;
+        processedEdges.add(edgeKey);
         try {
-          const childDbPath = this.resolveDbPath(childId);
-          const childState = await this.readSingleDbState(childDbPath, childId);
+          const childState = await this.readSingleDbState(this.resolveDbPath(childId), childId);
           if (!childState) continue;
-
-          // 双向归属核验：若子库具备 trajectory_metadata_blob，则必须包含父会话 ID；否则仅允许主会话显式子智能体步骤引用的测试子库
-          const fromExplicitStep = mainState.childConversationIds.has(childId);
-          const verifiedByBlob = childState.referencedUuidsInMetaBlob.has(mainIdLower);
+          const belongsToParent = childState.referencedUuidsInMetaBlob.has(edge.parentId) ||
+            (edge.explicit && childState.referencedUuidsInMetaBlob.has(mainIdLower));
           if (childState.hasParentMetadataBlob) {
-            if (!verifiedByBlob && !fromExplicitStep) continue;
-            if (!verifiedByBlob && fromExplicitStep && childState.referencedUuidsInMetaBlob.size > 0) {
-              continue;
-            }
-          } else if (!fromExplicitStep) {
+            if (!belongsToParent) continue;
+          } else if (!edge.explicit || childState.hasTrajectoryMeta) {
             continue;
           }
-
           verifiedChildIds.add(childId);
-          if (childState.steps.length === 0) continue;
           totalSubagentSteps += childState.steps.length;
-          const childIsRecent =
-            nowMs - Math.max(childState.mtimeMs, childState.walMtimeMs) <= ACTIVE_DB_RECENCY_MS;
-          const childHasRunningStep =
-            childIsRecent && childState.steps.some((s) => ACTIVE_STEP_STATUSES.has(s.status));
-          if (childHasRunningStep) {
+          const recent = nowMs - Math.max(childState.mtimeMs, childState.walMtimeMs) <= ACTIVE_DB_RECENCY_MS;
+          if (recent && childState.steps.some(step => ACTIVE_STEP_STATUSES.has(step.status) &&
+              step.completedAtSeconds == null && step.finishedGeneratingSeconds == null)) {
             activeChildSubagents++;
           }
-          for (const cs of childState.steps) {
-            if (cs.stepType === 14 || cs.stepType === 101 || cs.stepType === 23) continue;
-            childModelAndToolSteps.push(cs);
+          descendants.push(...childState.steps);
+          for (const nested of childState.childConversationIds) {
+            pendingChildren.push({ childId: nested, parentId: childId, explicit: true });
           }
         } catch {}
       }
-
-      if (childModelAndToolSteps.length > 0) {
-        let lastMainStep15Idx = -1;
-        for (let i = mainState.steps.length - 1; i >= 0; i--) {
-          if (mainState.steps[i]?.stepType === 15) {
-            lastMainStep15Idx = i;
-            break;
-          }
-        }
-        if (lastMainStep15Idx !== -1) {
-          combinedSteps = [
-            ...mainState.steps.slice(0, lastMainStep15Idx),
-            ...childModelAndToolSteps,
-            ...mainState.steps.slice(lastMainStep15Idx),
-          ];
-        } else {
-          combinedSteps = [...mainState.steps, ...childModelAndToolSteps];
-        }
-      }
+      combinedSteps = [...mainState.steps, ...descendants];
     }
 
     const effectiveRunningSubagents = Math.max(runningSubagentCount, activeChildSubagents);
@@ -1712,6 +1599,7 @@ export class ConversationMetricsEngine {
       allowDbActiveStepInference: mainIsRecent,
       modelId,
       genMetadata: mainState.genMetadata,
+      contextSteps: mainState.steps,
       steps: combinedSteps,
     });
 

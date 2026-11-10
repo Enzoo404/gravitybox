@@ -103,23 +103,15 @@ test('复验 2: parseLatestGenMetadataBlob 真实解析 gen_metadata 模型标�
   assert.equal(parsed.streamingDurationSeconds, 8.25);
 });
 
-test('复验 3: TPS 瞬时时间窗口截断与 500 tok/s 上限拦截', () => {
-  const instant = computeTps(0.001, 100);
-  assert.equal(instant.status, 'pending_or_fallback');
-  assert.equal(instant.formatted, '—');
-
-  const shortT = computeTps(0.05, 50);
-  assert.equal(shortT.status, 'pending_or_fallback');
-
-  const capped = computeTps(0.1, 100);
-  assert.equal(capped.status, 'calculated');
-  assert.equal(capped.outputTps, 500, '超过 500 tok/s 时必须被拦截在物理上限 500');
-  assert.equal(capped.formatted, '500 tok/s');
-
-  const normal = computeTps(2.0, 180);
-  assert.equal(normal.status, 'calculated');
-  assert.equal(normal.outputTps, 90);
-  assert.equal(normal.formatted, '90 tok/s');
+test('复验 3: 有效输出速度保留原始精度、拒绝无效耗时且不设置人为速度上限', () => {
+  assert.equal(computeTps(0, 100).status, 'pending_or_fallback');
+  assert.equal(computeTps(NaN, 100).formatted, '—');
+  assert.equal(computeTps(2, Infinity).formatted, '—');
+  assert.equal(computeTps(0.05, 50).outputTps, 1000);
+  assert.equal(computeTps(0.1, 100).formatted, '1000.00 tok/s');
+  const normal = computeTps(3, 100);
+  assert.equal(normal.outputTps, 100 / 3);
+  assert.equal(normal.formatted, '33.33 tok/s');
 });
 
 test('复验 4: 64 位 BigInt 无符号 Varint 解码、未知 WireType 跳过与 Protobuf 完整解析', () => {
@@ -201,7 +193,7 @@ test('复验 5: ConversationMetricsEngine 两级 lstat 门控、子智能体会�
       })
     ]);
 
-    db.prepare('INSERT INTO steps (idx, step_type, status, metadata) VALUES (?, ?, ?, ?)').run(1, 101, 3, null);
+    db.prepare('INSERT INTO steps (idx, step_type, status, metadata) VALUES (?, ?, ?, ?)').run(1, 14, 3, null);
     db.prepare('INSERT INTO steps (idx, step_type, status, metadata) VALUES (?, ?, ?, ?)').run(2, 15, 3, step1Blob);
 
     const engine = new ConversationMetricsEngine({ geminiDir: tmpDir });
@@ -215,11 +207,11 @@ test('复验 5: ConversationMetricsEngine 两级 lstat 门控、子智能体会�
     assert.equal(m1.session.turns, 1);
     assert.equal(m1.session.steps, 2);
     assert.equal(m1.tokens.totalTokens, 100500);
-    assert.equal(m1.tokens.cacheHitRateFormatted, '90%');
-    assert.equal(m1.session.outputTpsFormatted, '50 tok/s');
+    assert.equal(m1.tokens.cacheHitRateFormatted, '90.00%');
+    assert.equal(m1.session.outputTpsFormatted, '41.67 tok/s');
     assert.equal(m1.context.usedTokens, 100000);
     assert.equal(m1.context.capacityTokens, 200000);
-    assert.equal(m1.context.usedRatioFormatted, '50%');
+    assert.equal(m1.context.usedRatioFormatted, '50.00%');
     assert.equal(m1.context.breakdown.cachedContextTokens, 90000);
     assert.equal(m1.context.breakdown.uncachedContextTokens, 10000);
 
@@ -290,7 +282,7 @@ test('复验 5: ConversationMetricsEngine 两级 lstat 门控、子智能体会�
     assert.equal(m2.tokens.totalTokens, 100500 + 201000 + 50250, '累计 Token 应自动汇总子智能体消耗');
     // 主会话当前单步上下文仍保持主会话最后一步的 200,000 tok (100%)，不被子智能体的 50,000 tok 覆盖
     assert.equal(m2.context.usedTokens, 200000);
-    assert.equal(m2.context.usedRatioFormatted, '100%');
+    assert.equal(m2.context.usedRatioFormatted, '100.00%');
 
     // 验证 Antigravity 2.30.0 真实表结构 (无 data 列，使用 render_info + trajectory_metadata_blob) 与防无关 UUID 串号污染
     const realMainId = '11111111-2222-4333-8444-555555555555';
@@ -334,7 +326,7 @@ test('复验 5: ConversationMetricsEngine 两级 lstat 门控、子智能体会�
       CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER NOT NULL, status INTEGER NOT NULL, metadata BLOB);
       CREATE TABLE trajectory_metadata_blob (id TEXT PRIMARY KEY, data BLOB);
     `);
-    unrelatedDb.prepare('INSERT INTO trajectory_metadata_blob VALUES (?, ?)').run('main', Buffer.from(unrelatedId));
+    unrelatedDb.prepare('INSERT INTO trajectory_metadata_blob VALUES (?, ?)').run('main', Buffer.from(encodeStringField(5, unrelatedId)));
     unrelatedDb.prepare('INSERT INTO steps VALUES (?, ?, ?, ?)').run(1, 15, 3, Buffer.from(encodeUsageField9({ rawInput: 999999, outputTokens: 1 })));
 
     // 创建真实子智能体数据库 (其 trajectory_metadata_blob 指向父会话 realMainId)
@@ -343,7 +335,7 @@ test('复验 5: ConversationMetricsEngine 两级 lstat 门控、子智能体会�
       CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER NOT NULL, status INTEGER NOT NULL, metadata BLOB);
       CREATE TABLE trajectory_metadata_blob (id TEXT PRIMARY KEY, data BLOB);
     `);
-    realChildDb.prepare('INSERT INTO trajectory_metadata_blob VALUES (?, ?)').run('main', Buffer.from(`${realChildId}:${realMainId}`));
+    realChildDb.prepare('INSERT INTO trajectory_metadata_blob VALUES (?, ?)').run('main', Buffer.from(encodeStringField(5, realMainId)));
     realChildDb.prepare('INSERT INTO steps VALUES (?, ?, ?, ?)').run(1, 15, 3, Buffer.from([
       ...encodeTimestampField(1, 1794283003, 0),
       ...encodeTimestampField(8, 1794283009, 0),

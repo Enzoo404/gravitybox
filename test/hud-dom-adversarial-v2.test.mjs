@@ -81,7 +81,7 @@ describe('DOM & 布局对抗性复验 (直接验证 runtime/hud-popover.js 与 r
         const vh = Math.floor(400 + Math.random() * 800);
         setupMockBrowser(vw, vh);
 
-        const pw = [270, 280, 290][i % 3];
+        const pw = [316, 340, 400, 480][i % 4];
         const safeMargin = 12;
         const capsuleW = 40 + Math.random() * 100;
         const capsuleLeft = Math.random() * (vw + 100) - 50;
@@ -100,6 +100,18 @@ describe('DOM & 布局对抗性复验 (直接验证 runtime/hud-popover.js 与 r
   });
 
   describe('复验重点 2: 小三角相切夹紧公式与外层 overflow: visible 防裁切校验', () => {
+    it('加宽详情保留长数值和中英文模型名，窄屏允许换行而不省略', () => {
+      const rule = (selector) => HUD_STYLES_CSS.slice(HUD_STYLES_CSS.indexOf(`${selector} {`)).split('}')[0];
+      assert.match(rule('.hud-popover-header'), /flex-wrap:\s*wrap/);
+      assert.match(rule('.hud-popover-row'), /grid-template-columns:\s*minmax\(0, 1fr\) minmax\(0, 1\.4fr\)/);
+      for (const selector of ['.hud-popover-val', '.hud-popover-label', '.hud-popover-title',
+        '.hud-popover-badge', '.hud-popover-badge-muted']) {
+        assert.match(rule(selector), /white-space:\s*normal/);
+        assert.match(rule(selector), /overflow-wrap:\s*anywhere/);
+        assert.doesNotMatch(rule(selector), /text-overflow:\s*ellipsis|max-width:\s*175px/);
+      }
+    });
+
     it('小三角底边两翼必须 100% 严格落在卡片平直底边内 [19, W_eff - 19]', () => {
       setupMockBrowser(1000, 800);
       const fakeLeftCapsule = {
