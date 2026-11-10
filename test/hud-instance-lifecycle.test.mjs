@@ -359,7 +359,7 @@ describe('HUD raw 数值精度与缺值展示', () => {
   };
 
   for (const languageMode of ['zh', 'en']) {
-    it(`${languageMode}: 胶囊整数、详情两位、Token 千分位，保留全部既有项目`, () => {
+    it(`${languageMode}: 胶囊整数、详情按规则保留精度与 M/K 单位，保留全部既有项目`, () => {
       const { instance, text } = render(metrics, languageMode);
       assert.equal(text('#hud-txt-session .hud-speed'), ' · 83 tok/s');
       assert.equal(text('#hud-txt-session .hud-steps'), languageMode === 'en' ? '1,234S' : '1,234 步');
@@ -368,22 +368,22 @@ describe('HUD raw 数值精度与缺值展示', () => {
       assert.equal(text('#hud-txt-context'), '113%');
       assert.equal(text('#val-tps'), '82.74 tok/s');
       assert.equal(text('#val-ttft'), languageMode === 'en' ? '3.85s' : '3.85 秒');
-      assert.equal(text('#val-model-dur'), languageMode === 'en' ? '22m 28.13s' : '22 分 28.13 秒');
-      assert.equal(text('#val-tool-dur'), languageMode === 'en' ? '1m 0.00s' : '1 分 0.00 秒');
+      assert.equal(text('#val-model-dur'), languageMode === 'en' ? '22m 28s' : '22 分 28 秒');
+      assert.equal(text('#val-tool-dur'), languageMode === 'en' ? '1m 0s' : '1 分 0 秒');
       assert.equal(text('#val-cache-hit'), '96.94%');
-      assert.equal(text('#pop-tokens-badge'), '61,234,567 tok');
-      assert.equal(text('#val-uncached-in'), '1,234,567 tok');
-      assert.equal(text('#val-cached-read'), '59,876,543 tok');
-      assert.equal(text('#val-output-tok'), '123,457 tok');
-      assert.equal(text('#val-cache-write'), '1,001 tok');
-      assert.equal(text('#val-reasoning-tok'), '12,345 / 111,112 tok');
+      assert.equal(text('#pop-tokens-badge'), '61.23M tok');
+      assert.equal(text('#val-uncached-in'), '1.23M tok');
+      assert.equal(text('#val-cached-read'), '59.88M tok');
+      assert.equal(text('#val-output-tok'), '123.46K tok');
+      assert.equal(text('#val-cache-write'), '1.00K tok');
+      assert.equal(text('#val-reasoning-tok'), '12.35K / 111.11K tok');
       assert.equal(text('#pop-ctx-pct'), '113.21%');
-      assert.equal(text('#pop-ctx-capacity'), '226,412 / ~200,000');
-      assert.equal(text('#val-seg-sys'), '218,100 tok');
-      assert.equal(text('#val-seg-tool'), '8,312 tok');
-      assert.equal(text('#val-seg-msg'), '1,240 tok');
+      assert.equal(text('#pop-ctx-capacity'), '226.41K / ~200K');
+      assert.equal(text('#val-seg-sys'), '218.10K tok');
+      assert.equal(text('#val-seg-tool'), '8.31K tok');
+      assert.equal(text('#val-seg-msg'), '1.24K tok');
       assert.equal(text('#val-ctx-peak'), languageMode === 'en'
-        ? '1,234,567 tok (2x compacted)' : '1,234,567 tok (已压缩 2 次)');
+        ? '1.23M tok (2x compacted)' : '1.23M tok (已压缩 2 次)');
       assert.equal(text('#val-ctx-model'), metrics.context.modelDisplayName);
       assert.equal(instance.shadow.querySelector('#seg-msg').style.width, '0%');
       assert.equal(instance.shadow.querySelector('#pop-ctx-track').getAttribute('aria-valuenow'), '100');
@@ -408,7 +408,7 @@ describe('HUD raw 数值精度与缺值展示', () => {
       tokens: { cacheHitRate: 0 }, context: { usedRatio: 0 } });
     assert.equal(zero.text('#val-tps'), '0.00 tok/s');
     assert.equal(zero.text('#val-ttft'), '0.00 秒');
-    assert.equal(zero.text('#val-model-dur'), '0.00 秒');
+    assert.equal(zero.text('#val-model-dur'), '0 秒');
     assert.equal(zero.text('#val-cache-hit'), '0.00%');
     assert.equal(zero.text('#pop-ctx-pct'), '0.00%');
     const absent = render({ session: { outputTps: 0, outputTpsFormatted: '—',
@@ -430,28 +430,32 @@ describe('HUD raw 数值精度与缺值展示', () => {
       const { instance, text } = render({ context: { ...metrics.context, usedRatio: 0.5,
         capacityTokensCompact: '200K', breakdown: { cachedContextRatio: 40,
           uncachedContextRatio: 10, latestOutputTokens: output } } });
-      assert.equal(text('#pop-ctx-capacity'), '226,412 / ~200,000');
+      assert.equal(text('#pop-ctx-capacity'), '226.41K / ~200K');
       assert.equal(instance.shadow.querySelector('#seg-sys').style.width, '40.000%');
       assert.equal(instance.shadow.querySelector('#seg-tool').style.width, '10.000%');
       assert.equal(instance.shadow.querySelector('#seg-msg').style.width, '0%');
-      assert.equal(text('#val-seg-msg'), `${output.toLocaleString('en-US')} tok`);
+      assert.equal(text('#val-seg-msg'), output >= 1_000_000 ? '1.00M tok' : '1 tok');
     }
   });
 
-  it('上下文卡片利用输入框宽度并在窄视口保留两侧留白', () => {
+  it('三张展开卡片保持协调宽度，窄视口保留两侧留白', () => {
     const { instance } = render(metrics);
     const previousWindow = globalThis.window;
     try {
       instance.targetComposer = { getBoundingClientRect: () => ({ width: 520 }) };
-      instance.activePopoverId = 'context';
       globalThis.window = { innerWidth: 1024, innerHeight: 800 };
+      const expectedWidths = { session: '296px', tokens: '296px', context: '312px' };
+      for (const [popoverId, expectedWidth] of Object.entries(expectedWidths)) {
+        instance.activePopoverId = popoverId;
+        const popover = instance.shadow.querySelector(`#hud-popover-${popoverId}`);
+        popover.getBoundingClientRect = () => ({
+          left: parseFloat(popover.style.left), width: parseFloat(popover.style.width),
+          bottom: globalThis.window.innerHeight - parseFloat(popover.style.bottom), height: 190,
+        });
+        instance.repositionActivePopover();
+        assert.equal(popover.style.width, expectedWidth);
+      }
       const popover = instance.shadow.querySelector('#hud-popover-context');
-      popover.getBoundingClientRect = () => ({
-        left: parseFloat(popover.style.left), width: parseFloat(popover.style.width),
-        bottom: globalThis.window.innerHeight - parseFloat(popover.style.bottom), height: 190,
-      });
-      instance.repositionActivePopover();
-      assert.equal(popover.style.width, '480px');
       globalThis.window.innerWidth = 260;
       instance.repositionActivePopover();
       assert.equal(popover.style.width, '236px');
@@ -634,12 +638,12 @@ describe('HudInstance 与 AntigravityHudManager 生产模块生命周期、垂�
     assert.equal(instA.updateMetrics(sampleMetrics('conv-3', rev4)), true);
 
     // 验证 Popover 3 展示真实上下文明细而非 1.9K/7.6K 假数据
-    assert.equal(instA.shadow.querySelector('#pop-ctx-capacity').textContent, '226,412 / 262,144');
+    assert.equal(instA.shadow.querySelector('#pop-ctx-capacity').textContent, '226.41K / 262.14K');
     assert.equal(instA.shadow.querySelector('#lbl-seg-sys').textContent, '缓存复用上下文');
-    assert.equal(instA.shadow.querySelector('#val-seg-sys').textContent, '218,100 tok');
+    assert.equal(instA.shadow.querySelector('#val-seg-sys').textContent, '218.10K tok');
     assert.equal(instA.shadow.querySelector('#lbl-seg-tool').textContent, '本步新增输入');
-    assert.equal(instA.shadow.querySelector('#val-seg-tool').textContent, '8,312 tok');
-    assert.equal(instA.shadow.querySelector('#val-ctx-peak').textContent, '226,412 tok (已压缩 1 次)');
+    assert.equal(instA.shadow.querySelector('#val-seg-tool').textContent, '8.31K tok');
+    assert.equal(instA.shadow.querySelector('#val-ctx-peak').textContent, '226.41K tok (已压缩 1 次)');
     assert.equal(instA.shadow.querySelector('#val-ctx-model').textContent, 'Gemini 3.8 Flash');
 
     // 验证浅色主题显式声明时，即使系统 matchMedia 为 dark 也不得误判为深色

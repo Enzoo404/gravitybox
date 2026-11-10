@@ -81,7 +81,7 @@ describe('DOM & 布局对抗性复验 (直接验证 runtime/hud-popover.js 与 r
         const vh = Math.floor(400 + Math.random() * 800);
         setupMockBrowser(vw, vh);
 
-        const pw = [316, 340, 400, 480][i % 4];
+        const pw = [296, 296, 312][i % 3];
         const safeMargin = 12;
         const capsuleW = 40 + Math.random() * 100;
         const capsuleLeft = Math.random() * (vw + 100) - 50;
@@ -103,7 +103,7 @@ describe('DOM & 布局对抗性复验 (直接验证 runtime/hud-popover.js 与 r
     it('加宽详情保留长数值和中英文模型名，窄屏允许换行而不省略', () => {
       const rule = (selector) => HUD_STYLES_CSS.slice(HUD_STYLES_CSS.indexOf(`${selector} {`)).split('}')[0];
       assert.match(rule('.hud-popover-header'), /flex-wrap:\s*wrap/);
-      assert.match(rule('.hud-popover-row'), /grid-template-columns:\s*minmax\(0, 1fr\) minmax\(0, 1\.4fr\)/);
+      assert.match(rule('.hud-popover-row'), /justify-content:\s*space-between/);
       for (const selector of ['.hud-popover-val', '.hud-popover-label', '.hud-popover-title',
         '.hud-popover-badge', '.hud-popover-badge-muted']) {
         assert.match(rule(selector), /white-space:\s*normal/);

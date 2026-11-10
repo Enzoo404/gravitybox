@@ -244,10 +244,10 @@ export const HUD_STYLES_CSS = `
 
 /* Antigravity 原生横向微缩计量条 (替代 DeepSeek 圆环图) */
 .capsule-donut {
-  width: 18px;
+  width: 56px;
   height: 8px;
   flex-shrink: 0;
-  margin-right: 5px;
+  margin-right: 6px;
 }
 
 .capsule-text {
@@ -261,7 +261,7 @@ export const HUD_STYLES_CSS = `
 /* ==================== 弹性收缩权重阶梯与保底尺寸 ==================== */
 .capsule-context {
   flex-shrink: 0;
-  min-width: 88px;
+  min-width: 124px;
   justify-content: center;
   padding-inline: 12px;
 }
@@ -288,13 +288,27 @@ export const HUD_STYLES_CSS = `
   display: none;
 }
 
+.hud-container.is-compact .capsule-context {
+  min-width: 102px;
+  padding-inline: 9px;
+}
+
 @container hud (max-width: 440px) {
   .hud-cache-label {
     display: none;
   }
+  .capsule-context {
+    min-width: 102px;
+    padding-inline: 9px;
+  }
 }
 
 /* 状态 2：极限紧凑 (< 360px) - 仅保留核心步数、总量与上下文读数 */
+.hud-container.is-ultra-compact .capsule-context {
+  min-width: fit-content;
+  padding-inline: 7px;
+}
+
 .hud-container.is-ultra-compact .hud-turns,
 .hud-container.is-ultra-compact .hud-speed,
 .hud-container.is-ultra-compact .hud-subagent-tag,
@@ -478,10 +492,10 @@ export const HUD_STYLES_CSS = `
 }
 
 .hud-popover-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
-  align-items: start;
-  gap: 8px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
   line-height: 1.35;
 }
 
@@ -496,6 +510,7 @@ export const HUD_STYLES_CSS = `
   color: var(--hud-text-secondary);
   font-size: 11.5px;
   font-weight: 400;
+  flex: 0 1 auto;
   min-width: 0;
   white-space: normal;
   overflow-wrap: anywhere;
@@ -506,6 +521,7 @@ export const HUD_STYLES_CSS = `
   font-size: 11.5px;
   font-weight: 500;
   font-variant-numeric: tabular-nums;
+  flex: 1 1 auto;
   min-width: 0;
   text-align: right;
   white-space: normal;

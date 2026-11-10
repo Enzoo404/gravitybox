@@ -12,9 +12,9 @@ import { computeUpwardPopoverPosition, applyPopoverGeometry } from './hud-popove
  */
 
 const POPOVER_WIDTHS = {
-  session: 316,
-  tokens: 340,
-  context: 400,
+  session: 296,
+  tokens: 296,
+  context: 312,
 };
 
 const DONUT_CIRCUMFERENCE = 37.699;
@@ -27,8 +27,32 @@ function formatInteger(value) {
   return Math.floor(value).toLocaleString('en-US');
 }
 
+function formatDetailCompactNumber(value, trimTrailingZeros = false) {
+  if (value >= 999_995) {
+    const formatted = (value / 1_000_000).toFixed(2);
+    const cleaned = trimTrailingZeros ? formatted.replace(/(\.\d*?[1-9])0+$|\.0+$/, '$1') : formatted;
+    return `${cleaned}M`;
+  }
+  if (value >= 1_000) {
+    const formatted = (value / 1_000).toFixed(2);
+    const cleaned = trimTrailingZeros ? formatted.replace(/(\.\d*?[1-9])0+$|\.0+$/, '$1') : formatted;
+    return `${cleaned}K`;
+  }
+  return formatInteger(value);
+}
+
 function formatTokenCount(value, fallback) {
-  return isRawNumber(value) ? `${formatInteger(value)} tok` : fallback || '0 tok';
+  if (isRawNumber(value)) {
+    return `${formatDetailCompactNumber(value)} tok`;
+  }
+  if (!fallback) return '0 tok';
+  if (fallback === '—') return '—';
+  const cleanedText = String(fallback).replace(/[,~\s]|tok$/gi, '');
+  const parsedValue = Number(cleanedText);
+  if (Number.isFinite(parsedValue) && parsedValue >= 0) {
+    return `${formatDetailCompactNumber(parsedValue)} tok`;
+  }
+  return String(fallback).endsWith('tok') ? String(fallback) : `${fallback} tok`;
 }
 
 function formatCompactCount(value, fallback = '0') {
@@ -51,9 +75,9 @@ function formatPercent(value, formatted, digits) {
 
 function formatDuration(value, formatted, isEn) {
   if (formatted === '—' || !isRawNumber(value)) return '—';
-  const hundredths = Math.round(value * 100);
-  const minutes = Math.floor(hundredths / 6000);
-  const seconds = ((hundredths % 6000) / 100).toFixed(2);
+  const totalSeconds = Math.round(value);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
   if (!minutes) return isEn ? `${seconds}s` : `${seconds} 秒`;
   return isEn ? `${minutes}m ${seconds}s` : `${minutes} 分 ${seconds} 秒`;
 }
@@ -590,8 +614,8 @@ export class HudInstance {
 
           <!-- 分段 3: 当前上下文实况 (移除原生 title 提示，杜绝遮挡上浮卡片) -->
           <button type="button" class="capsule capsule-context" data-capsule-id="context" aria-haspopup="dialog" aria-expanded="false" aria-label="当前上下文实况明细">
-            <svg class="capsule-donut" viewBox="0 0 20 8" aria-hidden="true">
-              <rect x="0.5" y="1.5" width="19" height="5" rx="2.5" fill="var(--hud-progress-track)" stroke="var(--hud-divider)" stroke-width="0.6"/>
+            <svg class="capsule-donut" viewBox="0 0 56 8" aria-hidden="true">
+              <rect x="0.5" y="1.5" width="55" height="5" rx="2.5" fill="var(--hud-progress-track)" stroke="var(--hud-divider)" stroke-width="0.6"/>
               <circle class="donut-val" id="hud-donut-val" cx="4" cy="4" r="6" stroke="var(--hud-seg-sys-color)" stroke-width="0" fill="none" stroke-dasharray="37.699" stroke-dashoffset="37.699"/>
               <rect id="hud-meter-fill" x="1" y="2" width="0" height="4" rx="2" fill="var(--hud-seg-sys-color)"/>
             </svg>
@@ -899,7 +923,7 @@ export class HudInstance {
       donutValEl.setAttribute('stroke', strokeColor);
     }
     if (meterFillEl) {
-      const fillWidth = Number((18 * ratioClamped).toFixed(2));
+      const fillWidth = Number((54 * ratioClamped).toFixed(2));
       meterFillEl.setAttribute('width', String(fillWidth));
       meterFillEl.setAttribute('fill', strokeColor);
     }
@@ -998,7 +1022,7 @@ export class HudInstance {
         setTxt('#lbl-reasoning-tok', isEn ? 'Reasoning / Reply' : '思维链 / 回复');
         setTxt(
           '#val-reasoning-tok',
-          `${formatInteger(t.reasoningTokens)} / ${formatInteger(t.candidateTokens || 0)} tok`
+          `${formatDetailCompactNumber(t.reasoningTokens)} / ${formatDetailCompactNumber(t.candidateTokens || 0)} tok`
         );
       } else {
         reasoningRow.setAttribute('hidden', '');
@@ -1009,8 +1033,8 @@ export class HudInstance {
     setTxt('#pop-ctx-prefix', isEn ? 'Current Context ' : '当前上下文 ');
     setTxt('#pop-ctx-pct', formatPercent(contextRatio, c.usedRatioFormatted, 2));
     const capacityText = isRawNumber(c.capacityTokens) && c.capacityTokens > 0
-      ? `${c.isFallbackCapacity ? '~' : ''}${formatInteger(c.capacityTokens)}` : '—';
-    const usedText = hasContextUsage && isRawNumber(c.usedTokens) ? formatInteger(c.usedTokens) : '—';
+      ? `${c.isFallbackCapacity ? '~' : ''}${formatDetailCompactNumber(c.capacityTokens, true)}` : '—';
+    const usedText = hasContextUsage && isRawNumber(c.usedTokens) ? formatDetailCompactNumber(c.usedTokens) : '—';
     setTxt(
       '#pop-ctx-capacity',
       `${usedText} / ${capacityText}`
@@ -1299,10 +1323,7 @@ export class HudInstance {
     const arrow = this.shadow.querySelector(`#arrow-${id}`);
     if (!capsule || !popover) return;
 
-    const composerWidth = this.targetComposer?.getBoundingClientRect?.().width || 0;
-    const standardWidth = id === 'context'
-      ? Math.max(POPOVER_WIDTHS.context, Math.min(480, composerWidth))
-      : POPOVER_WIDTHS[id] || 280;
+    const standardWidth = POPOVER_WIDTHS[id] || 296;
     const calcFn =
       typeof computeUpwardPopoverPosition === 'function'
         ? computeUpwardPopoverPosition

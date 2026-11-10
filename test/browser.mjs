@@ -861,19 +861,37 @@ ${engine}`,auth.executionContextId);assert.equal(await cdp.evaluate('!!globalThi
     assert.equal(rendered.sameRow, true);
     const precision = await main.evaluate(`(() => {
       const sr = document.querySelector('#__gravitybox_hud_host__').shadowRoot;
+      const cap3 = sr.querySelector('.capsule-context');
+      cap3.click();
+      const ctxPopWidth = Math.round(sr.querySelector('#hud-popover-context').getBoundingClientRect().width);
+      cap3.click();
       return {
         speed: sr.querySelector('#val-tps').textContent,
         duration: sr.querySelector('#val-model-dur').textContent,
+        toolDuration: sr.querySelector('#val-tool-dur').textContent,
+        ttft: sr.querySelector('#val-ttft').textContent,
         cache: sr.querySelector('#val-cache-hit').textContent,
+        tokensBadge: sr.querySelector('#pop-tokens-badge').textContent,
+        cachedRead: sr.querySelector('#val-cached-read').textContent,
+        outputTok: sr.querySelector('#val-output-tok').textContent,
         context: sr.querySelector('#pop-ctx-pct').textContent,
-        capsuleWidth: sr.querySelector('.capsule-context').getBoundingClientRect().width,
+        ctxCapacity: sr.querySelector('#pop-ctx-capacity').textContent,
+        capsuleWidth: cap3.getBoundingClientRect().width,
+        ctxPopWidth,
       };
     })()`);
     assert.equal(precision.speed, '90.13 tok/s');
-    assert.equal(precision.duration, '65 分 59.13 秒');
+    assert.equal(precision.duration, '65 分 59 秒');
+    assert.equal(precision.toolDuration, '12 分 31 秒');
+    assert.equal(precision.ttft, '19.70 秒');
     assert.equal(precision.cache, '96.65%');
+    assert.equal(precision.tokensBadge, '58.59M tok');
+    assert.equal(precision.cachedRead, '56.53M tok');
+    assert.equal(precision.outputTok, '105.49K tok');
     assert.equal(precision.context, '64.08%');
-    assert.ok(precision.capsuleWidth >= 88);
+    assert.equal(precision.ctxCapacity, '672.00K / 1.05M');
+    assert.ok(precision.capsuleWidth >= 124);
+    assert.equal(precision.ctxPopWidth, 312);
 
     // 3. 验证输入框焦点零争夺与向上展开 Popover
     const focusAndPopover = await main.evaluate(`(() => {
