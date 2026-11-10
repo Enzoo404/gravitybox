@@ -5,7 +5,7 @@ import vm from 'node:vm';
 import { loadDictionaryLayers } from '../dist/dictionary.js';
 import { allowedTarget } from '../dist/discovery.js';
 
-test('界面汉化补充：三界面词典命中验证', async () => {
+test('界面汉化补充：多界面词典命中验证（自动化、浏览器、下拉选项与界面布局）', async () => {
   const layered = await loadDictionaryLayers(new URL('../dict', import.meta.url).pathname);
   const dict = layered.dictionary.entries;
 
@@ -30,6 +30,18 @@ test('界面汉化补充：三界面词典命中验证', async () => {
     dict['Configure allowed and denied URLs for the browser subagent. It runs in the built-in browser, so no separate browser install is needed.'],
     '配置浏览器智能体允许和禁止访问的 URL 规则。它在内置浏览器中运行，无需单独安装浏览器。'
   );
+  assert.equal(
+    dict['Configure allowed and denied URLs for the browser subagent (invoked with /browser). Requires Google Chrome.'],
+    '配置浏览器子智能体（通过 /browser 调用）允许和禁止访问的 URL 规则。需要安装 Google Chrome。'
+  );
+  assert.equal(
+    dict['Configure allowed and denied URLs for the browser subagent (invoked with /browser). Requires {0}.'],
+    '配置浏览器子智能体（通过 /browser 调用）允许和禁止访问的 URL 规则。需要安装 {0}。'
+  );
+  assert.equal(
+    dict['Configure allowed and denied URLs for the browser subagent (invoked with /browser). Requires'],
+    '配置浏览器子智能体（通过 /browser 调用）允许和禁止访问的 URL 规则。需要安装 '
+  );
 
   // 3. 展开下拉选项 (Select Popover / Listbox Options)
   assert.equal(dict['Request Review'], '请求审查');
@@ -48,6 +60,19 @@ test('界面汉化补充：三界面词典命中验证', async () => {
   assert.equal(dict['turbo'], '极速模式');
   assert.equal(dict['Run all commands without restrictions.'], '无限制地运行所有命令。');
   assert.equal(dict['Run all commands without restrictions'], '无限制地运行所有命令');
+
+  // 4. 界面布局 (Interface Layout - Antigravity 2.30.0)
+  assert.equal(dict['Interface Layout'], '界面布局');
+  assert.equal(dict['Knowledge Work'], '知识工作');
+  assert.equal(
+    dict['Simplified interface for research, writing, and everyday tasks.'],
+    '精简界面，专为调研、写作与日常任务打造。'
+  );
+  assert.equal(dict['Software Engineering'], '软件工程');
+  assert.equal(
+    dict['Full interface for coding, developer tools, and managing agents.'],
+    '完整界面，涵盖代码编写、开发者工具与智能体管理。'
+  );
 });
 
 test('界面汉化补充：用量统计动态限额与重置倒计时模板验证', async () => {
@@ -385,6 +410,36 @@ test('界面汉化补充：严格模式下引擎实际执行与作用域本地�
   assert.equal(translation('Plan', settingsModal), '计划');
   assert.equal(translation('Plan', settingsModal, 'heading'), '计划');
   assert.equal(translation('plan', settingsModal), '计划');
+
+  // 4. 验证 Antigravity 2.30.0 界面布局 (Interface Layout) 模块在运行时引擎中精准汉化
+  assert.equal(translation('Interface Layout'), '界面布局');
+  assert.equal(translation('Knowledge Work'), '知识工作');
+  assert.equal(
+    translation('Simplified interface for research, writing, and everyday tasks.'),
+    '精简界面，专为调研、写作与日常任务打造。'
+  );
+  assert.equal(translation('Software Engineering'), '软件工程');
+  assert.equal(
+    translation('Full interface for coding, developer tools, and managing agents.'),
+    '完整界面，涵盖代码编写、开发者工具与智能体管理。'
+  );
+  // 在设置面板结构下依然准确命中
+  assert.equal(translation('Interface Layout', settingsModal), '界面布局');
+  assert.equal(translation('Knowledge Work', settingsModal), '知识工作');
+  assert.equal(translation('Software Engineering', settingsModal), '软件工程');
+
+  // 5. 验证 Antigravity 2.30.0 浏览器子智能体 URL 配置在运行时引擎中精准汉化
+  assert.equal(
+    translation('Configure allowed and denied URLs for the browser subagent (invoked with /browser). Requires Google Chrome.'),
+    '配置浏览器子智能体（通过 /browser 调用）允许和禁止访问的 URL 规则。需要安装 Google Chrome。'
+  );
+  assert.equal(
+    translation(
+      'Configure allowed and denied URLs for the browser subagent (invoked with /browser). Requires Google Chrome.',
+      settingsModal
+    ),
+    '配置浏览器子智能体（通过 /browser 调用）允许和禁止访问的 URL 规则。需要安装 Google Chrome。'
+  );
 });
 
 test('界面汉化补充：全量词典审查（音色与内部代号专有名词保留、语境术语统一、大小写零遗漏与动态模板扩展）验证', async () => {

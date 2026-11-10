@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { readFile, open } from 'node:fs/promises';
+import { readFile, open, stat as fsStat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { assertLoopback } from './cdp.js';
 import { allApplicationTargets, targetForApp } from './application-target.js';
@@ -20,7 +20,7 @@ export function parseListeners(stdout: string, port: number): { pid: number; nam
   return results.filter(owner => owner.names.length > 0);
 }
 
-const bundleCache = new Map<string, { value: { version: string; legacyPatch: boolean }; expiresAt: number }>();
+const bundleCache = new Map<string, { value: { version: string; legacyPatch: boolean }; expiresAt: number; hardExpiresAt: number; plistMtimeMs: number; asarMtimeMs: number; asarSize: number }>();
 
 export async function inspectBundle(appPath: string): Promise<{ version: string; legacyPatch: boolean }> {
   const now = Date.now();
@@ -28,13 +28,25 @@ export async function inspectBundle(appPath: string): Promise<{ version: string;
   if (cached && cached.expiresAt > now) return cached.value;
 
   const plist = join(appPath, 'Contents', 'Info.plist');
+  const asarPath = join(appPath, 'Contents', 'Resources', 'app.asar');
+  if (cached && cached.hardExpiresAt > now) {
+    try {
+      const [pStat, aStat] = await Promise.all([fsStat(plist), fsStat(asarPath)]);
+      if (pStat.mtimeMs === cached.plistMtimeMs && aStat.mtimeMs === cached.asarMtimeMs && aStat.size === cached.asarSize) {
+        cached.expiresAt = now + 60_000;
+        return cached.value;
+      }
+    } catch {}
+  }
+
   const id = (await execute('/usr/libexec/PlistBuddy', ['-c', 'Print :CFBundleIdentifier', plist])).stdout.trim();
   if (id !== targetForApp(appPath).bundleId) throw new Error('应用身份不匹配');
   const version = (await execute('/usr/libexec/PlistBuddy', ['-c', 'Print :CFBundleShortVersionString', plist])).stdout.trim();
   const signature = await execute('/usr/bin/codesign', ['-dv', appPath]);
   if (!signature.stderr.includes('TeamIdentifier=EQHXZ8M8AV')) throw new Error('Antigravity 签名身份未通过 Google TeamID 检查');
   await execute('/usr/bin/codesign', ['--verify', '--deep', '--strict', appPath]);
-  const file = await open(join(appPath, 'Contents', 'Resources', 'app.asar'), 'r');
+  const plistStat = await fsStat(plist);
+  const file = await open(asarPath, 'r');
   try {
     const prefix = Buffer.alloc(16); await file.read(prefix, 0, 16, 0);
     const headerLength = prefix.readUInt32LE(12);
@@ -56,7 +68,7 @@ export async function inspectBundle(appPath: string): Promise<{ version: string;
       legacyPatch ||= /ANTIGRAVITY CHINESE LOCALIZATION START|injectAntigravityI18n|__ANTIGRAVITY_I18N_DATA__|createI18nEngine|__ag_hanhua_engine__/.test(text);
     }
     const val = { version, legacyPatch };
-    bundleCache.set(appPath, { value: val, expiresAt: now + 60_000 });
+    bundleCache.set(appPath, { value: val, expiresAt: now + 60_000, hardExpiresAt: now + 600_000, plistMtimeMs: plistStat.mtimeMs, asarMtimeMs: stat.mtimeMs, asarSize: stat.size });
     return val;
   } finally { await file.close(); }
 }

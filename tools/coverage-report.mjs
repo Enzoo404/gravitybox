@@ -271,7 +271,7 @@ async function main() {
       : (!version && installedVersion && (!latestExtracted || compareLayers(`${latestExtracted}.json`, `${installedVersion}.json`) < 0) && !available.includes(`${installedVersion}.json`))
         ? installedVersion
         : undefined;
-    if (targetToExtract && !args.includes('--no-auto-extract')) {
+    if (targetToExtract && !args.includes('--no-auto-extract') && !args.includes('--gate')) {
       try {
         const extracted = await extractFromRunningApp({ projectRoot: root, registerBundle: true });
         if (extracted?.appVersion) {

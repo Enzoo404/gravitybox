@@ -14,7 +14,7 @@ private final class PolicyNumberCell: NSTextFieldCell {
         let style = NSMutableParagraphStyle(); style.alignment = alignment
         (stringValue as NSString).draw(in: textRect(rect), withAttributes: [
             .font: font ?? NSFont.systemFont(ofSize: 12),
-            .foregroundColor: NSColor.labelColor, .paragraphStyle: style
+            .foregroundColor: isEnabled ? NSColor.labelColor : Design.secondary, .paragraphStyle: style
         ])
     }
     override func edit(withFrame rect: NSRect, in view: NSView, editor: NSText, delegate: Any?, event: NSEvent?) {
@@ -155,10 +155,13 @@ final class AccountPolicySheet: NSObject {
         errorLabel.isHidden = true
 
         let headerBadge = iconBadge("arrow.triangle.2.circlepath", tint: Design.blue, size: 32)
+        let headerSub = text("当前账号配额偏低时，自动评估并推荐最佳备用账号", size: 11, color: Design.secondary, wrap: true)
         let titleBlock = vertical([
             text("智能切换配置", size: 16, weight: .semibold, color: .labelColor),
-            text("当前账号配额偏低时，自动评估并推荐最佳备用账号", size: 11.5, color: Design.secondary)
+            headerSub
         ], spacing: 2)
+        titleBlock.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        fillWidth(headerSub, in: titleBlock)
         let heading = horizontal([headerBadge, titleBlock, flexibleSpace()], spacing: 10)
         heading.alignment = .centerY
 

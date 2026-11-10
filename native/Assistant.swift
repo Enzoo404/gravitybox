@@ -66,6 +66,7 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     private var recoveryAttempts = 0
     /// 汉化开关命令在途时的乐观目标：期间到达的陈旧状态快照不得把开关弹回旧状态。
     private var pendingTranslationTarget: Bool?
+    private var translationCommandGeneration = 0
     private var nextRecoveryAt = Date.distantPast
     #if NATIVE_UI_TEST
     var confirmSwitchForTesting: ((String, @escaping (Bool) -> Void) -> Void)?
@@ -94,6 +95,8 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     private(set) var lastOperationError: String?
     private var presentedError: String?
     private var lastAccountListFetchAt: Date = .distantPast
+    private var lastFetchedAccountsRevision = ""
+    private var lastFetchedLiveEmail = ""
     private var accountListInFlight = false
     private var accountListPendingNotifyPage = false
     private var accountListGeneration = 0
@@ -149,7 +152,11 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             }
         }
         if let peer = Self.findExistingMainPeer() {
-            DistributedNotificationCenter.default().postNotificationName(NSNotification.Name("local.gravitybox.show-panel"), object: nil); peer.activate(); quitting = true; NSApp.terminate(nil); return
+            if !CommandLine.arguments.contains("--launched-by-antigravity") {
+                DistributedNotificationCenter.default().postNotificationName(NSNotification.Name("local.gravitybox.show-panel"), object: nil, userInfo: nil, deliverImmediately: true)
+                peer.activate()
+            }
+            quitting = true; NSApp.terminate(nil); return
         }
         NSApp.setActivationPolicy(.accessory)
         do { configuration = try ConfigurationStore(state: state) }
@@ -1233,6 +1240,8 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     @objc func showSettings() { selectPage(3) }
     func setTranslationEnabled(_ enable: Bool) {
         let previousStatus = statusValue
+        translationCommandGeneration += 1
+        let commandGen = translationCommandGeneration
         pendingTranslationTarget = enable
         statusValue.translationEnabled = enable
         if enable {
@@ -1244,10 +1253,10 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         }
         updateViews()
         let sendCommand = { [weak self] in
-            guard let self else { return }
+            guard let self, commandGen == self.translationCommandGeneration else { return }
             self.bridge.send(["command": enable ? "resume" : "pause"]) { [weak self] result in
                 DispatchQueue.main.async {
-                    guard let self else { return }
+                    guard let self, commandGen == self.translationCommandGeneration else { return }
                     self.pendingTranslationTarget = nil
                     switch result {
                     case .success(let value):
@@ -1471,8 +1480,9 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             self.accountListWaiters.removeAll()
             self.accountListPendingNotifyPage = false
             if case .success(let val) = res, generation >= self.accountListGeneration, let list = val["accounts"] as? [[String: Any]] {
+                self.lastFetchedAccountsRevision = self.statusValue.accountsRevision
+                self.lastFetchedLiveEmail = self.statusValue.liveAccountEmail
                 var resolvedActiveId = val["activeId"] as? String ?? (val["currentAccountId"] as? String ?? "")
-                if !self.statusValue.liveAccountEmail.isEmpty { resolvedActiveId = "" }
                 if !self.statusValue.liveAccountEmail.isEmpty,
                    let live = list.first(where: { ($0["email"] as? String ?? "").caseInsensitiveCompare(self.statusValue.liveAccountEmail) == .orderedSame }),
                    let id = live["id"] as? String {
@@ -1505,15 +1515,10 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         bridge.send(["command": "status","includeTasks":needTasks,"includeAccounts":includeAccounts,"tasksSince":reachable ? lastTaskRevision:-1]) { [weak self] result in guard let self else { return }; self.refreshInFlight = false
             switch result {
             case .success(let value):
-                let prevAccountsRevision = self.statusValue.accountsRevision
-                let prevLiveEmail = self.statusValue.liveAccountEmail
-                if !self.updateLaunchAcknowledged {
-                    self.updateLaunchAcknowledged = UpdateInstaller.acknowledge(arguments: CommandLine.arguments, state: self.state, bundle: Bundle.main.bundleURL)
-                }
                 self.updateManager.cleanupAfterSuccessfulLaunch()
                 self.reachable = true; self.recoveryAttempts = 0; var raw=value["status"] as? [String:Any] ?? [:];raw["taskRevision"]=value["taskRevision"];raw["runningTasks"]=value["runningTasks"];self.statusValue=self.mergeStatusSnapshot(raw, previous:self.statusValue);if let rows=value["tasks"] as? [[String:Any]]{self.taskRows=rows;self.lastTaskRevision=value["taskRevision"] as? Int ?? 0}
                 if includeAccounts {
-                    let accountsChanged = (!self.statusValue.accountsRevision.isEmpty && self.statusValue.accountsRevision != prevAccountsRevision) || self.statusValue.liveAccountEmail != prevLiveEmail
+                    let accountsChanged = (!self.statusValue.accountsRevision.isEmpty && self.statusValue.accountsRevision != self.lastFetchedAccountsRevision) || self.statusValue.liveAccountEmail != self.lastFetchedLiveEmail
                     let periodicAccountRefreshDue = (self.menuTracking || (self.contentVisible && self.currentPage == 1)) && Date().timeIntervalSince(self.lastAccountListFetchAt) >= 15.0
                     if self.cachedAccounts.isEmpty || accountsChanged || periodicAccountRefreshDue {
                         self.fetchAccountList(notifyPage: true)
@@ -1663,6 +1668,9 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             checkForUpdatesFromMenu()
             return
         }
+        if let active = window?.activeSheetWindow, active !== preferencesController?.updateSheet?.sheet {
+            dismissAllSheetsAndPopovers()
+        }
         showPanel()
         if let window {
             if preferencesController == nil {
@@ -1697,6 +1705,9 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         suppressLifecycleAutoQuitUntil = Date().addingTimeInterval(seconds)
     }
     @objc func checkForUpdatesFromMenu() {
+        if let active = window?.activeSheetWindow, active !== preferencesController?.updateSheet?.sheet {
+            dismissAllSheetsAndPopovers()
+        }
         showSettings()
         preferencesController?.showUpdateSheet()
     }
@@ -1708,11 +1719,17 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         closeMenuPopover()
         guard let window else { return }
         var safetyCounter = 0
-        while let sheet = window.activeSheetWindow, safetyCounter < 8 {
+        while let rootSheet = window.activeSheetWindow, safetyCounter < 8 {
             safetyCounter += 1
-            sheet.sheetParent?.endSheet(sheet)
-            window.endSheet(sheet)
-            sheet.orderOut(nil)
+            var leaf = rootSheet
+            var depth = 0
+            while let child = leaf.activeSheetWindow, depth < 8 {
+                leaf = child
+                depth += 1
+            }
+            let parent = leaf.sheetParent ?? window
+            parent.endSheet(leaf)
+            leaf.orderOut(nil)
         }
     }
 
@@ -1761,7 +1778,7 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             guard let self else { return }
             if case .success = result { self.directorySource?.cancel(); NSApp.terminate(nil) }
             else if !self.bridge.isOwnedProcessRunning { self.directorySource?.cancel(); NSApp.terminate(nil) }
-            else { self.quitting = false; self.configureRefreshTimer(); self.configureQuotaRefreshTimer(); self.showPanel(); self.showMessage("尚未确认撤销汉化，请稍后重试退出。", error:true) }
+            else { self.quitting = false; self.configureRefreshTimer(); self.configureQuotaRefreshTimer(); self.configureAutoUpdateTimer(); self.showPanel(); self.showMessage("尚未确认撤销汉化，请稍后重试退出。", error:true) }
         }
     }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply { if quitting { return .terminateNow }; quit(); return .terminateCancel }
@@ -1801,7 +1818,7 @@ private enum AntigravityLifecycleAgent {
         let bundleURL = FileManager.default.fileExists(atPath: installedURL.path) ? installedURL : Bundle.main.bundleURL
         let config = NSWorkspace.OpenConfiguration()
         config.activates = false
-        config.createsNewApplicationInstance = true
+        config.createsNewApplicationInstance = false
         config.arguments = ["--launched-by-antigravity"]
         NSWorkspace.shared.openApplication(at: bundleURL, configuration: config, completionHandler: nil)
     }

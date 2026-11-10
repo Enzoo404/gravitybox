@@ -68,6 +68,7 @@ export class Controller {
   private lastInspectedSha?: string;
   private lastInspectedAppVersion?: string;
   private inspectingBundle = false;
+  private unverifiedWindowRetries = 0;
   private trustedCandidates: PendingItem[] = [];
   private runtimeCandidates: PendingItem[] = [];
   private bundleCache = new BundleCache();
@@ -199,10 +200,10 @@ export class Controller {
     }, wait);
     if (delay === undefined) this.reconnectionDelay = Math.min(30000, this.reconnectionDelay * 2);
   }
-  private scheduleSync() {
+  private scheduleSync(delayMs = 100) {
     if (this.stopped) return;
     clearTimeout(this.targetTimer);
-    this.targetTimer = setTimeout(() => void this.sync().catch(() => this.publish('error', '窗口探测失败')), 100);
+    this.targetTimer = setTimeout(() => void this.sync().catch(() => this.publish('error', '窗口探测失败')), delayMs);
   }
   private boot(url: string) {
     const page = new URL(url);
@@ -227,21 +228,24 @@ export class Controller {
         else if (target.url !== session.url) {
           session.url = target.url;
           await this.refreshRegistration(session);
-          await this.queueBootstrap(session);
+          await this.queueBootstrap(session, false);
         }
       }
       this.status.errors = [];
       if (!this.paused) for (const target of permitted) if (!this.pages.has(target.id)) {
+        if (this.paused || this.stopped) break;
         try {
           if (!this.options.fixture && !await verifyPageService(target.url, this.activeAppPath())) {
             this.status.errors.push('一个窗口的本地服务身份未确认，已跳过');
             continue;
           }
+          if (this.paused || this.stopped) break;
           const socketURL = assertLoopback(target.webSocketDebuggerUrl);
           if (Number(socketURL.port) !== this.endpoint.port) throw new Error('窗口调试端口不匹配');
           const cdp = new CDP(socketURL.href);
           const session: PageSession = { cdp, targetId: target.id, url: target.url, updateChain: Promise.resolve() };
           await cdp.connect();
+          if (this.paused || this.stopped) { cdp.close(); break; }
           this.pages.set(target.id, session);
           cdp.on('disconnected', () => {if(!session.detaching&&this.pages.get(target.id)===session){this.pages.delete(target.id);this.scheduleSync();}});
           cdp.on('Page.frameNavigated', (event) => { if (!event.frame?.parentId) { session.contextId = undefined; void this.queueBootstrap(session); } });
@@ -251,11 +255,19 @@ export class Controller {
           await cdp.send('Runtime.addBinding',{name:'__agzhLanguageChanged',executionContextName:WORLD});
           cdp.on('Runtime.bindingCalled',(event)=>{if(event.name==='__agzhLanguageChanged'&&event.executionContextId===session.contextId&&['zh','en'].includes(event.payload)){session.languageMode=event.payload;this.publish();}});
           await this.refreshRegistration(session);
-          await this.queueBootstrap(session);
+          await this.queueBootstrap(session, false);
         } catch(error) {
           const failed = this.pages.get(target.id); if (failed) { await this.detach(failed); this.pages.delete(target.id); }
           this.status.errors.push((error as Error).message==='新版页面结构尚未识别，已跳过该窗口'?(error as Error).message:'一个窗口注入失败');
         }
+      }
+      if (!this.paused && !this.stopped && permitted.length > 0 && this.pages.size < permitted.length) {
+        if (this.unverifiedWindowRetries < 6) {
+          this.unverifiedWindowRetries++;
+          this.scheduleSync(1500);
+        }
+      } else {
+        this.unverifiedWindowRetries = 0;
       }
       const isVerified = this.verifiedBundle();
       const defaultMode = this.paused
@@ -290,7 +302,7 @@ export class Controller {
       if (this.syncAgain) { this.syncAgain = false; this.scheduleSync(); }
     }
   }
-  private queueBootstrap(session: PageSession): Promise<void> {
+  private queueBootstrap(session: PageSession, reportUnhandledError = true): Promise<void> {
     if(session.detaching)return Promise.resolve();
     session.updateChain = session.updateChain.catch(() => {}).then(async () => {
       if (this.paused || this.stopped || session.detaching || this.pages.get(session.targetId)!==session) return;
@@ -340,7 +352,12 @@ export class Controller {
       if (state?.version !== this.options.dictionary.version) throw new Error('窗口词典版本未确认');
       session.languageMode=state.languageMode??'zh';
     });
-    session.updateChain.catch(() => { this.status.errors.push('一个窗口连接或恢复失败'); this.publish(); });
+    if (reportUnhandledError) {
+      session.updateChain.catch(() => {
+        if (!this.status.errors.includes('一个窗口连接或恢复失败')) this.status.errors.push('一个窗口连接或恢复失败');
+        this.publish();
+      });
+    }
     return session.updateChain;
   }
   private refreshRegistration(session: PageSession):Promise<void> {
@@ -396,6 +413,7 @@ export class Controller {
         }
       }
 
+      if (this.stopped || this.paused) return;
       const isVerified = this.verifiedBundle();
       if (!isVerified) {
         const msg = missing.length > 0

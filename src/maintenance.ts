@@ -6,6 +6,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { atomicJson } from './files.js';
+import { ReentrantMutex } from './mutex.js';
 
 export type CacheCategory = 'safe' | 'stateful';
 
@@ -202,6 +203,7 @@ export interface CacheMaintenanceOptions {
 }
 
 export class CacheMaintenance {
+  private mutex = new ReentrantMutex();
   private prepared?: {
     token: string;
     at: number;
@@ -483,6 +485,7 @@ export class CacheMaintenance {
   }
 
   async scan() {
+    return this.mutex.run(async () => {
     const [baseEntries, extEntries, statefulEntries] = await Promise.all([
       Promise.all(CACHE_NAMES.map(name => this.inspect(name))),
       Promise.all(EXTENDED_CACHE_NAMES.map(async extName => {
@@ -543,9 +546,11 @@ export class CacheMaintenance {
       running,
       scannedAt: Math.floor(Date.now() / 1000),
     };
+    }, { label: '缓存扫描' });
   }
 
   async clear(token: unknown, selectedNames?: unknown, options?: { force?: boolean }) {
+    return this.mutex.run(async () => {
     const force = options?.force === true;
     const saved = this.prepared;
     this.prepared = undefined;
@@ -693,9 +698,11 @@ export class CacheMaintenance {
       clearedFiles,
       restorePath: target,
     };
+    }, { label: '缓存清理' });
   }
 
   async restore(snapshotId: unknown) {
+    return this.mutex.run(async () => {
     if (typeof snapshotId !== 'string' || !/^GravityBox-缓存-\d+$/.test(snapshotId)) {
       throw Error('无效的恢复快照标识');
     }
@@ -838,5 +845,6 @@ export class CacheMaintenance {
       displacedCount: uniqueDisplacedCount,
       message: `已原位恢复 ${restoredNames.length} 个缓存项（${restoredNames.join('、')}）`,
     };
+    }, { label: '缓存恢复' });
   }
 }

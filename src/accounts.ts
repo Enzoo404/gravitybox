@@ -1150,6 +1150,7 @@ export class AccountsManager {
     await this.init();
     return this.withWriteLock(async () => {
       await atomicJson(this.indexPath, index);
+      this.indexCache = null;
     });
   }
 
@@ -1331,6 +1332,8 @@ export class AccountsManager {
       }
       // 成对原子写入账号文件与索引文件，杜绝两次独立落盘中间崩溃引起的索引不一致
       await commitAccountAndIndex(accountPath, toSave, this.indexPath, index);
+      this.indexCache = null;
+      this.accountCache.delete(toSave.id);
       Object.defineProperty(account, '_expectedFileDigest', {value:createHash('sha256').update(await readFile(accountPath)).digest('hex'),writable:true,configurable:true,enumerable:false});
     });
   }
@@ -1489,6 +1492,8 @@ export class AccountsManager {
         { path: accountPath, after: null },
         { path: this.indexPath, after: JSON.stringify(index, null, 2)+'\n' },
       ]);
+      this.indexCache = null;
+      this.accountCache.delete(id);
       return true;
     });
   }
@@ -2213,9 +2218,11 @@ export class AccountsManager {
 
     // 4. 检查 state.vscdb (补充 token 或补充 email)
     if (!extractedToken || !extractedEmail) {
-      const candidateVscdbPaths = options?.appSupportDir
+      const primaryProfileVscdb = join(this.target.profile, 'User', 'globalStorage', 'state.vscdb');
+      const fallbackVscdbPaths = options?.appSupportDir
         ? Array.from(new Set([this.target.name, ...allApplicationTargets().map(t => t.name)])).map(name => join(appSupportDir, name, 'User', 'globalStorage', 'state.vscdb'))
         : Array.from(new Set([this.target.profile, ...allApplicationTargets().map(t => t.profile)])).map(p => join(p, 'User', 'globalStorage', 'state.vscdb'));
+      const candidateVscdbPaths = Array.from(new Set(options?.appSupportDir ? [...fallbackVscdbPaths, primaryProfileVscdb] : [primaryProfileVscdb, ...fallbackVscdbPaths]));
       for (const vscdbPath of candidateVscdbPaths) {
         if (extractedToken && extractedEmail) break;
         try {
@@ -2628,7 +2635,18 @@ export class AccountsManager {
         const account = await this.getAccount(targetId);
         if (account) {
           if(error instanceof CloudQuotaAuthorityError && account.quota?.source!=='live') {
-            if(account.quota)await atomicJson(join(this.stateDir,'quota-rejected',`${account.id}-${Date.now()}.json`),{at:new Date().toISOString(),accountId:account.id,reason:error.message,quota:account.quota});
+            if(account.quota && ((account.quota.models?.length ?? 0) > 0 || (account.quota.quota_groups?.length ?? 0) > 0)) {
+              const rejectedDir = join(this.stateDir, 'quota-rejected');
+              await atomicJson(join(rejectedDir, `${account.id}-${Date.now()}.json`), {at:new Date().toISOString(),accountId:account.id,reason:error.message,quota:account.quota});
+              try {
+                const files = (await readdir(rejectedDir)).filter(f => f.endsWith('.json')).sort();
+                if (files.length > 20) {
+                  for (const old of files.slice(0, files.length - 20)) {
+                    await unlink(join(rejectedDir, old)).catch(() => {});
+                  }
+                }
+              } catch {}
+            }
             account.quota={models:[],quota_groups:[],last_updated:0,is_forbidden:false,subscription_tier:account.quota?.subscription_tier,model_forwarding_rules:{},source:'cloud',quota_warnings:['UNVERIFIED_CLOUD_SCOPE: '+error.message]};
           }
           // A recent read-only Switch snapshot is an explicit fallback, not a new cloud observation.

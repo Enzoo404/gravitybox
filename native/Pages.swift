@@ -79,10 +79,10 @@ final class DashboardPage: NSObject {
         let heroActions = horizontal([refreshQuotaButton, autoSwitchButton], spacing: 6)
         heroActions.alignment = .centerY
         let accountTopRow = identityHeader(identity: identity, actions: heroActions)
-        let first = horizontal([gemini5hBar, geminiWeeklyBar], spacing: 18)
+        let first = horizontal([gemini5hBar, geminiWeeklyBar], spacing: 14)
         first.distribution = .fillEqually
         first.alignment = .top
-        let second = horizontal([claude5hBar, claudeWeeklyBar], spacing: 18)
+        let second = horizontal([claude5hBar, claudeWeeklyBar], spacing: 14)
         second.distribution = .fillEqually
         second.alignment = .top
         argonStatusLabel.isHidden = true

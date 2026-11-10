@@ -317,10 +317,6 @@
       const style = document.createElement('style');
       style.id = '__agzh_micro_patch__';
       style.textContent = `
-        [data-agzh-loc="1"], [data-agzh-ui] {
-          -webkit-font-smoothing: antialiased;
-          font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-        }
         button[data-agzh-loc="1"], [role="button"][data-agzh-loc="1"], [role="tab"][data-agzh-loc="1"],
         button[data-agzh-ui], [role="button"][data-agzh-ui], [role="tab"][data-agzh-ui] {
           white-space: nowrap;

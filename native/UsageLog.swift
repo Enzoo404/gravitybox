@@ -224,7 +224,9 @@ final class UsageLogController: NSObject, NSTableViewDataSource, NSTableViewDele
             self.refreshButton.setBusy(false, available: self.app.reachable)
             self.searchSpinner.stopAnimation(nil); self.searchSpinner.isHidden = true
             switch response {
-            case .failure(let error): self.rows = []; self.table.reloadData(); self.status.stringValue = "读取请求记录失败：\(error.localizedDescription)"; self.status.textColor = accessibleDangerColor(); self.emptyTitle.stringValue = "无法读取请求记录"; self.updateEmptyState(failed:true)
+            case .failure(let error):
+                self.snapshotID = nil
+                self.rows = []; self.table.reloadData(); self.status.stringValue = "读取请求记录失败：\(error.localizedDescription)"; self.status.textColor = accessibleDangerColor(); self.emptyTitle.stringValue = "无法读取请求记录"; self.updateEmptyState(failed:true)
             case .success(let value):
                 self.snapshotID = value["snapshot_id"] as? String
                 self.rows = value["rows"] as? [[String: Any]] ?? []; self.total = intVal(value, "total")

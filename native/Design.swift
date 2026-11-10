@@ -464,6 +464,8 @@ class DesignButton: NSButton {
     deinit {
         hoverMotion.cancel()
         pressMotion.cancel()
+        spinnerTimer?.invalidate()
+        spinnerTimer = nil
     }
     override var wantsDefaultClipping: Bool { true }
 
@@ -472,8 +474,12 @@ class DesignButton: NSButton {
         if window == nil {
             hoverMotion.cancel()
             pressMotion.cancel()
+            spinnerTimer?.invalidate()
+            spinnerTimer = nil
             if hoverProgress != 0 { hoverProgress = 0 }
             if pressProgress != 0 { pressProgress = 0 }
+        } else {
+            syncSpinnerTimer()
         }
     }
 
@@ -501,6 +507,19 @@ class DesignButton: NSButton {
         return s
     }()
 
+    private func syncSpinnerTimer() {
+        spinnerTimer?.invalidate()
+        spinnerTimer = nil
+        guard showsSpinner, Design.shouldAnimate(in: self) else { return }
+        let t = Timer(timeInterval: 1.0 / 12.0, repeats: true) { [weak self] _ in
+            guard let self, self.showsSpinner else { return }
+            self.spinnerPhase = (self.spinnerPhase + 1) % 8
+            self.needsDisplay = true
+        }
+        RunLoop.main.add(t, forMode: .common)
+        spinnerTimer = t
+    }
+
     var showsSpinner: Bool = false {
         didSet {
             guard oldValue != showsSpinner else { return }
@@ -514,20 +533,10 @@ class DesignButton: NSButton {
                 ])
             }
             activitySpinner.isHidden = !showsSpinner
-            spinnerTimer?.invalidate()
-            spinnerTimer = nil
             if showsSpinner {
                 spinnerPhase = 0
-                if Design.shouldAnimate(in: self) {
-                    let t = Timer(timeInterval: 1.0 / 12.0, repeats: true) { [weak self] _ in
-                        guard let self, self.showsSpinner else { return }
-                        self.spinnerPhase = (self.spinnerPhase + 1) % 8
-                        self.needsDisplay = true
-                    }
-                    RunLoop.main.add(t, forMode: .common)
-                    spinnerTimer = t
-                }
             }
+            syncSpinnerTimer()
             invalidateIntrinsicContentSize()
             needsDisplay = true
         }
@@ -1525,6 +1534,11 @@ final class DesignSegmentedControl: NSControl {
         if let action {
             NSApp.sendAction(action, to: target, from: self)
         }
+    }
+
+    override func layout() {
+        super.layout()
+        needsDisplay = true
     }
 
     private func interpolatedThumbRect() -> NSRect {

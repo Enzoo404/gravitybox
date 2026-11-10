@@ -282,6 +282,9 @@ try {
   await check('一键中英双语热切换（Toggle）、CSS Micro-Patch 及 data-agzh-loc 生效验证', async () => {
     const hasStyle = await main.evaluate('!!document.getElementById("__agzh_micro_patch__")');
     assert.equal(hasStyle, true);
+    const patchCss = await main.evaluate('document.getElementById("__agzh_micro_patch__")?.textContent ?? ""');
+    assert.equal(patchCss.includes('font-family'), false, 'CSS Micro-Patch 不得覆盖宿主 font-family 继承链');
+    assert.equal(patchCss.includes('-webkit-font-smoothing'), false, 'CSS Micro-Patch 不得覆盖宿主字体抗锯齿模式');
 
     // 验证 [data-agzh-loc="1"] 自动打标且应用了 white-space: nowrap
     const btnLoc = await main.evaluate('document.querySelector("#plain-btn")?.dataset?.agzhLoc');

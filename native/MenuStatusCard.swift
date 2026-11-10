@@ -421,6 +421,7 @@ final class MenuStatusCard: NSView {
         accountSwitcher.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         let header = horizontal([accountSwitcher, refreshButton], spacing: 8)
+        header.detachesHiddenViews = false
         accountSwitcher.translatesAutoresizingMaskIntoConstraints = false
         accountSwitcher.widthAnchor.constraint(equalTo: header.widthAnchor, constant: -34).isActive = true
         header.alignment = .centerY
@@ -597,7 +598,12 @@ final class MenuStatusCard: NSView {
         show(claude5h, contract.claudePrimary.window); show(claudeWeekly, contract.claudeWeekly)
         let argonState = contract.argon
         let argonPlaceholder = argonState?.availability == "disabled" ? "不可用" : (argonState?.placeholder ?? "未知")
-        argon.titleLabel.stringValue = argonState?.periodLabel == "5小时" ? "5 小时" : "每周"
+        switch argonState?.periodLabel {
+        case "5小时": argon.titleLabel.stringValue = "5 小时"
+        case "每周": argon.titleLabel.stringValue = "每周"
+        case "周期未知": argon.titleLabel.stringValue = "周期未知"
+        default: argon.titleLabel.stringValue = "模型配额"
+        }
         argon.apply(percentage: argonState?.percentage, placeholder: argonPlaceholder,
                     reset: argonState?.percentage == nil ? "" : (argonState?.resetText ?? ""), stale: argonState?.stale == true)
 
@@ -652,7 +658,7 @@ final class MenuStatusCard: NSView {
 final class MenuCardDivider: NSView {
     override var isOpaque: Bool { false }
     override func draw(_ dirtyRect: NSRect) {
-        NSColor.separatorColor.setFill(); bounds.fill()
+        designHairline(lightAlpha: 0.06, darkAlpha: 0.07).setFill(); bounds.fill()
     }
     override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); needsDisplay = true }
 }
@@ -788,6 +794,11 @@ final class MenuSegmentedTabsView: NSView {
         setAccessibilityLabel(accessibilityLabel)
     }
     required init?(coder: NSCoder) { fatalError() }
+
+    override func layout() {
+        super.layout()
+        needsDisplay = true
+    }
 
     func setSelected(_ index: Int) {
         let clamped = max(0, min(items.count - 1, index))
@@ -1607,7 +1618,7 @@ final class MenuExpandableAccountCardView: NSBox {
 
         if isCurrent {
             statusBadge.title = isLiveVerified ? "当前账号" : "已选记录"
-            statusBadge.tint = Design.blue
+            statusBadge.tint = isLiveVerified ? Design.blue : Design.inactivePill
             statusBadge.isHidden = false
         } else if isRecommended {
             statusBadge.title = "推荐备用"
@@ -1786,7 +1797,7 @@ final class MenuPanelController: NSViewController {
     let quotaWarningLabel = text("", size: 11, color: accessibleWarningColor(), wrap: true)
     let quotaFooterLabel = text("", size: 11, color: .secondaryLabelColor, wrap: true)
     let quotaGroupsContainer = NSStackView()
-    let quotaEmptyButton = button("前往账号页添加…", target: nil, action: #selector(openMainFromFooter))
+    let quotaEmptyButton = button("前往账号页添加…", target: nil, action: #selector(openAccountsFromQuotaEmpty))
 
     // Tab 2: Accounts Controls
     let accountsCountLabel = text("0 个", size: 11, color: Design.secondary)
@@ -2393,6 +2404,10 @@ final class MenuPanelController: NSViewController {
         app.openMainWindowFromMenuPanel(tab: selectedTab, usagePeriod: selectedPeriod)
     }
 
+    @objc private func openAccountsFromQuotaEmpty() {
+        app.showAccountsFromMenuCard()
+    }
+
     @objc private func copyQuotaHeaderEmail() {
         guard !quotaHeaderEmail.isEmpty else { return }
         NSPasteboard.general.clearContents()
@@ -2493,8 +2508,7 @@ final class MenuPanelController: NSViewController {
         let usd = doubleVal(summary, "estimatedUsd")
         let prompt = intVal(summary, "promptTokens")
         let cached = intVal(summary, "cachedTokens")
-        let cacheWrite = intVal(summary, "cacheWriteTokens")
-        let denom = prompt + cached + cacheWrite
+        let denom = prompt + cached
         let cacheHit = doubleVal(summary, "cacheHitRate", fallback: denom > 0 ? (Double(cached) / Double(denom)) * 100.0 : 0.0)
         let pricedCount = intVal(summary, "pricedModels", fallback: intVal(summary, "priced_models"))
         let unpricedCount = intVal(summary, "unpricedModels", fallback: intVal(summary, "unpriced_models"))
@@ -2786,7 +2800,7 @@ final class MenuPanelController: NSViewController {
             quotaStatusBadge.isHidden = false
         } else if !liveEmail.isEmpty {
             quotaStatusBadge.title = "已选记录 · 非运行账号"
-            quotaStatusBadge.tint = .systemOrange
+            quotaStatusBadge.tint = accessibleWarningColor()
             quotaStatusBadge.isHidden = false
         } else {
             quotaStatusBadge.title = "已选记录"
@@ -2807,7 +2821,12 @@ final class MenuPanelController: NSViewController {
 
         let argonState = contract.argon
         let argonPlaceholder = argonState?.availability == "disabled" ? "不可用" : (argonState?.placeholder ?? "未知")
-        quotaArgon.titleLabel.stringValue = argonState?.periodLabel == "5小时" ? "5 小时" : "每周"
+        switch argonState?.periodLabel {
+        case "5小时": quotaArgon.titleLabel.stringValue = "5 小时"
+        case "每周": quotaArgon.titleLabel.stringValue = "每周"
+        case "周期未知": quotaArgon.titleLabel.stringValue = "周期未知"
+        default: quotaArgon.titleLabel.stringValue = "模型配额"
+        }
         quotaArgon.apply(percentage: argonState?.percentage, placeholder: argonPlaceholder, reset: argonState?.percentage == nil ? "" : (argonState?.resetText ?? ""), stale: argonState?.stale == true)
 
         var warnings: [String] = []

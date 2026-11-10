@@ -36,8 +36,10 @@ final class AppUpdateManager {
     private var checkInFlight = false
     private var downloadInFlight = false
     private var installationInFlight = false
+    private var pendingInstallAfterDownload = false
     private var cleanupInFlight = false
     private var launchCleanupCompleted = false
+    private var launchAcknowledgeAttempted = false
 
     init(app: Assistant) {
         self.app = app
@@ -61,7 +63,7 @@ final class AppUpdateManager {
                 return Self.normalizeVersion(ver)
             }
         }
-        return "1.0.4"
+        return "1.0.5"
     }
 
     var currentBuildDisplay: String {
@@ -86,7 +88,7 @@ final class AppUpdateManager {
                 break
             }
         }
-        return buildStr.isEmpty ? "10004" : buildStr
+        return buildStr.isEmpty ? "10005" : buildStr
     }
 
     static func normalizeVersion(_ raw: String) -> String {
@@ -133,6 +135,12 @@ final class AppUpdateManager {
         onStateChanged?()
     }
 
+    func simulateChecking() {
+        state = .checking
+        app.syncUpdatePromptControls()
+        onStateChanged?()
+    }
+
     func checkForUpdates(silent: Bool = false) {
         guard !checkInFlight, !downloadInFlight, !installationInFlight else { return }
         #if NATIVE_UI_TEST
@@ -174,6 +182,8 @@ final class AppUpdateManager {
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 if !silent {
                     self.transition(.failed("获取 GitHub 版本信息失败（HTTP \(statusCode)）"))
+                } else {
+                    self.transition(self.availableRelease.map { .updateAvailable($0) } ?? .idle)
                 }
                 return
             }
@@ -386,12 +396,18 @@ final class AppUpdateManager {
             }
             DispatchQueue.main.async {
                 self.downloadInFlight = false
+                let shouldAutoInstall = self.pendingInstallAfterDownload
+                self.pendingInstallAfterDownload = false
                 switch result {
                 case .success(let file):
                     self.downloadedDMGURL = file
                     self.transition(.readyToInstall(release, file))
+                    if shouldAutoInstall && !self.installationInFlight {
+                        self.installationInFlight = true
+                        self.executeInstall(release: release, dmgFile: file)
+                    }
                 case .failure(let error):
-                    self.transition(silent ? .updateAvailable(release) : .failed(error.localizedDescription))
+                    self.transition((silent && !shouldAutoInstall) ? .updateAvailable(release) : .failed(error.localizedDescription))
                 }
                 completion?(result)
             }
@@ -399,7 +415,12 @@ final class AppUpdateManager {
     }
 
     func installRelease(_ release: AppReleaseInfo) {
-        guard !installationInFlight, !downloadInFlight else { return }
+        guard !installationInFlight else { return }
+        if downloadInFlight {
+            pendingInstallAfterDownload = true
+            transition(.downloading(release))
+            return
+        }
         installationInFlight = true
         // The cached path must pass the same validation as a newly downloaded package.
         preDownloadRelease(release, silent: false) { [weak self] result in
@@ -463,13 +484,24 @@ final class AppUpdateManager {
             launchCleanupCompleted = true
             return
         }
+        let needAck = hasReceipt && !launchAcknowledgeAttempted
+        launchAcknowledgeAttempted = true
         cleanupInFlight = true
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self else { return }
-            let confirmed: Bool
+            if needAck {
+                _ = UpdateInstaller.acknowledge(arguments: arguments, state: stateDir, bundle: bundle)
+            }
+            var confirmed = false
             if hasReceipt {
-                // Ready is only the new app's acknowledgement; wait for the helper's committed confirmation.
-                confirmed = UpdateInstaller.isConfirmed(arguments: arguments, state: stateDir, bundle: bundle)
+                // Ready is only the new app's acknowledgement; wait briefly for the helper's committed confirmation.
+                for _ in 0..<15 {
+                    if UpdateInstaller.isConfirmed(arguments: arguments, state: stateDir, bundle: bundle) {
+                        confirmed = true
+                        break
+                    }
+                    Thread.sleep(forTimeInterval: 0.1)
+                }
             } else {
                 // Manual drag-and-drop upgrades have no helper receipt: validate the running app after backend readiness.
                 confirmed = (try? UpdateInstaller.validateApp(bundle, version: version, appHash: UpdatePackageIntegrity.appHash(bundle))) != nil
@@ -480,7 +512,7 @@ final class AppUpdateManager {
             }
             DispatchQueue.main.async {
                 self.cleanupInFlight = false
-                self.launchCleanupCompleted = confirmed
+                self.launchCleanupCompleted = confirmed || !hasReceipt
             }
         }
         #endif
@@ -512,6 +544,32 @@ final class AppUpdateManager {
                     if fm.fileExists(atPath: entryURL.appendingPathComponent(UpdateInstaller.receiptName).path) { continue }
                     if (try? fm.removeItem(at: entryURL)) != nil {
                         cleanedCount += 1
+                    }
+                    continue
+                }
+
+                if isDir && name == "transactions" {
+                    if case .installing = state { continue }
+                    if let txEntries = try? fm.contentsOfDirectory(at: entryURL, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey], options: [.skipsHiddenFiles]) {
+                        for txURL in txEntries {
+                            let txValues = try? txURL.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+                            guard txValues?.isSymbolicLink != true, txValues?.isDirectory == true, txURL.lastPathComponent.hasPrefix("install-") else { continue }
+                            let receiptURL = txURL.appendingPathComponent(UpdateInstaller.receiptName)
+                            if !fm.fileExists(atPath: receiptURL.path) {
+                                if (try? fm.removeItem(at: txURL)) != nil { cleanedCount += 1 }
+                                continue
+                            }
+                            if let rData = try? Data(contentsOf: receiptURL),
+                               let receipt = try? JSONDecoder().decode(UpdateInstallReceipt.self, from: rData),
+                               receipt.phase == "confirmed" {
+                                for stagedName in ["GravityBox.app", "installer", "mount"] {
+                                    let stagedItem = txURL.appendingPathComponent(stagedName)
+                                    if fm.fileExists(atPath: stagedItem.path), (try? fm.removeItem(at: stagedItem)) != nil {
+                                        cleanedCount += 1
+                                    }
+                                }
+                            }
+                        }
                     }
                     continue
                 }
@@ -1165,6 +1223,7 @@ final class PreferencesController: NSObject {
 
     @objc func showMaintenanceSheet() {
         guard let window = app.window else { return }
+        if let active = window.activeSheetWindow, active !== maintenanceSheet?.sheet { return }
         if maintenanceSheet == nil {
             maintenanceSheet = MaintenanceSheetController(app: app)
         }
@@ -1173,6 +1232,7 @@ final class PreferencesController: NSObject {
 
     @objc func showUpdateSheet() {
         guard let window = app.window else { return }
+        if let active = window.activeSheetWindow, active !== updateSheet?.sheet { return }
         if updateSheet == nil {
             updateSheet = UpdateSheetController(app: app)
         }
@@ -1204,6 +1264,7 @@ final class PreferencesController: NSObject {
         } else {
             translationSwitch.toolTip = app.statusValue.enabled ? "点击关闭界面汉化" : "点击开启界面汉化"
         }
+        login.state = SMAppService.mainApp.status == .enabled ? .on : .off
         syncLifecycleSwitch.state = app.configuration.value.syncAntigravityLifecycle ? .on : .off
         refresh.selectItem(at: Self.refreshIntervals.firstIndex(of: app.configuration.value.quotaRefreshMinutes) ?? 0)
         refreshUpdateRowState()

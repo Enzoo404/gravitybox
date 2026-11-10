@@ -1125,8 +1125,11 @@ final class QuotaBarView: NSView {
             image.setAccessibilityElement(false)
         }
 
-        leftStack = horizontal([iconView, secondaryIconView, titleLabel], spacing: 5)
-        topRow = horizontal([leftStack, flexibleSpace(), resetLabel, percentageLabel], spacing: 6)
+        leftStack = horizontal([iconView, secondaryIconView, titleLabel], spacing: 4)
+        let topSpacer = flexibleSpace()
+        topRow = horizontal([leftStack, topSpacer, resetLabel, percentageLabel], spacing: 4)
+        topRow.setCustomSpacing(2, after: leftStack)
+        topRow.setCustomSpacing(2, after: topSpacer)
         topRow.alignment = .centerY
 
         containerStack = vertical([topRow, trackView], spacing: 4.5)
