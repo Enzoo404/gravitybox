@@ -91,11 +91,18 @@ export function applyPopoverGeometry(popoverEl, arrowEl, pos) {
   }
 
   // 包含块偏置校准：若宿主父级存在 transform/filter/contain 导致 fixed 相对非视口定位，立即补偿差值
+  // 测量期间临时抑制自身入场动画 transform，杜绝 translateY(4px)/scale(0.985) 被误判为祖先包含块偏移
   if (typeof popoverEl.getBoundingClientRect === 'function') {
     const win = typeof window !== 'undefined' ? window : globalThis.window;
     const vh = Number(win?.innerHeight) || 0;
     if (vh > 0) {
+      const prevTransform = popoverEl.style.transform || '';
+      const prevTransition = popoverEl.style.transition || '';
+      popoverEl.style.transition = 'none';
+      popoverEl.style.transform = 'none';
       const actualRect = popoverEl.getBoundingClientRect();
+      popoverEl.style.transform = prevTransform;
+      popoverEl.style.transition = prevTransition;
       if (actualRect && (actualRect.width > 0 || actualRect.height > 0)) {
         const expectedBottomY = vh - pos.bottom;
         const deltaX = actualRect.left - pos.left;

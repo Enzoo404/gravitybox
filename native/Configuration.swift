@@ -38,6 +38,7 @@ struct AppConfiguration: Codable {
     var navigationVersion: Int?
     var quotaRefreshMinutes = 0
     var localizationShortcutEnabled = true
+    var hudEnabled = true
     var syncAntigravityLifecycle = false
     var autoUpdateEnabled = false
     var lastCleanedVersion = ""
@@ -48,7 +49,7 @@ struct AppConfiguration: Codable {
     var applicationChannel = "stable"
 
     enum CodingKeys: String, CodingKey {
-        case localizationShortcutEnabled, quotaRefreshMinutes, schema, lastPage, navigationVersion, syncAntigravityLifecycle, autoUpdateEnabled, lastCleanedVersion, accountsCollapsed, menuSelectedTab, menuUsagePeriod, menuTrendMetric, applicationChannel
+        case localizationShortcutEnabled, hudEnabled, quotaRefreshMinutes, schema, lastPage, navigationVersion, syncAntigravityLifecycle, autoUpdateEnabled, lastCleanedVersion, accountsCollapsed, menuSelectedTab, menuUsagePeriod, menuTrendMetric, applicationChannel
     }
 
     init() {}
@@ -56,6 +57,7 @@ struct AppConfiguration: Codable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         localizationShortcutEnabled = (try? container.decode(Bool.self, forKey: .localizationShortcutEnabled)) ?? true
+        hudEnabled = (try? container.decode(Bool.self, forKey: .hudEnabled)) ?? true
         quotaRefreshMinutes = (try? container.decode(Int.self, forKey: .quotaRefreshMinutes)) ?? 0
         schema = (try? container.decode(Int.self, forKey: .schema)) ?? 2
         lastPage = (try? container.decode(Int.self, forKey: .lastPage)) ?? 0

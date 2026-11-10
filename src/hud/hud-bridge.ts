@@ -11,6 +11,9 @@ export interface ActivePaneSession {
   sessionRevision: number;
   modelId: string;
   isStreaming: boolean;
+  isSubagentRunning: boolean;
+  runningSubagentCount: number;
+  childConversationIds: string[];
   lastUpdatedAt: number;
   lastMetricsKey: string;
 }
@@ -43,7 +46,7 @@ export class CdpHudBridge implements ICdpHudBridge {
         geminiDir: options?.geminiDir,
         conversationsDir: options?.conversationsDir,
       });
-    const interval = options?.pollIntervalMs ?? 1500;
+    const interval = options?.pollIntervalMs ?? 1000;
     if (interval > 0) {
       this.pollTimer = setInterval(() => {
         void this.pollActiveSessions();
@@ -75,11 +78,19 @@ export class CdpHudBridge implements ICdpHudBridge {
 
   public detachTarget(targetId: string): void {
     this.targets.delete(targetId);
+    this.detachTargetPanes(targetId);
+  }
+
+  public detachTargetPanes(targetId: string): void {
     for (const key of this.activePanes.keys()) {
       if (key.startsWith(`${targetId}::`)) {
         this.activePanes.delete(key);
       }
     }
+  }
+
+  public clearActivePanes(): void {
+    this.activePanes.clear();
   }
 
   /**
@@ -120,6 +131,26 @@ export class CdpHudBridge implements ICdpHudBridge {
         ? existing.sessionRevision
         : (existing?.sessionRevision ?? 0) + 1;
 
+    const isSubagentRunning =
+      typeof parsed.isSubagentRunning === 'boolean'
+        ? parsed.isSubagentRunning
+        : existing && existing.conversationId === conversationId
+        ? existing.isSubagentRunning
+        : false;
+
+    const runningSubagentCount =
+      typeof parsed.runningSubagentCount === 'number' && parsed.runningSubagentCount >= 0
+        ? parsed.runningSubagentCount
+        : isSubagentRunning
+        ? Math.max(1, existing?.runningSubagentCount ?? 1)
+        : 0;
+
+    const childConversationIds = Array.isArray(parsed.childConversationIds)
+      ? parsed.childConversationIds.filter((id): id is string => typeof id === 'string' && id.length > 0)
+      : existing && existing.conversationId === conversationId
+      ? existing.childConversationIds
+      : [];
+
     const session: ActivePaneSession = {
       targetId,
       cascadeId,
@@ -128,11 +159,14 @@ export class CdpHudBridge implements ICdpHudBridge {
       modelId:
         (typeof parsed.modelId === 'string' && parsed.modelId.trim()) ||
         existing?.modelId ||
-        'gemini-4-argon',
+        'gemini-3.8-flash',
       isStreaming:
         typeof parsed.isStreaming === 'boolean'
-          ? parsed.isStreaming
-          : existing?.isStreaming ?? false,
+          ? parsed.isStreaming || isSubagentRunning
+          : (existing?.isStreaming ?? false) || isSubagentRunning,
+      isSubagentRunning,
+      runningSubagentCount,
+      childConversationIds,
       lastUpdatedAt: Date.now(),
       lastMetricsKey:
         existing && existing.conversationId === conversationId ? existing.lastMetricsKey : '',
@@ -155,6 +189,9 @@ export class CdpHudBridge implements ICdpHudBridge {
       sessionRevision: session.sessionRevision,
       modelId: session.modelId,
       isStreaming: session.isStreaming,
+      isSubagentRunning: session.isSubagentRunning,
+      runningSubagentCount: session.runningSubagentCount,
+      childConversationIds: session.childConversationIds,
     });
 
     // 若异步查询期间会话已被切换或移除，丢弃陈旧结果
@@ -167,7 +204,29 @@ export class CdpHudBridge implements ICdpHudBridge {
       return;
     }
 
-    const fingerprint = `${metrics.conversationId}:${metrics.sessionRevision}:${metrics.isStreaming}:${metrics.session.turns}:${metrics.session.steps}:${metrics.tokens.totalTokens}:${metrics.context.modelId}:${metrics.context.usedTokens}:${metrics.context.capacityTokens}`;
+    const fingerprint = [
+      metrics.conversationId,
+      metrics.sessionRevision,
+      metrics.isStreaming ? 1 : 0,
+      metrics.isSubagentRunning ? 1 : 0,
+      metrics.runningSubagentCount ?? 0,
+      metrics.session.turns,
+      metrics.session.steps,
+      metrics.session.subagentCount ?? 0,
+      metrics.session.subagentSteps ?? 0,
+      Math.round(metrics.session.modelDurationSeconds),
+      Math.round(metrics.session.toolDurationSeconds),
+      metrics.session.outputTps,
+      metrics.tokens.totalTokens,
+      metrics.tokens.cachedReadTokens,
+      metrics.tokens.cacheWriteTokens ?? 0,
+      metrics.tokens.outputTokens,
+      metrics.context.modelId,
+      metrics.context.usedTokens,
+      metrics.context.peakContextTokens ?? 0,
+      metrics.context.capacityTokens,
+    ].join(':');
+
     if (!forcePush && latestSession.lastMetricsKey === fingerprint) {
       return;
     }

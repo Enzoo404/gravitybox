@@ -46,7 +46,12 @@ try {
 }
 const socketPath = join(stateDir, 'control.sock');
 let configuredChannel: unknown;
-try { configuredChannel = JSON.parse(readFileSync(join(stateDir, 'config.json'), 'utf8')).applicationChannel; }
+let configuredHudEnabled: unknown;
+try {
+  const parsedCfg = JSON.parse(readFileSync(join(stateDir, 'config.json'), 'utf8'));
+  configuredChannel = parsedCfg.applicationChannel;
+  configuredHudEnabled = parsedCfg.hudEnabled;
+}
 catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error('应用版本配置无法读取，原文件已保留'); }
 const explicitChannelArg = option('--channel');
 const explicitAppArg = option('--app');
@@ -403,8 +408,21 @@ async function run() {
   }
   let applyChain = Promise.resolve();
   const shortcutEnabled = !!fixture;
-  let initiallyPaused=false;try { initiallyPaused=JSON.parse(await readFile(join(stateDir,'runtime-preferences.json'),'utf8')).translationEnabled===false; } catch {}
-  const controller = new Controller({ initiallyPaused, shortcutEnabled, appPath, profile, fixture, dictionary: store.current!, stateDir: channelStateDir, selectDictionary:async version=>{const dictionary=await store.selectVersion(version);await applyChain;return dictionary;}, reloadDictionary: async () => { await store.reload(); await applyChain; if (store.lastError) throw new Error(store.lastError); }, onStatus });
+  let initiallyPaused = false;
+  let hudEnabled = configuredHudEnabled !== false;
+  try {
+    const runtimePrefs = JSON.parse(await readFile(join(stateDir, 'runtime-preferences.json'), 'utf8'));
+    initiallyPaused = runtimePrefs.translationEnabled === false;
+    if (typeof runtimePrefs.hudEnabled === 'boolean') hudEnabled = runtimePrefs.hudEnabled;
+  } catch {}
+  const saveRuntimePreferences = async (patch: { translationEnabled?: boolean; hudEnabled?: boolean }) => {
+    let currentPrefs: Record<string, unknown> = {};
+    try { currentPrefs = JSON.parse(await readFile(join(stateDir, 'runtime-preferences.json'), 'utf8')); } catch {}
+    const nextPrefs = { ...currentPrefs, translationEnabled: controller.snapshot().translationEnabled !== false, hudEnabled, ...patch };
+    if (typeof patch.hudEnabled === 'boolean') hudEnabled = patch.hudEnabled;
+    await atomicJson(join(stateDir, 'runtime-preferences.json'), nextPrefs);
+  };
+  const controller = new Controller({ initiallyPaused, shortcutEnabled, hudEnabled, appPath, profile, fixture, geminiDir, dictionary: store.current!, stateDir: channelStateDir, selectDictionary:async version=>{const dictionary=await store.selectVersion(version);await applyChain;return dictionary;}, reloadDictionary: async () => { await store.reload(); await applyChain; if (store.lastError) throw new Error(store.lastError); }, onStatus });
   const tasks = new Tasks(stateDir, () => onStatus(controller.snapshot()));statusTasks=tasks; await tasks.start();
   let cacheChain = Promise.resolve();
   const cache = () => { const value = store.current; cacheChain = cacheChain.catch(() => {}).then(() => atomicJson(join(channelStateDir, 'last-valid-dictionary.json'), value)); cacheChain.catch(() => {}); };
@@ -844,6 +862,7 @@ async function run() {
       commandChain = commandChain.catch(() => {}).then(async () => {
         try {
           if(command==='shortcut_set'){if(!fixture)throw new Error('中英对照已移除');await controller.configureShortcut(parsed.enabled===true);reply({ok:true});return;}
+          if(command==='hud_set'){const nextHud=parsed.enabled!==false;await saveRuntimePreferences({hudEnabled:nextHud});await controller.configureHud(nextHud);await writeChain;reply({ok:true,status:controller.snapshot()});return;}
           if(command==='maintenance_clear'){reply(await cacheMaintenance.clear(parsed.token, parsed.selectedNames, { force: parsed.force === true }));return;}
           if(command==='maintenance_restore'){reply(await cacheMaintenance.restore(parsed.snapshotId ?? parsed.id));return;}
           if(command==='maintenance_preflight'){if(tasks.list().some(t=>t.state==='running'))throw new Error('请先等待当前任务完成，再执行维护');reply(await controller.maintenancePreflight());return;}
@@ -988,8 +1007,8 @@ async function run() {
               staleAccounts: accounts.filter((account: any) => (account?.quota?.stale_groups?.length ?? 0) > 0).length });
             return;
           }
-          if (command === 'pause' || command === 'restore') { await atomicJson(join(stateDir,'runtime-preferences.json'),{translationEnabled:false});await tasks.stop();await controller.pause(); }
-          else if (command === 'resume' || command === 'reapply') {await atomicJson(join(stateDir,'runtime-preferences.json'),{translationEnabled:true});await controller.resume();}
+          if (command === 'pause' || command === 'restore') { await saveRuntimePreferences({translationEnabled:false});await tasks.stop();await controller.pause(); }
+          else if (command === 'resume' || command === 'reapply') {await saveRuntimePreferences({translationEnabled:true});await controller.resume();}
           else if (command === 'toggle') {if(!fixture)throw new Error('中英对照已移除');await controller.toggleLanguage();}
           else if (command === 'reload') await store.reload();
           else if (command === 'stop') { await accountLogin.close(); await tasks.stop();store.close(); await controller.stop(); stopping = true; }

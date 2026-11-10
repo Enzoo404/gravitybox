@@ -1,6 +1,7 @@
 /**
- * 模型物理上下文窗口容量映射目录与基线常量配置
- * 对齐 GRAVITYBOX-SPEC-HUD-001 第 5.2.6 节与 assets/model-catalog.json
+ * Antigravity 模型有效上下文窗口阈值映射目录
+ * 严格对齐 Antigravity 官方运行时与 assets/model-catalog.json 标准上下文阈值 (<=200K / 256K / 128K)
+ * 彻底剔除从第三方插件照搬的 1M / 2M 虚假容量
  */
 
 export interface ModelCapacitySpec {
@@ -11,14 +12,16 @@ export interface ModelCapacitySpec {
   isFallback: boolean;
 }
 
-/** 系统提示词默认基线 Token (1.9K) */
-export const DEFAULT_SYSTEM_PROMPT_BASELINE_TOKENS = 1_900;
+/**
+ * Antigravity 标准上下文压缩阈值 (对齐 assets/model-catalog.json <=200K 标准上下文基准)
+ */
+export const DEFAULT_CONTEXT_CAPACITY_TOKENS = 200_000;
 
-/** 工具定义默认基线 Token (7.6K) */
-export const DEFAULT_TOOL_DEFINITIONS_BASELINE_TOKENS = 7_600;
-
-/** 默认安全兜底物理上下文容量 (1M = 1,048,576 Tokens) */
-export const DEFAULT_CONTEXT_CAPACITY_TOKENS = 1_048_576;
+/**
+ * 保留纯数学辅助函数默认参数导出以兼容历史单元测试调用，但生产渲染层严禁展示虚构基线
+ */
+export const DEFAULT_SYSTEM_PROMPT_BASELINE_TOKENS = 0;
+export const DEFAULT_TOOL_DEFINITIONS_BASELINE_TOKENS = 0;
 
 interface ModelFamilyRule {
   pattern: RegExp;
@@ -27,29 +30,28 @@ interface ModelFamilyRule {
   defaultDisplayName: string;
 }
 
+/**
+ * Antigravity 宿主内各模型系列的真实有效上下文阈值
+ * 在 Antigravity 中，Gemini 与 Claude 系列均在 ~200K 标准上下文窗口内运行并在达到阈值时自动触发 Checkpoint 压缩，
+ * 绝不展示虚构的 1M / 2M 容量。
+ */
 const MODEL_CAPACITY_RULES: readonly ModelFamilyRule[] = [
   {
-    pattern: /^gemini-(?:1\.5|2\.0|2\.5)-pro/i,
-    capacityTokens: 2_097_152,
-    capacityCompact: '2M',
+    pattern: /^gemini-(?:1\.5|2\.0|2\.5|3(?:\.\d+)?)-pro|^gemini-pro/i,
+    capacityTokens: 200_000,
+    capacityCompact: '200K',
     defaultDisplayName: 'Gemini Pro',
   },
   {
-    pattern: /^gemini-(?:3(?:\.\d+)?)-pro/i,
-    capacityTokens: 2_097_152,
-    capacityCompact: '2M',
-    defaultDisplayName: 'Gemini 3 Pro',
-  },
-  {
     pattern: /^gemini-(?:1\.5|2\.0|2\.5|3(?:\.\d+)?)-flash/i,
-    capacityTokens: 1_048_576,
-    capacityCompact: '1M',
+    capacityTokens: 200_000,
+    capacityCompact: '200K',
     defaultDisplayName: 'Gemini Flash',
   },
   {
     pattern: /^gemini-4-argon/i,
-    capacityTokens: 1_048_576,
-    capacityCompact: '1M',
+    capacityTokens: 200_000,
+    capacityCompact: '200K',
     defaultDisplayName: 'Gemini 4 Argon',
   },
   {
@@ -75,14 +77,23 @@ const MODEL_CAPACITY_RULES: readonly ModelFamilyRule[] = [
 const DISPLAY_NAME_MAP: Record<string, string> = {
   'gemini-4-argon': 'Gemini 4 Argon',
   'gemini-4-argon-trial': 'Gemini 4 Argon Trial',
+  'gemini-3.9-flash': 'Gemini 3.9 Flash',
   'gemini-3.8-flash': 'Gemini 3.8 Flash',
   'gemini-3.8-flash-n': 'Gemini 3.8 Flash',
+  'gemini-3.8-flash-tiered': 'Gemini 3.8 Flash',
   'gemini-3.8-flash-exp-a': 'Gemini 3.8 Flash',
   'gemini-3.8-pro': 'Gemini 3.8 Pro',
   'gemini-3.7-flash': 'Gemini 3.7 Flash',
+  'gemini-3.7-flash-tiered': 'Gemini 3.7 Flash',
+  'gemini-3.7-flash-safety-le': 'Gemini 3.7 Flash',
   'gemini-3.6-flash': 'Gemini 3.6 Flash',
+  'gemini-3.6-flash-tiered': 'Gemini 3.6 Flash',
+  'gemini-3.6-flash-exp-a': 'Gemini 3.6 Flash',
   'gemini-3.5-flash': 'Gemini 3.5 Flash',
+  'gemini-3-flash': 'Gemini 3 Flash',
+  'gemini-3-flash-a': 'Gemini 3 Flash',
   'gemini-3.1-pro': 'Gemini 3.1 Pro',
+  'gemini-pro-default': 'Gemini Pro',
   'gemini-2.5-pro': 'Gemini 2.5 Pro',
   'gemini-2.5-flash': 'Gemini 2.5 Flash',
   'claude-sonnet-5-5': 'Claude Sonnet 5.5',
@@ -98,23 +109,30 @@ const DISPLAY_NAME_MAP: Record<string, string> = {
 };
 
 /**
- * 归一化前端 DOM 探针或配置传入的模型字符串，解析对应的物理上下文容量与展示名称
+ * 归一化前端 DOM 探针或 SQLite gen_metadata 传入的模型字符串，解析对应的 Antigravity 有效上下文阈值与展示名称
  */
 export function resolveModelCapacity(rawModelInput?: string | null): ModelCapacitySpec {
   const raw = typeof rawModelInput === 'string' ? rawModelInput.trim() : '';
   if (!raw) {
     return {
-      modelId: 'gemini-4-argon',
-      displayName: 'Gemini 4 Argon',
+      modelId: 'gemini-3.8-flash',
+      displayName: 'Gemini 3.8 Flash',
       capacityTokens: DEFAULT_CONTEXT_CAPACITY_TOKENS,
-      capacityCompact: '1M',
+      capacityCompact: '200K',
       isFallback: false,
     };
   }
 
-  // 将展示名（如 "Gemini 4 Argon (High)" 或 "Claude Sonnet 5.5"）归一化为标准 modelId
-  let normalizedId = raw
+  // 清理前端按钮可能附带的加号、思考档位后缀（如 "+ Gemini 3.8 Flash High ^"）
+  const cleanedRaw = raw
+    .replace(/^[+\s·•]+|[⌃⌄^v\s]+$/g, '')
+    .replace(/[（(]\s*(?:High|Medium|Low|Extra\s+Low|Thinking|高|中|低|思考)\s*[）)]/gi, '')
+    .replace(/\s+(?:High|Medium|Low|Extra\s+Low|Thinking)\b.*$/i, '')
+    .trim();
+
+  let normalizedId = (cleanedRaw || raw)
     .toLowerCase()
+    .replace(/（[^）]*）/g, '')
     .replace(/\([^)]*\)/g, '')
     .replace(/[^a-z0-9.]+/g, '-')
     .replace(/^-+|-+$/g, '');
@@ -127,7 +145,7 @@ export function resolveModelCapacity(rawModelInput?: string | null): ModelCapaci
     .replace(/^claude-5\.5-sonnet/, 'claude-sonnet-5-5')
     .replace(/-(?:high|medium|low|extra-low|thinking|latest)$/, '');
 
-  const displayName = DISPLAY_NAME_MAP[normalizedId] || raw;
+  const displayName = DISPLAY_NAME_MAP[normalizedId] || cleanedRaw || raw;
 
   for (const rule of MODEL_CAPACITY_RULES) {
     if (rule.pattern.test(normalizedId)) {
@@ -141,12 +159,11 @@ export function resolveModelCapacity(rawModelInput?: string | null): ModelCapaci
     }
   }
 
-  // C3: 未知或自定义模型安全回退为 1M，容量数字前加注 "~" 约数符号
   return {
     modelId: normalizedId || 'unknown-model',
-    displayName: raw || 'Unknown Model',
+    displayName: cleanedRaw || raw || 'Unknown Model',
     capacityTokens: DEFAULT_CONTEXT_CAPACITY_TOKENS,
-    capacityCompact: '~1M',
+    capacityCompact: '~200K',
     isFallback: true,
   };
 }

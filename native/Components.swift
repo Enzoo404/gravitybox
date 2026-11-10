@@ -569,6 +569,7 @@ struct LiveStatus {
     var languageMode = "zh"
     var mode = "starting"
     var translationEnabled: Bool? = nil
+    var hudEnabled: Bool? = nil
     var appVersion = ""
     var entries = 0
     var windows = 0
@@ -592,6 +593,7 @@ struct LiveStatus {
         languageMode = raw["languageMode"] as? String ?? "zh"
         mode = raw["mode"] as? String ?? "starting"
         translationEnabled = raw["translationEnabled"] as? Bool
+        hudEnabled = raw["hudEnabled"] as? Bool
         appVersion = raw["appVersion"] as? String ?? ""
         entries = raw["entries"] as? Int ?? 0
         windows = raw["windows"] as? Int ?? 0

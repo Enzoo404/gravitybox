@@ -181,7 +181,8 @@ class FakeElement {
         if (
           (sel.includes('.surface-composer') && child.classList.contains('surface-composer')) ||
           (sel === '[data-testid="conversation-view"]' && child.getAttribute('data-testid') === 'conversation-view') ||
-          (sel === '[data-testid="agent-input-box"]' && child.getAttribute('data-testid') === 'agent-input-box')
+          (sel === '[data-testid="agent-input-box"]' && child.getAttribute('data-testid') === 'agent-input-box') ||
+          (sel === '[data-testid="idle-status-text"]' && child.getAttribute('data-testid') === 'idle-status-text')
         ) {
           out.push(child);
         }
@@ -221,11 +222,13 @@ class FakeShadowRoot {
       '#hud-txt-session .hud-turns',
       '#hud-txt-session .hud-steps',
       '#hud-txt-session .hud-speed',
+      '#hud-txt-session .hud-subagent-tag',
       '#hud-txt-tokens .hud-tok-total',
       '#hud-txt-tokens .hud-cache-prefix',
       '#hud-txt-tokens .hud-cache-label',
       '#hud-txt-tokens .hud-cache-val',
       '#hud-donut-val',
+      '#hud-meter-fill',
       '#hud-txt-context',
       '#pop-session-title',
       '#pop-session-badge',
@@ -237,6 +240,9 @@ class FakeShadowRoot {
       '#val-ttft',
       '#lbl-tps',
       '#val-tps',
+      '#row-subagent-status',
+      '#lbl-subagent-status',
+      '#val-subagent-status',
       '#pop-tokens-title',
       '#pop-tokens-badge',
       '#lbl-cache-hit',
@@ -245,8 +251,14 @@ class FakeShadowRoot {
       '#val-uncached-in',
       '#lbl-cached-read',
       '#val-cached-read',
+      '#row-cache-write',
+      '#lbl-cache-write',
+      '#val-cache-write',
       '#lbl-output-tok',
       '#val-output-tok',
+      '#row-reasoning-tok',
+      '#lbl-reasoning-tok',
+      '#val-reasoning-tok',
       '#pop-ctx-prefix',
       '#pop-ctx-pct',
       '#pop-ctx-capacity',
@@ -260,6 +272,12 @@ class FakeShadowRoot {
       '#val-seg-tool',
       '#lbl-seg-msg',
       '#val-seg-msg',
+      '#row-ctx-peak',
+      '#lbl-ctx-peak',
+      '#val-ctx-peak',
+      '#row-ctx-model',
+      '#lbl-ctx-model',
+      '#val-ctx-model',
       '#arrow-session',
       '#arrow-tokens',
       '#arrow-context',
@@ -303,8 +321,8 @@ class FakeShadowRoot {
   }
 }
 
-describe('HudInstance 与 AntigravityHudManager 生产模块生命周期与防篡改测试', () => {
-  it('验证双分栏独立挂载、sessionRevision 防篡改、mousedown preventDefault 零焦点争夺及 AbortController 50 次重挂载零泄漏', () => {
+describe('HudInstance 与 AntigravityHudManager 生产模块生命周期、垂直居中平衡与防篡改测试', () => {
+  it('验证双分栏独立挂载、pb-4 底部包装器垂直居中平衡与恢复、无原生 title、子智能体工作状态感知、sessionRevision 防篡改及 AbortController 50 次重挂载零泄漏', () => {
     const windowListeners = new Set();
     const doc = new FakeElement('document');
     doc.body = new FakeElement('body', doc);
@@ -318,7 +336,8 @@ describe('HudInstance 与 AntigravityHudManager 生产模块生命周期与防�
       innerWidth: 1024,
       innerHeight: 800,
       location: { pathname: '/c/4ec6348d-0f58-49db-8aed-6f67dbb78f5d' },
-      getComputedStyle: () => ({ visibility: 'visible', display: 'block' }),
+      matchMedia: () => ({ matches: true }),
+      getComputedStyle: () => ({ visibility: 'visible', display: 'block', paddingBottom: '0px' }),
       addEventListener(type, fn, opts) {
         const rec = { type, fn };
         windowListeners.add(rec);
@@ -341,14 +360,21 @@ describe('HudInstance 与 AntigravityHudManager 生产模块生命周期与防�
       view.setAttribute('data-testid', 'conversation-view');
       view.setAttribute('data-cascade-id', cascadeId);
       view.setAttribute('data-conversation-id', convId);
+
+      // 模拟 Antigravity 原生外层 pb-4 底部包装器 (p7)
+      const bottomDock = new FakeElement('div', doc);
+      bottomDock.className = 'relative w-full px-4 pb-4 flex-shrink-0 flex flex-col items-center gap-2';
+      bottomDock.style.paddingBottom = '16px';
+
       const inputBox = new FakeElement('div', doc);
       inputBox.setAttribute('data-testid', 'agent-input-box');
       const composer = new FakeElement('div', doc);
       composer.className = 'surface-composer';
       inputBox.appendChild(composer);
-      view.appendChild(inputBox);
+      bottomDock.appendChild(inputBox);
+      view.appendChild(bottomDock);
       doc.body.appendChild(view);
-      return { view, inputBox, composer };
+      return { view, bottomDock, inputBox, composer };
     };
 
     const paneA = createPane('cascade-alpha', 'conv-alpha-11111111');
@@ -362,8 +388,12 @@ describe('HudInstance 与 AntigravityHudManager 生产模块生命周期与防�
 
     assert.equal(manager.state().instanceCount, 2, '左右双分栏应各自独立挂载 1 个 HudInstance');
 
+    // 验证 Issue 1: 外层 pb-4 底部内边距被平衡归零，且 HUD 上下 margin 对称居中
     const instA = manager.instances.get('cascade-alpha');
     assert.ok(instA);
+    assert.equal(paneA.bottomDock.style.paddingBottom, '0px', '外层 pb-4 容器底部内边距应被自动归零以消除下偏');
+    assert.equal(instA.host.style.marginTop, instA.host.style.marginBottom, 'HUD 上下外边距必须完全对称居中');
+
     const capsuleBtn = instA.shadow.querySelectorAll('.capsule')[0];
     let prevented = false;
     capsuleBtn.dispatchEvent({
@@ -385,53 +415,68 @@ describe('HudInstance 与 AntigravityHudManager 生产模块生命周期与防�
       updatedAt: Date.now(),
       isStreaming: false,
       session: {
-        turns: 1,
-        steps: 142,
-        modelDurationSeconds: 3959,
-        modelDurationFormatted: '65 分 59 秒',
-        modelDurationFormattedEn: '65m 59s',
-        toolDurationSeconds: 751,
-        toolDurationFormatted: '12 分 31 秒',
-        toolDurationFormattedEn: '12m 31s',
-        averageTtftSeconds: 19.7,
-        averageTtftFormatted: '19.7 秒',
-        averageTtftFormattedEn: '19.7s',
-        outputTps: 90,
-        outputTpsFormatted: '90 tok/s',
+        turns: 9,
+        steps: 425,
+        compactionCount: 1,
+        modelDurationSeconds: 1348,
+        modelDurationFormatted: '22 分 28 秒',
+        modelDurationFormattedEn: '22m 28s',
+        toolDurationSeconds: 360,
+        toolDurationFormatted: '6 分 0 秒',
+        toolDurationFormattedEn: '6m 0s',
+        averageTtftSeconds: 3.8,
+        averageTtftFormatted: '3.8 秒',
+        averageTtftFormattedEn: '3.8s',
+        outputTps: 82,
+        outputTpsFormatted: '82 tok/s',
       },
       tokens: {
-        totalTokens: 58593793,
-        totalTokensCompact: '58.6M tok',
-        totalTokensFormatted: '58,593,793 tok',
-        cacheHitRate: 0.9665,
+        totalTokens: 23196078,
+        totalTokensCompact: '23.2M tok',
+        totalTokensFormatted: '23,196,078 tok',
+        cacheHitRate: 0.9694,
         cacheHitRateFormatted: '97%',
-        uncachedInputTokens: 1961501,
-        uncachedInputFormatted: '1,961,501 tok',
-        cachedReadTokens: 56526799,
-        cachedReadFormatted: '56,526,799 tok',
-        outputTokens: 105493,
-        outputFormatted: '105,493 tok',
+        uncachedInputTokens: 708929,
+        uncachedInputFormatted: '708,929 tok',
+        cachedReadTokens: 22416293,
+        cachedReadFormatted: '22,416,293 tok',
+        outputTokens: 70856,
+        outputFormatted: '70,856 tok',
+        reasoningTokens: 20856,
+        candidateTokens: 50000,
       },
       context: {
-        modelId: 'gemini-4-argon',
-        modelDisplayName: 'Gemini 4 Argon',
-        usedTokens: 672000,
-        usedTokensCompact: '~672K',
-        capacityTokens: 1048576,
-        capacityTokensCompact: '1M',
+        modelId: 'gemini-3.8-flash',
+        modelDisplayName: 'Gemini 3.8 Flash',
+        usedTokens: 226412,
+        usedTokensCompact: '226K',
+        usedTokensFormatted: '226,412 tok',
+        peakContextTokens: 226412,
+        peakContextCompact: '226K',
+        peakContextFormatted: '226,412 tok',
+        capacityTokens: 262144,
+        capacityTokensCompact: '256K',
         isFallbackCapacity: false,
-        usedRatio: 0.6408,
-        usedRatioFormatted: '64%',
+        usedRatio: 0.8637,
+        usedRatioFormatted: '86%',
         breakdown: {
-          systemTokens: 1900,
-          systemTokensCompact: '~1.9K',
-          systemRatio: 0.18,
-          toolTokens: 7600,
-          toolTokensCompact: '~7.6K',
-          toolRatio: 0.72,
-          messageTokens: 662500,
-          messageTokensCompact: '~662K',
-          messageRatio: 63.18,
+          cachedContextTokens: 218100,
+          cachedContextFormatted: '218,100 tok',
+          cachedContextRatio: 83.2,
+          uncachedContextTokens: 8312,
+          uncachedContextFormatted: '8,312 tok',
+          uncachedContextRatio: 3.17,
+          latestOutputTokens: 1240,
+          latestOutputFormatted: '1,240 tok',
+          systemTokens: 218100,
+          systemTokensCompact: '218,100 tok',
+          systemRatio: 83.2,
+          toolTokens: 8312,
+          toolTokensCompact: '8,312 tok',
+          toolRatio: 3.17,
+          messageTokens: 1240,
+          messageTokensCompact: '1,240 tok',
+          messageRatio: 0,
         },
       },
     });
@@ -440,25 +485,124 @@ describe('HudInstance 与 AntigravityHudManager 生产模块生命周期与防�
     assert.equal(instA.updateMetrics(sampleMetrics('conv-1', rev1)), false, '过期 sessionRevision 必须被拦截');
     assert.equal(instA.updateMetrics(sampleMetrics('conv-1', rev3)), true, '最新匹配快照正常接收');
 
+    // 验证会话切换后 pinnedPopoverId 必须被重置，不得阻塞新会话中的胶囊悬停
+    instA.handleCapsuleClick(capsuleBtn, { stopPropagation() {} });
+    assert.equal(instA.pinnedPopoverId, 'session');
+    const rev4 = instA.switchConversation('conv-3');
+    assert.equal(instA.pinnedPopoverId, null, '切换会话后必须清除旧会话锁定的 pinnedPopoverId');
+    assert.equal(instA.updateMetrics(sampleMetrics('conv-3', rev4)), true);
+
+    // 验证 Popover 3 展示真实上下文明细而非 1.9K/7.6K 假数据
+    assert.equal(instA.shadow.querySelector('#pop-ctx-capacity').textContent, '226K / 256K');
+    assert.equal(instA.shadow.querySelector('#lbl-seg-sys').textContent, '缓存复用上下文');
+    assert.equal(instA.shadow.querySelector('#val-seg-sys').textContent, '218,100 tok');
+    assert.equal(instA.shadow.querySelector('#lbl-seg-tool').textContent, '本步新增输入');
+    assert.equal(instA.shadow.querySelector('#val-seg-tool').textContent, '8,312 tok');
+    assert.equal(instA.shadow.querySelector('#val-ctx-peak').textContent, '226,412 tok (已压缩 1 次)');
+    assert.equal(instA.shadow.querySelector('#val-ctx-model').textContent, 'Gemini 3.8 Flash');
+
+    // 验证浅色主题显式声明时，即使系统 matchMedia 为 dark 也不得误判为深色
+    doc.body.className = 'theme-standalone light light-theme theme-light';
+    instA.syncTheme();
+    assert.equal(instA.host.hasAttribute('data-theme'), false, '显式浅色主题下不得被系统深色偏好覆盖为 dark');
+    doc.body.className = 'theme-standalone dark dark-theme theme-dark';
+    instA.syncTheme();
+    assert.equal(instA.host.getAttribute('data-theme'), 'dark');
+
     // 验证双语切换
     manager.setLanguage('en');
-    assert.equal(instA.shadow.querySelector('#hud-txt-session .hud-turns').textContent, '1T ');
-    assert.equal(instA.shadow.querySelector('#hud-txt-session .hud-steps').textContent, '142S');
+    assert.equal(instA.shadow.querySelector('#hud-txt-session .hud-turns').textContent, '9T ');
+    assert.equal(instA.shadow.querySelector('#hud-txt-session .hud-steps').textContent, '425S');
     assert.equal(instA.shadow.querySelector('#pop-session-title').textContent, 'Session Stats');
+    assert.equal(instA.shadow.querySelector('#lbl-seg-sys').textContent, 'Cached Context');
     manager.setLanguage('zh');
-    assert.equal(instA.shadow.querySelector('#hud-txt-session .hud-turns').textContent, '1 轮 ');
-    assert.equal(instA.shadow.querySelector('#hud-txt-session .hud-steps').textContent, '142 步');
+    assert.equal(instA.shadow.querySelector('#hud-txt-session .hud-turns').textContent, '9 轮 ');
+    assert.equal(instA.shadow.querySelector('#hud-txt-session .hud-steps').textContent, '425 步');
     assert.equal(instA.shadow.querySelector('#pop-session-title').textContent, '会话统计');
+    assert.equal(instA.shadow.querySelector('#lbl-seg-sys').textContent, '缓存复用上下文');
+
+    // 验证 Issue 1 (v2.1): 3 个状态栏胶囊绝不包含任何原生 title 悬浮提示属性，避免遮挡上浮卡片
+    assert.equal(
+      /\btitle\s*=\s*"/i.test(instA.shadow.innerHTML),
+      false,
+      'HUD HTML 模板绝不应包含原生 title="..." 属性'
+    );
+    for (const cap of instA.shadow.querySelectorAll('.capsule')) {
+      assert.equal(cap.hasAttribute('title'), false, '胶囊按钮不得携带原生 title 属性');
+    }
+
+    // 验证 Issue 2 (v2.1): 子智能体独立运行时 (1 subagent running)，状态栏实时检测并反映工作状态
+    const subagentStatusNode = new FakeElement('div', doc);
+    subagentStatusNode.setAttribute('data-testid', 'idle-status-text');
+    subagentStatusNode.textContent = '1 subagent running';
+    paneA.view.appendChild(subagentStatusNode);
+
+    const subState = manager.resolveSubagentState(paneA.view);
+    assert.equal(subState.isSubagentRunning, true, '应准确检测到 [data-testid="idle-status-text"] 中的子智能体运行状态');
+    assert.equal(subState.runningSubagentCount, 1);
+    assert.equal(manager.resolveStreamingState(paneA.view), true, '子智能体运行时流式状态必须为 true');
+
+    manager.reconcileMounts();
+    assert.equal(instA.isStreaming, true);
+    assert.equal(instA.isSubagentRunning, true);
+    assert.equal(
+      instA.shadow.querySelector('#hud-txt-session .hud-subagent-tag').textContent,
+      ' · 子智能体运行中',
+      '状态栏分段 1 应实时展示与全局词典一致的 " · 子智能体运行中"'
+    );
+    assert.equal(
+      instA.shadow.querySelector('#row-subagent-status').hasAttribute('hidden'),
+      false,
+      'Popover 1 应展开子智能体状态行'
+    );
+    assert.equal(
+      instA.shadow.querySelector('#val-subagent-status').textContent,
+      '1 个运行中'
+    );
+
+    // 验证后端 SQLite 报告子智能体运行而前端 DOM 空闲时，不会触发无限 STREAMING_CHANGED 乒乓风暴
+    subagentStatusNode.remove();
+    manager.reconcileMounts();
+    const streamingEventsBefore = events.filter((e) => e.type === 'STREAMING_CHANGED').length;
+    instA.updateMetrics({
+      ...sampleMetrics('conv-3', rev4),
+      isStreaming: true,
+      isSubagentRunning: true,
+      runningSubagentCount: 1,
+    });
+    manager.reconcileMounts();
+    manager.reconcileMounts();
+    const streamingEventsAfter = events.filter((e) => e.type === 'STREAMING_CHANGED').length;
+    assert.equal(
+      streamingEventsAfter,
+      streamingEventsBefore,
+      '后端子智能体活跃而 DOM 空闲时重复 reconcile 不得反复发送 STREAMING_CHANGED'
+    );
+
+    // 验证动态关闭/开启 HUD (setEnabled) 无损还原并可重新挂载
+    manager.setEnabled(false);
+    assert.equal(manager.state().instanceCount, 0);
+    assert.equal(paneA.bottomDock.style.paddingBottom, '16px', '关闭 HUD 时必须立即还原宿主容器 paddingBottom');
+    // 模拟崩溃残留内联 paddingBottom: 0px 时挂载后仍能清空回退至 Tailwind pb-4 样式
+    paneA.bottomDock.style.paddingBottom = '0px';
+    manager.setEnabled(true);
+    assert.equal(manager.state().instanceCount, 2, '重新开启 HUD 后应立即恢复双分栏实例');
+    manager.setEnabled(false);
+    assert.equal(paneA.bottomDock.style.paddingBottom, '', '遇到残留内联 0px 的 pb-4 容器时卸载应清空内联样式以恢复原生类内边距');
+    paneA.bottomDock.style.paddingBottom = '16px';
+    manager.setEnabled(true);
 
     // 验证 50 次重挂载零监听器泄漏
+    const refreshedInstA = manager.instances.get('cascade-alpha');
     for (let i = 0; i < 50; i++) {
-      instA.mount(paneA.composer);
+      refreshedInstA.mount(paneA.composer);
     }
-    // paneA (3 listeners) + paneB (3 listeners) = 6
-    assert.equal(windowListeners.size, 6, '50 次重挂载后全局监听器数量恒定为 6，无任何累积泄漏');
+    // paneA (4 listeners: resize/pointerdown/keydown/blur) + paneB (4 listeners) = 8
+    assert.equal(windowListeners.size, 8, '50 次重挂载后全局监听器数量恒定为 8，无任何累积泄漏');
 
     manager.dispose();
     assert.equal(manager.state().instanceCount, 0);
     assert.equal(windowListeners.size, 0, 'dispose() 后全局监听器清零');
+    assert.equal(paneA.bottomDock.style.paddingBottom, '16px', 'dispose() 后必须无损还原外层容器原始 paddingBottom');
   });
 });

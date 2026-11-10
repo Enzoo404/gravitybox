@@ -67,6 +67,8 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     /// 汉化开关命令在途时的乐观目标：期间到达的陈旧状态快照不得把开关弹回旧状态。
     private var pendingTranslationTarget: Bool?
     private var translationCommandGeneration = 0
+    private var pendingHudTarget: Bool?
+    private var hudCommandGeneration = 0
     private var nextRecoveryAt = Date.distantPast
     #if NATIVE_UI_TEST
     var confirmSwitchForTesting: ((String, @escaping (Bool) -> Void) -> Void)?
@@ -1284,6 +1286,43 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             sendCommand()
         }
     }
+    func effectiveHudEnabled() -> Bool {
+        if let pending = pendingHudTarget { return pending }
+        if let live = statusValue.hudEnabled { return live }
+        return configuration?.value.hudEnabled ?? true
+    }
+    func setHudEnabled(_ enable: Bool) {
+        let previousStatus = statusValue
+        let previousConfig = configuration.value.hudEnabled
+        hudCommandGeneration += 1
+        let commandGen = hudCommandGeneration
+        pendingHudTarget = enable
+        statusValue.hudEnabled = enable
+        configuration.value.hudEnabled = enable
+        try? configuration.save()
+        updateViews()
+        bridge.send(["command": "hud_set", "enabled": enable]) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self, commandGen == self.hudCommandGeneration else { return }
+                self.pendingHudTarget = nil
+                switch result {
+                case .success(let value):
+                    if let raw = value["status"] as? [String: Any] {
+                        self.reachable = true
+                        self.recoveryAttempts = 0
+                        self.statusValue = self.mergeStatusSnapshot(raw, previous: self.statusValue)
+                    }
+                    self.updateViews()
+                case .failure(let error):
+                    self.statusValue = previousStatus
+                    self.configuration.value.hudEnabled = previousConfig
+                    try? self.configuration.save()
+                    self.updateViews()
+                    self.showMessage(error.localizedDescription, error: true)
+                }
+            }
+        }
+    }
     @objc func toggleTranslation() {
         setTranslationEnabled(!statusValue.enabled)
     }
@@ -1634,6 +1673,7 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     private func mergeStatusSnapshot(_ raw: [String: Any], previous: LiveStatus) -> LiveStatus {
         var merged = LiveStatus(raw)
         if raw["translationEnabled"] == nil { merged.translationEnabled = previous.translationEnabled }
+        if raw["hudEnabled"] == nil { merged.hudEnabled = previous.hudEnabled }
         if raw["activeAccountEmail"] == nil { merged.activeAccountEmail = previous.activeAccountEmail }
         if raw["activeFiveHourQuota"] == nil { merged.activeFiveHourQuota = previous.activeFiveHourQuota }
         if raw["activeSubscriptionTier"] == nil { merged.activeSubscriptionTier = previous.activeSubscriptionTier }
@@ -1646,6 +1686,9 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             } else {
                 merged.mode = "paused"
             }
+        }
+        if let hudTarget = pendingHudTarget {
+            merged.hudEnabled = hudTarget
         }
         return merged
     }

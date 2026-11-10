@@ -1,9 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import '../dist/hud.js';
+
+const { DatabaseSync } = await import('node:sqlite');
 
 test('SQLite 并发读写压力与无锁事务验证', async () => {
   const tmpDir = path.join(os.tmpdir(), `gravitybox-sqlite-stress-${Date.now()}`);

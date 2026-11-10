@@ -2209,6 +2209,7 @@
 
   globalThis[KEY] = api;
   globalThis.__AGZH_ATTACH_DEEP_SCAN__?.();
+  globalThis.__GRAVITYBOX_ATTACH_HUD__?.();
   try {
     window.addEventListener('popstate', checkRoute);
     window.addEventListener('hashchange', checkRoute);

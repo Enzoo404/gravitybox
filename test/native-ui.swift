@@ -38,7 +38,7 @@ import Cocoa
         accounts[2]["subscription_tier"] = "FREE"
         accounts[2]["familyWindows"] = ["gemini":["weekly":bucket(100,reset:"6天23小时后重置")],"claude":["weekly":bucket(100,reset:"6天23小时后重置")]]
         accounts[2]["familyModelQuota"] = ["gemini":bucket(100,reset:"4小时59分后重置"),"claude":bucket(100,reset:"6天23小时后重置")]
-        var activeId = "a", switches = 0, preflightState = "safe", lastTranslationCommand: String? = nil
+        var activeId = "a", switches = 0, preflightState = "safe", lastTranslationCommand: String? = nil, lastHudCommandEnabled: Bool? = nil
         assistant.activeAccountId = activeId; assistant.cachedAccounts = accounts
         let models:[[String:Any]] = [
             ["model":"gemini-3.8-flash-n","totalTokens":90800000,"promptTokens":4000000,"candidatesTokens":300000,"requestCount":695,"estimatedUsd":10.77,"priced":true,"pricingStatus":"historical"],
@@ -104,6 +104,12 @@ import Cocoa
             case "account_recovery_info": return ["ok":true,"available":false]
             case "pause": lastTranslationCommand = "pause"; return ["ok":true]
             case "resume": lastTranslationCommand = "resume"; return ["ok":true]
+            case "hud_set":
+                let enabled = payload["enabled"] as? Bool ?? true
+                lastHudCommandEnabled = enabled
+                var nextStatus = status
+                nextStatus["hudEnabled"] = enabled
+                return ["ok":true,"status":nextStatus]
             default: return ["ok":true]
             }
         }
@@ -208,6 +214,11 @@ import Cocoa
             accounts = [allAccounts[2]]; activeId = "c"; assistant.activeAccountId = "c"; assistant.cachedAccounts = accounts
             window.setFrame(NSRect(origin:window.frame.origin,size:NSSize(width:880,height:580)),display:true)
             assistant.selectPage(1); pump()
+            var waitedActiveId = 0
+            while assistant.accountsPage?.activeId != "c" && waitedActiveId < 30 {
+                assistant.accountsPage?.fetch(); pump()
+                waitedActiveId += 1
+            }
             func quotaBars(_ view:NSView)->[QuotaBarView] { (view as? QuotaBarView).map{[$0]} ?? view.subviews.flatMap{quotaBars($0)} }
             let modelBars = quotaBars(window.contentView!).filter{$0.titleLabel.stringValue.contains("模型配额")}
             check(modelBars.count == 2 && modelBars.allSatisfy{$0.percentageKnown && $0.percentage == 100}, "FREE model quota must render known on both account rows")
@@ -792,6 +803,15 @@ import Cocoa
         // Restore normal status
         assistant.statusValue = LiveStatus(status)
         stableSettings.update()
+        check(stableSettings.hudSwitch.isEnabled == true && stableSettings.hudSwitch.state == .on, "hudSwitch must default to on and enabled when translation is active")
+        stableSettings.hudSwitch.state = .off
+        stableSettings.toggleHud()
+        pump()
+        check(lastHudCommandEnabled == false && assistant.configuration.value.hudEnabled == false, "Turning off hudSwitch must send hud_set(false) and persist hudEnabled=false")
+        stableSettings.hudSwitch.state = .on
+        stableSettings.toggleHud()
+        pump()
+        check(lastHudCommandEnabled == true && assistant.configuration.value.hudEnabled == true, "Turning on hudSwitch must send hud_set(true) and persist hudEnabled=true")
 
         DesktopApplicationTarget.installedChannelsOverride = ["stable"]
         check(DesktopApplicationTarget.bothInstalled == false, "Single-app mode must report bothInstalled == false")

@@ -1108,6 +1108,7 @@ final class PreferencesController: NSObject {
     unowned let app: Assistant
     var view: NSView!
     let translationSwitch = NSSwitch()
+    let hudSwitch = NSSwitch()
     let refresh = NSPopUpButton(frame: .zero, pullsDown: false)
     let login = NSSwitch()
     let syncLifecycleSwitch = NSSwitch()
@@ -1133,6 +1134,12 @@ final class PreferencesController: NSObject {
         }
         translationSwitch.target = self; translationSwitch.action = #selector(toggleTranslation); translationSwitch.setAccessibilityLabel("界面汉化")
 
+        hudSwitch.controlSize = .small
+        hudSwitch.state = app.effectiveHudEnabled() ? .on : .off
+        hudSwitch.isEnabled = app.reachable && app.statusValue.mode != "unsupported" && app.statusValue.enabled
+        hudSwitch.target = self; hudSwitch.action = #selector(toggleHud); hudSwitch.setAccessibilityLabel("对话状态栏")
+        syncHudTooltip()
+
         login.controlSize = .small
         login.state = SMAppService.mainApp.status == .enabled ? .on : .off
         login.target = self; login.action = #selector(toggleLogin); login.setAccessibilityLabel("登录时启动")
@@ -1152,6 +1159,8 @@ final class PreferencesController: NSObject {
             settingRow(icon: "power", tint: .systemGray, title: "登录时启动", subtitle: "登录 macOS 时自动在菜单栏启动 GravityBox", control: login),
             divider(),
             settingRow(icon: "character.book.closed", tint: .systemGreen, title: "界面汉化", subtitle: "基于外置词典实时汉化 Antigravity 界面，不改动官方应用包", control: translationSwitch),
+            divider(),
+            settingRow(icon: "chart.bar.xaxis", tint: .systemIndigo, title: "对话状态栏", subtitle: "在对话输入框下方实时展示轮次步数、Token 缓存与上下文水位", control: hudSwitch),
             divider(),
             settingRow(icon: "link", tint: .systemTeal, title: "跟随 Antigravity 启停", subtitle: "打开 Antigravity 时自动在菜单栏启动，关闭时一并退出", control: syncLifecycleSwitch),
             divider(),
@@ -1264,6 +1273,9 @@ final class PreferencesController: NSObject {
         } else {
             translationSwitch.toolTip = app.statusValue.enabled ? "点击关闭界面汉化" : "点击开启界面汉化"
         }
+        hudSwitch.state = app.effectiveHudEnabled() ? .on : .off
+        hudSwitch.isEnabled = app.reachable && app.statusValue.mode != "unsupported" && app.statusValue.enabled
+        syncHudTooltip()
         login.state = SMAppService.mainApp.status == .enabled ? .on : .off
         syncLifecycleSwitch.state = app.configuration.value.syncAntigravityLifecycle ? .on : .off
         refresh.selectItem(at: Self.refreshIntervals.firstIndex(of: app.configuration.value.quotaRefreshMinutes) ?? 0)
@@ -1274,6 +1286,23 @@ final class PreferencesController: NSObject {
     @objc func toggleTranslation() {
         let target = translationSwitch.state == .on
         app.setTranslationEnabled(target)
+    }
+
+    private func syncHudTooltip() {
+        if !app.reachable {
+            hudSwitch.toolTip = "正在连接后台服务…"
+        } else if app.statusValue.mode == "unsupported" {
+            hudSwitch.toolTip = "当前应用版本不受支持"
+        } else if !app.statusValue.enabled {
+            hudSwitch.toolTip = "开启界面汉化后生效"
+        } else {
+            hudSwitch.toolTip = app.effectiveHudEnabled() ? "点击隐藏对话状态栏" : "点击显示对话状态栏"
+        }
+    }
+
+    @objc func toggleHud() {
+        let target = hudSwitch.state == .on
+        app.setHudEnabled(target)
     }
 
     @objc func toggleSyncLifecycle() {

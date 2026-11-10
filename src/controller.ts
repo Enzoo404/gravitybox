@@ -28,6 +28,7 @@ export type AssistantStatus = {
   dictionaryVersion: string; entries: number; dictionaryError?: string; errors: string[];
   rssMB: number; updatedAt: string; pid: number;
   translationEnabled?: boolean;
+  hudEnabled?: boolean;
   unverifiedVersion?: boolean;
   newStringsCount?: number;
   pendingListPath?: string;
@@ -56,6 +57,7 @@ export class Controller {
   private targetTimer?: NodeJS.Timeout;
   private stopped = false;
   private paused = false;
+  private hudEnabled = true;
   private reconnectionDelay = 1000;
   private syncing = false;
   private syncAgain = false;
@@ -73,7 +75,7 @@ export class Controller {
   private trustedCandidates: PendingItem[] = [];
   private runtimeCandidates: PendingItem[] = [];
   private bundleCache = new BundleCache();
-  private hudBridge = new CdpHudBridge({ geminiDir: process.env.GRAVITYBOX_GEMINI_DIR || process.env.GEMINI_DIR });
+  private hudBridge: CdpHudBridge;
   private initialBundle?: string;
   private coverage?: CoverageReport;
   private coverageMissingForKey?: string;
@@ -84,20 +86,25 @@ export class Controller {
     fixture?: { port: number; origin: string };
     dictionary: Dictionary;
     stateDir?: string;
+    geminiDir?: string;
     inspectPort?: number; // Deprecated: never opens a main-process inspector.
     shortcutEnabled?: boolean;
+    hudEnabled?: boolean;
     initiallyPaused?: boolean;
     reloadDictionary?: () => Promise<void>;
     selectDictionary?: (version: string) => Promise<Dictionary>;
     onStatus: (status: AssistantStatus) => void;
   }) {
     this.paused = options.initiallyPaused === true;
-    this.status = { schema: 1, mode: 'starting', message: '正在初始化', windows: 0, dictionaryVersion: options.dictionary.version, entries: Object.keys(options.dictionary.entries).length, errors: [], rssMB: 0, updatedAt: '', pid: process.pid, menuHooked: false, translationEnabled: !this.paused };
+    this.hudEnabled = options.hudEnabled !== false;
+    this.hudBridge = new CdpHudBridge({ geminiDir: options.geminiDir || process.env.GRAVITYBOX_GEMINI_DIR || process.env.GEMINI_DIR });
+    this.status = { schema: 1, mode: 'starting', message: '正在初始化', windows: 0, dictionaryVersion: options.dictionary.version, entries: Object.keys(options.dictionary.entries).length, errors: [], rssMB: 0, updatedAt: '', pid: process.pid, menuHooked: false, translationEnabled: !this.paused, hudEnabled: this.hudEnabled };
   }
   private publish(mode?: string, message?: string) {
     if (mode) this.status.mode = mode;
     if (message) this.status.message = message;
     this.status.translationEnabled = !this.paused;
+    this.status.hudEnabled = this.hudEnabled;
     this.status.windows = this.pages.size;
     this.status.bundleReads=this.bundleCache.downloads;this.status.bundleBytes=this.bundleCache.downloadedBytes;
     const modes=new Set([...this.pages.values()].map(p=>p.languageMode??'zh'));this.status.languageMode=modes.size>1?'mixed':([...modes][0]??'zh');
@@ -209,10 +216,10 @@ export class Controller {
   }
   private boot(url: string) {
     const page = new URL(url);
-    const key = `${page.origin}${page.pathname}:${this.options.dictionary.version}:${this.verifiedBundle()}`;
+    const key = `${page.origin}${page.pathname}:${this.options.dictionary.version}:${this.verifiedBundle()}:${this.hudEnabled}`;
     const cached = this.bootCache.get(key);
     if (cached) return cached;
-    const source = `delete globalThis.__AGZH_ATTACH_DEEP_SCAN__;globalThis.__AGZH_BOOT__=${JSON.stringify({ origin: page.origin, path: page.pathname, dictionary: this.options.dictionary, conservative:!this.verifiedBundle(),runtimeId:this.runtimeId,shortcutEnabled:this.options.shortcutEnabled!==false,shellValidated:true })};\n${this.engine}`;
+    const source = `delete globalThis.__AGZH_ATTACH_DEEP_SCAN__;delete globalThis.__GRAVITYBOX_ATTACH_HUD__;globalThis.__AGZH_BOOT__=${JSON.stringify({ origin: page.origin, path: page.pathname, dictionary: this.options.dictionary, conservative:!this.verifiedBundle(),runtimeId:this.runtimeId,shortcutEnabled:this.options.shortcutEnabled!==false,hudEnabled:this.hudEnabled,shellValidated:true })};\n${this.engine}`;
     if (this.bootCache.size < 4) this.bootCache.set(key, source);
     return source;
   }
@@ -250,13 +257,13 @@ export class Controller {
           if (this.paused || this.stopped) { cdp.close(); break; }
           this.pages.set(target.id, session);
           cdp.on('disconnected', () => {this.hudBridge.detachTarget(target.id);if(!session.detaching&&this.pages.get(target.id)===session){this.pages.delete(target.id);this.scheduleSync();}});
-          cdp.on('Page.frameNavigated', (event) => { if (!event.frame?.parentId) { session.contextId = undefined; void this.queueBootstrap(session); } });
+          cdp.on('Page.frameNavigated', (event) => { if (!event.frame?.parentId) { this.hudBridge.detachTargetPanes(target.id); session.contextId = undefined; void this.queueBootstrap(session); } });
           cdp.on('Page.navigatedWithinDocument', () => this.scheduleSync());
-          cdp.on('Runtime.executionContextsCleared', () => { session.contextId = undefined; });
+          cdp.on('Runtime.executionContextsCleared', () => { this.hudBridge.detachTargetPanes(target.id); session.contextId = undefined; });
           await cdp.send('Page.enable'); await cdp.send('Runtime.enable');
           await cdp.send('Runtime.addBinding',{name:'__agzhLanguageChanged',executionContextName:WORLD});
           await this.hudBridge.attachToTarget(target.id, cdp, () => session.contextId, WORLD);
-          cdp.on('Runtime.bindingCalled',(event)=>{if(event.name==='__agzhLanguageChanged'&&event.executionContextId===session.contextId&&['zh','en'].includes(event.payload)){session.languageMode=event.payload;this.publish();}else if(event.name===HUD_BRIDGE_BINDING_NAME&&event.executionContextId===session.contextId){this.hudBridge.handleRawBindingPayload(target.id,event.payload);}});
+          cdp.on('Runtime.bindingCalled',(event)=>{if(event.name==='__agzhLanguageChanged'&&event.executionContextId===session.contextId&&['zh','en'].includes(event.payload)){session.languageMode=event.payload;this.publish();}else if(event.name===HUD_BRIDGE_BINDING_NAME&&this.hudEnabled&&event.executionContextId===session.contextId){this.hudBridge.handleRawBindingPayload(target.id,event.payload);}});
           await this.refreshRegistration(session);
           await this.queueBootstrap(session, false);
         } catch(error) {
@@ -354,6 +361,11 @@ export class Controller {
       }
       if (state?.version !== this.options.dictionary.version) throw new Error('窗口词典版本未确认');
       session.languageMode=state.languageMode??'zh';
+      if (this.hudEnabled) {
+        await session.cdp.evaluate('(globalThis.__GRAVITYBOX_ATTACH_HUD__?.(), globalThis.__GRAVITYBOX_HUD_V1__?.setEnabled?.(true), globalThis.__GRAVITYBOX_HUD_V1__?.syncAllSessions?.())', session.contextId).catch(() => {});
+      } else {
+        await session.cdp.evaluate('globalThis.__GRAVITYBOX_HUD_V1__?.setEnabled?.(false)', session.contextId).catch(() => {});
+      }
     });
     if (reportUnhandledError) {
       session.updateChain.catch(() => {
@@ -495,6 +507,25 @@ export class Controller {
       if(session.registration) await session.cdp.send('Page.removeScriptToEvaluateOnNewDocument',{identifier:session.registration});
       const result=await session.cdp.send('Page.addScriptToEvaluateOnNewDocument',{source:this.boot(session.url),worldName:WORLD});session.registration=result.identifier;
     }
+  }
+  async configureHud(enabled: boolean) {
+    this.hudEnabled = enabled;
+    this.options.hudEnabled = enabled;
+    this.bootCache.clear();
+    if (!enabled) {
+      this.hudBridge.clearActivePanes();
+    }
+    await Promise.allSettled([...this.pages.values()].map(async session => {
+      await this.refreshRegistration(session);
+      if (session.contextId !== undefined && !session.detaching) {
+        if (enabled) {
+          await session.cdp.evaluate('((globalThis.__AGZH_BOOT__&&(globalThis.__AGZH_BOOT__.hudEnabled=true)),globalThis.__GRAVITYBOX_ATTACH_HUD__?.(),globalThis.__GRAVITYBOX_HUD_V1__?.setEnabled?.(true),globalThis.__GRAVITYBOX_HUD_V1__?.syncAllSessions?.())', session.contextId);
+        } else {
+          await session.cdp.evaluate('((globalThis.__AGZH_BOOT__&&(globalThis.__AGZH_BOOT__.hudEnabled=false)),globalThis.__GRAVITYBOX_HUD_V1__?.setEnabled?.(false))', session.contextId);
+        }
+      }
+    }));
+    this.publish();
   }
   async toggleLanguage(mode?: 'zh' | 'en'): Promise<void> {
     if (this.paused) return;

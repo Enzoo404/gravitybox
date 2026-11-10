@@ -1,6 +1,7 @@
 /**
  * 会话状态 HUD 与向上展开详情卡片 (Popover Panels) 核心类型与接口契约
- * 遵循 GRAVITYBOX-SPEC-HUD-001 (v1.2 工业级全链路闭环基准)
+ * 遵循 GRAVITYBOX-SPEC-HUD-001 (v2.1 Antigravity 原生真实数据与子智能体协同版)
+ * 所有展示指标 100% 源自会话 SQLite (steps / gen_metadata) 与宿主 DOM 真实状态，零虚构基线
  */
 
 export interface ConversationHudMetrics {
@@ -10,112 +11,159 @@ export interface ConversationHudMetrics {
   sessionRevision: number;
   /** 毫秒级快照生成时间戳 */
   updatedAt: number;
-  /** 当前是否处于活跃流式生成中 */
+  /** 当前是否处于活跃流式生成中（含主智能体生成与子智能体后台运行） */
   isStreaming: boolean;
+  /** 当前是否有子智能体正在运行 */
+  isSubagentRunning?: boolean;
+  /** 当前正在运行的子智能体数量 */
+  runningSubagentCount?: number;
 
-  /** 胶囊 1 & Popover 1: 会话统计 */
+  /** 模块 1 & Popover 1: 会话与执行耗时统计 (100% 源自 steps 表纳秒时间戳与步骤类型) */
   session: {
-    /** 用户输入轮次 (step_type === 101 计数) */
+    /** 用户输入轮次 (优先统计 step_type === 14 USER_INPUT，无则回退 101) */
     turns: number;
-    /** 执行总步数 (steps 表总行数) */
+    /** 执行总步数 (steps 表总行数，含已关联子智能体步数) */
     steps: number;
+    /** 模型生成步数 (step_type === 15 计数) */
+    modelSteps?: number;
+    /** 工具执行步数 (工具调用 step 计数) */
+    toolSteps?: number;
+    /** 上下文自动压缩次数 (step_type === 23 CHECKPOINT 计数) */
+    compactionCount?: number;
+    /** 会话累计调度的子智能体数量 */
+    subagentCount?: number;
+    /** 当前活跃运行中的子智能体数量 */
+    runningSubagentCount?: number;
+    /** 子智能体累计执行步数 */
+    subagentSteps?: number;
     /** 模型累计总用时 (秒) */
     modelDurationSeconds: number;
-    /** 模型用时中文格式化展示 (如 "65 分 59 秒") */
+    /** 模型用时中文格式化展示 (如 "22 分 28 秒") */
     modelDurationFormatted: string;
-    /** 模型用时英文格式化展示 (如 "65m 59s") */
+    /** 模型用时英文格式化展示 (如 "22m 28s") */
     modelDurationFormattedEn?: string;
     /** 工具调用累计总用时 (秒) */
     toolDurationSeconds: number;
-    /** 工具调用用时中文格式化展示 (如 "12 分 31 秒") */
+    /** 工具调用用时中文格式化展示 (如 "6 分 0 秒") */
     toolDurationFormatted: string;
-    /** 工具调用用时英文格式化展示 (如 "12m 31s") */
+    /** 工具调用用时英文格式化展示 (如 "6m 0s") */
     toolDurationFormattedEn?: string;
     /** 首 Token 平均响应时间 (秒) */
     averageTtftSeconds: number;
-    /** 首 Token 平均响应时间中文格式化 (如 "19.7 秒" 或 "—") */
+    /** 首 Token 平均响应时间中文格式化 (如 "3.8 秒" 或 "—") */
     averageTtftFormatted: string;
-    /** 首 Token 平均响应时间英文格式化 (如 "19.7s" 或 "—") */
+    /** 首 Token 平均响应时间英文格式化 (如 "3.8s" 或 "—") */
     averageTtftFormattedEn?: string;
     /** 令牌输出速度 (tok/s, 物理上限 500, 窗口不足时为 0) */
     outputTps: number;
-    /** 输出速度格式化展示 (如 "90 tok/s" 或 "—") */
+    /** 输出速度格式化展示 (如 "82 tok/s" 或 "—") */
     outputTpsFormatted: string;
   };
 
-  /** 胶囊 2 & Popover 2: Token 用量 (严格数学守恒) */
+  /** 模块 2 & Popover 2: 累计 Token 账本 (100% 源自 steps.metadata field 9 ModelUsageStats) */
   tokens: {
     /** 总 Token 数 (uncachedInput + cachedRead + output + cacheWrite) */
     totalTokens: number;
-    /** 紧凑读数 (如 "58.6M tok") */
+    /** 紧凑读数 (如 "23.2M tok") */
     totalTokensCompact: string;
-    /** 千分位全量读数 (如 "58,593,793 tok") */
+    /** 千分位全量读数 (如 "23,196,078 tok") */
     totalTokensFormatted: string;
     /** 缓存命中率 (0.0 ~ 1.0) */
     cacheHitRate: number;
     /** 缓存命中率百分比文本 (如 "97%") */
     cacheHitRateFormatted: string;
-    /** 未缓存输入 Token 数 */
+    /** 未缓存输入 Token 数 (subfield 2) */
     uncachedInputTokens: number;
-    /** 未缓存输入千分位读数 (如 "1,961,501 tok") */
+    /** 未缓存输入千分位读数 (如 "708,929 tok") */
     uncachedInputFormatted: string;
-    /** 缓存读取 Token 数 */
+    /** 缓存读取 Token 数 (subfield 5) */
     cachedReadTokens: number;
-    /** 缓存读取千分位读数 (如 "56,526,799 tok") */
+    /** 缓存读取千分位读数 (如 "22,416,293 tok") */
     cachedReadFormatted: string;
-    /** 缓存写入 Token 数 (若存在) */
+    /** 缓存写入 Token 数 (subfield 4, 若存在) */
     cacheWriteTokens?: number;
     /** 缓存写入千分位读数 */
     cacheWriteFormatted?: string;
-    /** 输出 Token 数 */
+    /** 输出 Token 数 (subfield 3) */
     outputTokens: number;
-    /** 输出千分位读数 (如 "105,493 tok") */
+    /** 输出千分位读数 (如 "70,856 tok") */
     outputFormatted: string;
-    /** 思维链/推理 Token 数 (subfield 9) */
+    /** 思维链/推理 Token 数 (subfield 9, 恒满足 reasoning + candidate === output) */
     reasoningTokens?: number;
+    /** 思维链 Token 千分位读数 */
+    reasoningFormatted?: string;
     /** 候选文本回复 Token 数 (subfield 10) */
     candidateTokens?: number;
+    /** 候选文本 Token 千分位读数 */
+    candidateFormatted?: string;
   };
 
-  /** 胶囊 3 & Popover 3: 上下文窗口 (级联独立裁剪，杜绝负百分比) */
+  /** 模块 3 & Popover 3: 当前上下文实况 (100% 源自最近一步生成记录与会话真实峰值，零虚构 1M/1.9K/7.6K) */
   context: {
-    /** 当前激活模型 ID (如 "gemini-4-argon") */
+    /** 当前激活模型 ID (如 "gemini-3.8-flash") */
     modelId: string;
-    /** 模型展示名称 (如 "Gemini 4 Argon") */
+    /** 模型展示名称 (如 "Gemini 3.8 Flash") */
     modelDisplayName: string;
-    /** 当前上下文已用 Token 数 (最后一步生成的 Prompt 总量) */
+    /** 当前上下文实际总输入 Token 数 (最近一步 rawInput + cachedRead + cacheWrite) */
     usedTokens: number;
-    /** 已用上下文紧凑读数 (如 "~672K" 或 "0") */
+    /** 当前上下文紧凑读数 (如 "226.4K" 或 "0") */
     usedTokensCompact: string;
-    /** 模型物理上下文容量上限 (如 1048576) */
+    /** 当前上下文千分位精确读数 (如 "226,412 tok") */
+    usedTokensFormatted?: string;
+    /** 会话历史单步最高上下文 Token 数 (真实观测峰值) */
+    peakContextTokens?: number;
+    /** 会话历史峰值紧凑读数 (如 "226.4K") */
+    peakContextCompact?: string;
+    /** 会话历史峰值千分位读数 (如 "226,412 tok") */
+    peakContextFormatted?: string;
+    /** 当前上下文窗口有效容量阈值 (优先取 DB context_window_metadata / planner_config 真实阈值，无则取 Antigravity 标准压缩阈值) */
     capacityTokens: number;
-    /** 模型容量紧凑读数 (如 "1M" 或 "~1M") */
+    /** 容量阈值紧凑读数 (如 "200K" / "256K") */
     capacityTokensCompact: string;
+    /** 容量是否直接来自会话底层 Protobuf 显式字段 */
+    hasExplicitDbCapacity?: boolean;
     /** 是否为未知模型回退容量 */
     isFallbackCapacity?: boolean;
-    /** 上下文已用比例 (0.0 ~ 1.0 夹紧值) */
+    /** 当前上下文占有效容量比例 (0.0 ~ 1.0 夹紧值) */
     usedRatio: number;
-    /** 上下文已用百分比格式化 (如 "64%") */
+    /** 上下文占比格式化 (如 "88%") */
     usedRatioFormatted: string;
-    /** 三段式级联独立裁剪明细 (T_sys + T_tool + T_msg === usedTokens) */
+    /** 当前单步上下文缓存复用率 (0.0 ~ 1.0, 即 cachedContextTokens / usedTokens) */
+    stepCacheRatio?: number;
+    /** 当前单步上下文缓存复用率格式化 (如 "96%") */
+    stepCacheRatioFormatted?: string;
+    /**
+     * 100% 真实底层上下文构成明细：
+     * - cachedContextTokens (缓存复用上下文, 对应原 system 槽位兼容字段)
+     * - uncachedContextTokens (本步新增未缓存输入, 对应原 tool 槽位兼容字段)
+     * - latestOutputTokens (本步生成输出, 对应原 message 槽位兼容字段)
+     */
     breakdown: {
-      /** 系统提示词 Token (T_sys = min(U, K_sys)) */
+      /** 当前步缓存复用上下文 Token (lastStep.cachedReadTokens) */
+      cachedContextTokens?: number;
+      /** 当前步缓存复用千分位读数 (如 "218,100 tok") */
+      cachedContextFormatted?: string;
+      /** 当前步缓存复用占当前上下文比例 (0 ~ 100) */
+      cachedContextRatio?: number;
+      /** 当前步新增未缓存输入 Token (lastStep.rawInputTokens + lastStep.cacheWriteTokens) */
+      uncachedContextTokens?: number;
+      /** 当前步新增未缓存千分位读数 (如 "8,312 tok") */
+      uncachedContextFormatted?: string;
+      /** 当前步新增未缓存占当前上下文比例 (0 ~ 100) */
+      uncachedContextRatio?: number;
+      /** 当前步生成输出 Token (lastStep.outputTokens) */
+      latestOutputTokens?: number;
+      /** 当前步生成输出千分位读数 (如 "1,240 tok") */
+      latestOutputFormatted?: string;
+      /** 兼容字段：若底层存在真实分组或映射至真实缓存复用/新增输入 */
       systemTokens: number;
-      /** 系统提示词紧凑读数 (如 "~1.9K") */
       systemTokensCompact: string;
-      /** 系统提示词占总容量百分比 (0 ~ 100) */
       systemRatio: number;
-      /** 工具定义 Token (T_tool = min(max(0, U - T_sys), K_tool)) */
       toolTokens: number;
-      /** 工具定义紧凑读数 (如 "~7.6K") */
       toolTokensCompact: string;
-      /** 工具定义占总容量百分比 (0 ~ 100) */
       toolRatio: number;
-      /** 对话消息与上下文 Token (T_msg = max(0, U - T_sys - T_tool)) */
       messageTokens: number;
-      /** 对话消息紧凑读数 (如 "~662K") */
       messageTokensCompact: string;
-      /** 对话消息占总容量百分比 (0 ~ 100) */
       messageRatio: number;
     };
   };
@@ -126,8 +174,19 @@ export interface ParsedConversationStep {
   idx: number;
   stepType: number;
   status: number;
+  /** 步骤创建时间 (CortexStepMetadata.field 1 created_at) */
+  createdAtSeconds?: number | null;
+  /** 工具实际启动时间 (CortexStepMetadata.field 32 started_at) */
+  startedAtSeconds?: number | null;
+  /** 步骤有效起始时间 (模型步取 created_at，工具步优先取 started_at) */
   startTimeSeconds: number | null;
+  /** 步骤可见时间 / 首块时间 (CortexStepMetadata.field 6 viewable_at) */
   firstTokenSeconds: number | null;
+  /** 模型完成生成时间 (CortexStepMetadata.field 7 finished_generating_at) */
+  finishedGeneratingSeconds?: number | null;
+  /** 步骤完成时间 (CortexStepMetadata.field 8 completed_at) */
+  completedAtSeconds?: number | null;
+  /** 步骤有效结束时间 (模型步优先取 finished_generating_at，工具步优先取 completed_at) */
   endTimeSeconds: number | null;
   rawInputTokens: number;
   outputTokens: number;
@@ -135,6 +194,30 @@ export interface ParsedConversationStep {
   cachedReadTokens: number;
   reasoningTokens: number;
   candidateTokens: number;
+  modelMaxTokens?: number;
+  modelName?: string;
+  /** 工具调用名称 (CortexStepMetadata.field 4 tool_call.field 2 name) */
+  toolCallName?: string;
+  /** 是否为子智能体调度步骤 (step_type === 127 或 tool_call.name === 'invoke_subagent' | 'browser_subagent') */
+  isSubagentStep?: boolean;
+  /** 从步骤元数据/载荷中提取出的关联子智能体会话 UUID 列表 */
+  childConversationIds?: string[];
+}
+
+/** 从 gen_metadata 提取的真实会话配置、权威流式耗时与上下文元数据 */
+export interface ParsedGenMetadata {
+  responseModel?: string;
+  modelDisplayName?: string;
+  plannerModelName?: string;
+  maxContextTokens?: number;
+  estimatedTokensUsed?: number;
+  systemTokens?: number;
+  toolTokens?: number;
+  messageTokens?: number;
+  /** ChatModelMetadata.field 11 time_to_first_token (秒) */
+  timeToFirstTokenSeconds?: number;
+  /** ChatModelMetadata.field 12 streaming_duration (秒) */
+  streamingDurationSeconds?: number;
 }
 
 /** 前端隔离世界向 Node.js 派发的事件负载 */
@@ -146,6 +229,9 @@ export type HudClientEvent =
       sessionRevision?: number;
       modelId?: string;
       isStreaming?: boolean;
+      isSubagentRunning?: boolean;
+      runningSubagentCount?: number;
+      childConversationIds?: string[];
       timestamp: number;
     }
   | {
@@ -161,6 +247,9 @@ export type HudClientEvent =
       sessionRevision?: number;
       modelId?: string;
       isStreaming?: boolean;
+      isSubagentRunning?: boolean;
+      runningSubagentCount?: number;
+      childConversationIds?: string[];
       timestamp: number;
     }
   | {
@@ -170,6 +259,9 @@ export type HudClientEvent =
       sessionRevision?: number;
       modelId: string;
       isStreaming?: boolean;
+      isSubagentRunning?: boolean;
+      runningSubagentCount?: number;
+      childConversationIds?: string[];
       timestamp: number;
     }
   | {
@@ -179,6 +271,9 @@ export type HudClientEvent =
       sessionRevision?: number;
       modelId?: string;
       isStreaming: boolean;
+      isSubagentRunning?: boolean;
+      runningSubagentCount?: number;
+      childConversationIds?: string[];
       timestamp: number;
     };
 

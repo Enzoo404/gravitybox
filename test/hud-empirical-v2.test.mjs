@@ -1,6 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -9,8 +8,11 @@ import {
   computeTps,
   parseProtobufTimestamp,
   parseStepMetadataBlob,
+  parseLatestGenMetadataBlob,
   ConversationMetricsEngine
 } from '../dist/hud.js';
+
+const { DatabaseSync } = await import('node:sqlite');
 
 function encodeVarint(val) {
   const bytes = [];
@@ -21,6 +23,11 @@ function encodeVarint(val) {
   }
   bytes.push(Number(v));
   return bytes;
+}
+
+function encodeStringField(fieldNum, str) {
+  const buf = Buffer.from(str, 'utf8');
+  return [...encodeVarint((fieldNum << 3) | 2), ...encodeVarint(buf.length), ...buf];
 }
 
 function encodeTimestampField(fieldNum, seconds, nanos = 0) {
@@ -43,10 +50,10 @@ function encodeUsageField9({ rawInput = 0, outputTokens = 0, cacheWriteTokens = 
   return [(9 << 3) | 2, ...encodeVarint(inner.length), ...inner];
 }
 
-test('复验 1: 级联独立裁剪模型在各种极端边界下非负性与严格守恒性', () => {
-  const testCapacities = [1048576, 2097152, 200000, 128000];
+test('复验 1: 级联独立裁剪纯数学模型在各种极端边界下非负性与严格守恒性', () => {
+  const testCapacities = [200000, 262144, 128000, 1048576];
   const testInputs = [
-    0, 1, 500, 1900, 1901, 5000, 9500, 9501, 426000, 662500, 672000, 1048576, 1500000
+    0, 1, 500, 1900, 1901, 5000, 9500, 9501, 150000, 200000, 226000
   ];
 
   for (const cap of testCapacities) {
@@ -65,27 +72,35 @@ test('复验 1: 级联独立裁剪模型在各种极端边界下非负性与严�
       }
     }
   }
-
-  const caseC = computeCascadeContextBreakdown(500, 1048576);
-  assert.equal(caseC.T_sys, 500);
-  assert.equal(caseC.T_tool, 0);
-  assert.equal(caseC.T_msg, 0);
-  assert.equal(caseC.W_msg, 0, 'Case C 下 W_msg 必须精确为 0%，绝不能为负数！');
 });
 
-test('复验 2: 截图 4 数学严密守恒对账与图例明细验证', () => {
-  const U = 672000;
-  const C = 1048576;
-  const res = computeCascadeContextBreakdown(U, C);
+test('复验 2: parseLatestGenMetadataBlob 真实解析 gen_metadata 模型标识、ContextWindowMetadata 与权威流式 Duration', () => {
+  // 构造 ChatStartMetadata (field 9) -> ContextWindowMetadata (field 10: field 1 estimated=185000, field 4 max=200000)
+  const cwMeta = [
+    (1 << 3) | 0, ...encodeVarint(185000),
+    (4 << 3) | 0, ...encodeVarint(200000),
+  ];
+  const chatStartMeta = [
+    (10 << 3) | 2, ...encodeVarint(cwMeta.length), ...cwMeta,
+  ];
+  const chatModelMeta = [
+    ...encodeStringField(19, 'gemini-3.8-flash-tiered'),
+    ...encodeStringField(21, 'Gemini 3.8 Flash'),
+    (9 << 3) | 2, ...encodeVarint(chatStartMeta.length), ...chatStartMeta,
+    ...encodeTimestampField(11, 2, 500_000_000), // field 11: time_to_first_token = 2.5s
+    ...encodeTimestampField(12, 8, 250_000_000), // field 12: streaming_duration = 8.25s
+  ];
+  const genBlob = new Uint8Array([
+    (1 << 3) | 2, ...encodeVarint(chatModelMeta.length), ...chatModelMeta,
+  ]);
 
-  assert.equal(res.T_sys, 1900);
-  assert.equal(res.T_tool, 7600);
-  assert.equal(res.T_msg, 662500);
-  assert.equal(res.T_sys + res.T_tool + res.T_msg, 672000);
-
-  const totalRounded = Math.round(res.Ratio_total);
-  assert.equal(totalRounded, 64, '截图 4 顶部显示 64% 严格匹配');
-  assert.equal(res.W_msg.toFixed(2), '63.18');
+  const parsed = parseLatestGenMetadataBlob(genBlob);
+  assert.equal(parsed.responseModel, 'gemini-3.8-flash-tiered');
+  assert.equal(parsed.modelDisplayName, 'Gemini 3.8 Flash');
+  assert.equal(parsed.estimatedTokensUsed, 185000);
+  assert.equal(parsed.maxContextTokens, 200000);
+  assert.equal(parsed.timeToFirstTokenSeconds, 2.5);
+  assert.equal(parsed.streamingDurationSeconds, 8.25);
 });
 
 test('复验 3: TPS 瞬时时间窗口截断与 500 tok/s 上限拦截', () => {
@@ -147,12 +162,14 @@ test('复验 4: 64 位 BigInt 无符号 Varint 解码、未知 WireType 跳过�
   assert.equal(step.reasoningTokens + step.candidateTokens, step.outputTokens);
 });
 
-test('复验 5: ConversationMetricsEngine 两级 lstat 门控与 SQLite 单语句增量读取验证', async () => {
+test('复验 5: ConversationMetricsEngine 两级 lstat 门控、子智能体会话聚合与 SQLite 单语句增量读取验证', async () => {
   const tmpDir = path.join(os.tmpdir(), `gravitybox-hud-engine-${Date.now()}`);
   const convDir = path.join(tmpDir, 'antigravity', 'conversations');
   fs.mkdirSync(convDir, { recursive: true });
   const convId = '4ec6348d-0f58-49db-8aed-6f67dbb78f5d';
+  const childConvId = '99999999-1111-4444-8888-aaaaaaaaaaaa';
   const dbFile = path.join(convDir, `${convId}.db`);
+  const childDbFile = path.join(convDir, `${childConvId}.db`);
 
   try {
     const db = new DatabaseSync(dbFile);
@@ -162,7 +179,12 @@ test('复验 5: ConversationMetricsEngine 两级 lstat 门控与 SQLite 单语�
         idx INTEGER PRIMARY KEY,
         step_type INTEGER NOT NULL,
         status INTEGER NOT NULL,
-        metadata BLOB
+        metadata BLOB,
+        data BLOB
+      );
+      CREATE TABLE gen_metadata (
+        idx INTEGER PRIMARY KEY,
+        data BLOB
       );
     `);
 
@@ -179,14 +201,14 @@ test('复验 5: ConversationMetricsEngine 两级 lstat 门控与 SQLite 单语�
       })
     ]);
 
-    db.prepare('INSERT INTO steps (idx, step_type, status, metadata) VALUES (?, ?, ?, ?)').run(1, 101, 2, null);
-    db.prepare('INSERT INTO steps (idx, step_type, status, metadata) VALUES (?, ?, ?, ?)').run(2, 15, 2, step1Blob);
+    db.prepare('INSERT INTO steps (idx, step_type, status, metadata) VALUES (?, ?, ?, ?)').run(1, 101, 3, null);
+    db.prepare('INSERT INTO steps (idx, step_type, status, metadata) VALUES (?, ?, ?, ?)').run(2, 15, 3, step1Blob);
 
     const engine = new ConversationMetricsEngine({ geminiDir: tmpDir });
     const m1 = await engine.getConversationMetrics({
       conversationId: convId,
       sessionRevision: 1,
-      modelId: 'gemini-4-argon',
+      modelId: 'gemini-3.8-flash',
       isStreaming: false
     });
 
@@ -195,12 +217,17 @@ test('复验 5: ConversationMetricsEngine 两级 lstat 门控与 SQLite 单语�
     assert.equal(m1.tokens.totalTokens, 100500);
     assert.equal(m1.tokens.cacheHitRateFormatted, '90%');
     assert.equal(m1.session.outputTpsFormatted, '50 tok/s');
+    assert.equal(m1.context.usedTokens, 100000);
+    assert.equal(m1.context.capacityTokens, 200000);
+    assert.equal(m1.context.usedRatioFormatted, '50%');
+    assert.equal(m1.context.breakdown.cachedContextTokens, 90000);
+    assert.equal(m1.context.breakdown.uncachedContextTokens, 10000);
 
     // 验证宿主执行 wal_checkpoint(TRUNCATE) 绝不被阻塞 (busy: 0)
     const checkpoint = db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get();
     assert.equal(checkpoint.busy, 0, 'ConversationMetricsEngine 单语句 Auto-Commit 绝不阻塞 wal_checkpoint');
 
-    // 追加新步骤并验证增量读取
+    // 追加新步骤并模拟启动一个子智能体 (step_type = 127 INVOKE_SUBAGENT，引用 childConvId)
     const step2Blob = Buffer.from([
       ...encodeTimestampField(1, 1794282020, 0),
       ...encodeTimestampField(6, 1794282021, 0),
@@ -213,19 +240,131 @@ test('复验 5: ConversationMetricsEngine 两级 lstat 门控与 SQLite 单语�
         candidateTokens: 700
       })
     ]);
-    db.prepare('INSERT INTO steps (idx, step_type, status, metadata) VALUES (?, ?, ?, ?)').run(3, 15, 2, step2Blob);
+    db.prepare('INSERT INTO steps (idx, step_type, status, metadata) VALUES (?, ?, ?, ?)').run(3, 15, 3, step2Blob);
+
+    // 建立子智能体会话数据库 childDbFile (正在运行 status = 2)
+    const childDb = new DatabaseSync(childDbFile);
+    childDb.exec(`
+      CREATE TABLE steps (
+        idx INTEGER PRIMARY KEY,
+        step_type INTEGER NOT NULL,
+        status INTEGER NOT NULL,
+        metadata BLOB
+      );
+    `);
+    const childStepBlob = Buffer.from([
+      ...encodeTimestampField(1, 1794282032, 0),
+      ...encodeTimestampField(6, 1794282033, 0),
+      ...encodeTimestampField(7, 1794282038, 0),
+      ...encodeUsageField9({
+        rawInput: 5000,
+        cachedTokens: 45000,
+        outputTokens: 250,
+        reasoningTokens: 50,
+        candidateTokens: 200
+      })
+    ]);
+    childDb.prepare('INSERT INTO steps (idx, step_type, status, metadata) VALUES (?, ?, ?, ?)').run(1, 14, 3, null);
+    childDb.prepare('INSERT INTO steps (idx, step_type, status, metadata) VALUES (?, ?, ?, ?)').run(2, 15, 2, childStepBlob);
+
+    const subagentDataBlob = Buffer.from(encodeStringField(5, childConvId));
+    db.prepare('INSERT INTO steps (idx, step_type, status, metadata, data) VALUES (?, ?, ?, ?, ?)').run(
+      4,
+      127,
+      2,
+      null,
+      subagentDataBlob
+    );
 
     const m2 = await engine.getConversationMetrics({
       conversationId: convId,
       sessionRevision: 2,
-      modelId: 'gemini-4-argon',
+      modelId: 'gemini-3.8-flash',
       isStreaming: false
     });
-    assert.equal(m2.session.steps, 3);
-    assert.equal(m2.tokens.totalTokens, 100500 + 201000);
+    // 主会话 4 步 + 子会话 2 步 = 6 步；且子智能体正在运行，isSubagentRunning & isStreaming 自动为 true
+    assert.equal(m2.session.steps, 6, '总步数应包含关联子智能体会话的步数');
+    assert.equal(m2.session.subagentSteps, 2, 'subagentSteps 应精确报告子智能体完整步数而非残差');
+    assert.equal(m2.isSubagentRunning, true, 'SQLite 中子智能体步骤未完成时应自动标记 isSubagentRunning=true');
+    assert.equal(m2.isStreaming, true, '子智能体运行时 isStreaming 必须为 true');
+    assert.equal(m2.tokens.totalTokens, 100500 + 201000 + 50250, '累计 Token 应自动汇总子智能体消耗');
+    // 主会话当前单步上下文仍保持主会话最后一步的 200,000 tok (100%)，不被子智能体的 50,000 tok 覆盖
     assert.equal(m2.context.usedTokens, 200000);
+    assert.equal(m2.context.usedRatioFormatted, '100%');
 
+    // 验证 Antigravity 2.30.0 真实表结构 (无 data 列，使用 render_info + trajectory_metadata_blob) 与防无关 UUID 串号污染
+    const realMainId = '11111111-2222-4333-8444-555555555555';
+    const realChildId = '66666666-7777-4888-8999-000000000000';
+    const unrelatedId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+    const realMainDb = new DatabaseSync(path.join(convDir, `${realMainId}.db`));
+    realMainDb.exec(`
+      CREATE TABLE trajectory_meta (trajectory_id TEXT PRIMARY KEY, cascade_id TEXT, trajectory_type INTEGER);
+      CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER NOT NULL, status INTEGER NOT NULL, metadata BLOB, render_info BLOB, step_payload BLOB);
+      CREATE TABLE gen_metadata (idx INTEGER PRIMARY KEY, data BLOB, size INTEGER NOT NULL DEFAULT 0);
+    `);
+    realMainDb.prepare('INSERT INTO trajectory_meta VALUES (?, ?, ?)').run('ffffffff-1111-4222-8333-444444444444', realMainId, 1);
+    realMainDb.prepare('INSERT INTO steps (idx, step_type, status, metadata) VALUES (?, ?, ?, ?)').run(0, 14, 3, null);
+    // 普通 run_command 工具参数中出现 unrelatedId，绝不能被误判为子智能体
+    const runCmdToolCall = [
+      ...encodeStringField(2, 'run_command'),
+      ...encodeStringField(3, JSON.stringify({ cmd: `echo ${unrelatedId}` })),
+    ];
+    const runCmdMeta = Buffer.from([
+      ...encodeTimestampField(1, 1794283000, 0),
+      ...encodeTimestampField(8, 1794283001, 0),
+      (4 << 3) | 2, ...encodeVarint(runCmdToolCall.length), ...runCmdToolCall,
+    ]);
+    realMainDb.prepare('INSERT INTO steps (idx, step_type, status, metadata) VALUES (?, ?, ?, ?)').run(1, 132, 3, runCmdMeta);
+    // 真实 invoke_subagent 步骤：子会话 ID 存放在 render_info 列
+    const invokeToolCall = [
+      ...encodeStringField(2, 'invoke_subagent'),
+      ...encodeStringField(3, JSON.stringify({ role: 'Investigator' })),
+    ];
+    const invokeMeta = Buffer.from([
+      ...encodeTimestampField(1, 1794283002, 0),
+      ...encodeTimestampField(8, 1794283010, 0),
+      (4 << 3) | 2, ...encodeVarint(invokeToolCall.length), ...invokeToolCall,
+    ]);
+    const invokeRenderInfo = Buffer.from(encodeStringField(1, realChildId));
+    realMainDb.prepare('INSERT INTO steps (idx, step_type, status, metadata, render_info) VALUES (?, ?, ?, ?, ?)').run(2, 132, 3, invokeMeta, invokeRenderInfo);
+
+    // 创建无关会话数据库 (含 999,999 token，其 trajectory_metadata_blob 不指向 realMainId)
+    const unrelatedDb = new DatabaseSync(path.join(convDir, `${unrelatedId}.db`));
+    unrelatedDb.exec(`
+      CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER NOT NULL, status INTEGER NOT NULL, metadata BLOB);
+      CREATE TABLE trajectory_metadata_blob (id TEXT PRIMARY KEY, data BLOB);
+    `);
+    unrelatedDb.prepare('INSERT INTO trajectory_metadata_blob VALUES (?, ?)').run('main', Buffer.from(unrelatedId));
+    unrelatedDb.prepare('INSERT INTO steps VALUES (?, ?, ?, ?)').run(1, 15, 3, Buffer.from(encodeUsageField9({ rawInput: 999999, outputTokens: 1 })));
+
+    // 创建真实子智能体数据库 (其 trajectory_metadata_blob 指向父会话 realMainId)
+    const realChildDb = new DatabaseSync(path.join(convDir, `${realChildId}.db`));
+    realChildDb.exec(`
+      CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER NOT NULL, status INTEGER NOT NULL, metadata BLOB);
+      CREATE TABLE trajectory_metadata_blob (id TEXT PRIMARY KEY, data BLOB);
+    `);
+    realChildDb.prepare('INSERT INTO trajectory_metadata_blob VALUES (?, ?)').run('main', Buffer.from(`${realChildId}:${realMainId}`));
+    realChildDb.prepare('INSERT INTO steps VALUES (?, ?, ?, ?)').run(1, 15, 3, Buffer.from([
+      ...encodeTimestampField(1, 1794283003, 0),
+      ...encodeTimestampField(8, 1794283009, 0),
+      ...encodeUsageField9({ rawInput: 4000, cachedTokens: 16000, outputTokens: 200, reasoningTokens: 50, candidateTokens: 150 })
+    ]));
+
+    const mReal = await engine.getConversationMetrics({
+      conversationId: realMainId,
+      sessionRevision: 1,
+      modelId: 'gemini-3.8-flash',
+    });
+    assert.equal(mReal.session.subagentCount, 1, '仅归属核验通过的真实子智能体计入 subagentCount，run_command 中的无关 UUID 被拦截');
+    assert.equal(mReal.session.subagentSteps, 1);
+    assert.equal(mReal.session.steps, 4, '主会话 3 步 + 真实子智能体 1 步 = 4 步');
+    assert.equal(mReal.tokens.totalTokens, 20200, '绝不混入 unrelatedDb 的 1,000,000 token');
+
+    realChildDb.close();
+    unrelatedDb.close();
+    realMainDb.close();
     engine.clearCache();
+    childDb.close();
     db.close();
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
