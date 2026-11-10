@@ -1,8 +1,8 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { readdir, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { readdir, mkdir, readFile, writeFile, appendFile, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
 import { sourceDigest, collectReleaseArtifacts, checkReleaseConsistency, renderReleaseConsistency } from './release-integrity.mjs';
@@ -10,6 +10,123 @@ import { describeValidationScope, parseTargetAppVersionArg, recordedScopeFields,
 
 const root = fileURLToPath(new URL('../', import.meta.url)), run = promisify(execFile);
 const argv = process.argv.slice(2);
+
+let failureReported = false;
+
+async function reportFailureToStepSummary({ name, binary, args, error, detail, out, completedSteps = [] }) {
+  const summaryPath = process.env.GITHUB_STEP_SUMMARY;
+  if (!summaryPath) return;
+  failureReported = true;
+
+  const lines = [
+    `## ❌ Release Gate 门禁校验失败: ${name}`,
+    '',
+    '| 属性 | 详情 |',
+    '| --- | --- |',
+    `| **失败步骤** | \`${name}\` |`,
+    `| **已完成步骤** | ${completedSteps.length > 0 ? completedSteps.map(s => '`' + s + '`').join(', ') : '（首个步骤）'} |`,
+    `| **执行程序** | \`${binary}\` |`,
+    `| **执行参数** | \`${(args || []).map(a => typeof a === 'string' ? a.replace(root, '.') : a).join(' ')}\` |`,
+    `| **退出代码** | \`${error?.code ?? error?.status ?? '非零退出'}\` |`,
+    `| **错误摘要** | \`${error?.message ?? '执行失败'}\` |`,
+    '',
+  ];
+
+  if (name === '单元与集成') {
+    const nativeFailurePath = join(out, '原生布局', 'failure.log');
+    if (existsSync(nativeFailurePath)) {
+      try {
+        const nativeLog = (await readFile(nativeFailurePath, 'utf8')).trim();
+        if (nativeLog) {
+          lines.push(
+            '### 原生 UI 布局测试 (native-ui) 错误日志',
+            '<details open>',
+            '<summary>点击展开 / 折叠 native-ui 详细堆栈</summary>',
+            '',
+            '```text',
+            nativeLog.length > 30000 ? '...(截取后 30KB)...\n' + nativeLog.slice(-30000) : nativeLog,
+            '```',
+            '</details>',
+            ''
+          );
+        }
+      } catch {}
+    }
+  }
+
+  const rawLog = (detail || '').trim();
+  if (rawLog) {
+    lines.push(
+      `### 步骤 \`${name}\` 详细控制台输出`,
+      '<details open>',
+      `<summary>点击展开 / 折叠 ${name} 完整输出日志</summary>`,
+      '',
+      '```text',
+      rawLog.length > 50000 ? '...(截取后 50KB)...\n' + rawLog.slice(-50000) : rawLog,
+      '```',
+      '</details>',
+      ''
+    );
+  }
+
+  lines.push('> 💡 **质检提示**：完整质检日志与快照已归档至 GitHub Actions Artifacts 中的 `质检报告`。');
+
+  try {
+    await mkdir(dirname(summaryPath), { recursive: true });
+    await appendFile(summaryPath, lines.join('\n') + '\n\n', 'utf8');
+  } catch (writeErr) {
+    process.stderr.write(`[verify] 写入 GITHUB_STEP_SUMMARY 失败: ${writeErr.message}\n`);
+  }
+}
+
+async function reportGenericErrorToStepSummary(error) {
+  const summaryPath = process.env.GITHUB_STEP_SUMMARY;
+  if (!summaryPath || failureReported) return;
+
+  const lines = [
+    '## ❌ Release Gate 门禁校验异常中断',
+    '',
+    `**错误信息**: ${error?.message || String(error)}`,
+    '',
+    '```text',
+    error?.stack || String(error),
+    '```',
+    '',
+    '> 💡 **质检提示**：请根据上述异常信息排查构建或环境问题。',
+    '',
+  ];
+  try {
+    await mkdir(dirname(summaryPath), { recursive: true });
+    await appendFile(summaryPath, lines.join('\n') + '\n\n', 'utf8');
+  } catch {}
+}
+
+async function reportSuccessToStepSummary({ version, scope, digest, steps }) {
+  const summaryPath = process.env.GITHUB_STEP_SUMMARY;
+  if (!summaryPath) return;
+
+  const lines = [
+    `## ✅ Release Gate 门禁校验全部通过 (v${version})`,
+    '',
+    '| 检查项 | 结果 |',
+    '| --- | --- |',
+    `| **版本号** | \`v${version}\` |`,
+    `| **门禁范围** | ${describeValidationScope(scope)} |`,
+    `| **源码指纹** | \`${digest.slice(0, 16)}...\` |`,
+    `| **运行环境** | macOS (${process.arch}) / Node ${process.version} |`,
+    '',
+    '### 已通过的校验步骤',
+    '',
+    '| 步骤 | 状态 |',
+    '| --- | --- |',
+    ...steps.map(s => `| ${s} | ✅ 通过 |`),
+    '',
+  ];
+  try {
+    await mkdir(dirname(summaryPath), { recursive: true });
+    await appendFile(summaryPath, lines.join('\n') + '\n\n', 'utf8');
+  } catch {}
+}
 
 /**
  * 发布验证。默认（无 --target-app-version）仍对**全部受支持版本**做严格门禁，缺源即失败；
@@ -32,15 +149,19 @@ async function main() {
   const initialDigest = await sourceDigest(root);
   const version = JSON.parse(await readFile(join(root, 'package.json'))).version;
   const out = join(root, '质检报告', `${version}-改造验收`); await mkdir(out, { recursive: true });
+  await rm(join(out, '原生布局', 'failure.log'), { force: true });
+  const completedSteps = [];
   async function step(name, binary, args) {
     process.stdout.write(`检查：${name}\n`);
     try {
       const result = await run(binary, args, { cwd: root, maxBuffer: 4e6 });
       await writeFile(join(out, `${name}.log`), result.stdout + result.stderr);
+      completedSteps.push(name);
     } catch (error) {
       const detail = String(error.stdout ?? '') + String(error.stderr ?? '');
       await writeFile(join(out, `${name}.log`), detail);
       if (detail.trim()) process.stderr.write(`\n--- [${name} 错误详情] ---\n${detail}\n------------------------\n`);
+      await reportFailureToStepSummary({ name, binary, args, error, detail, out, completedSteps });
       throw new Error(`${name} 未通过，见质检报告`);
     }
   }
@@ -98,10 +219,15 @@ async function main() {
   for (const line of renderReleaseConsistency(release)) process.stdout.write(line + '\n');
   if (strict && release.warnings.length) throw new Error(`发布一致性检查未通过（--strict，${release.warnings.length} 项警告），见上方明细`);
   if (scope.mode === VALIDATION_SCOPE_TARGETED) process.stdout.write(`[verify] 发布通过仅覆盖 ${scope.targetAppVersions.join('、')}；${scope.historicalUnverified.join('、') || '无历史版本'} 本轮未验证，不得宣称通过。\n`);
+  await reportSuccessToStepSummary({ version, scope, digest, steps: completedSteps });
   process.stdout.write('全部自动检查通过\n');
 }
 
 const invokedDirectly = typeof process.argv[1] === 'string' && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (invokedDirectly) {
-  main().catch(error => { console.error(`[verify] ${error?.message ?? error}`); process.exitCode = 1; });
+  main().catch(async error => {
+    console.error(`[verify] ${error?.message ?? error}`);
+    await reportGenericErrorToStepSummary(error);
+    process.exitCode = 1;
+  });
 }
