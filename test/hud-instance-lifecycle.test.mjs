@@ -176,13 +176,15 @@ class FakeElement {
 
   querySelectorAll(sel) {
     const out = [];
+    const testIdTargets = [...String(sel).matchAll(/\[data-testid="([^"]+)"\]/g)].map((match) => match[1]);
+    const matchButtonTag = /\bbutton\b/.test(String(sel));
     const visit = (node) => {
       for (const child of node.children || []) {
+        const childTestId = child.getAttribute('data-testid');
         if (
           (sel.includes('.surface-composer') && child.classList.contains('surface-composer')) ||
-          (sel === '[data-testid="conversation-view"]' && child.getAttribute('data-testid') === 'conversation-view') ||
-          (sel === '[data-testid="agent-input-box"]' && child.getAttribute('data-testid') === 'agent-input-box') ||
-          (sel === '[data-testid="idle-status-text"]' && child.getAttribute('data-testid') === 'idle-status-text')
+          (childTestId && testIdTargets.includes(childTestId)) ||
+          (matchButtonTag && child.tagName === 'BUTTON')
         ) {
           out.push(child);
         }
@@ -633,6 +635,11 @@ describe('HudInstance 与 AntigravityHudManager 生产模块生命周期、垂�
     // 验证会话切换后 pinnedPopoverId 必须被重置，不得阻塞新会话中的胶囊悬停
     instA.handleCapsuleClick(capsuleBtn, { stopPropagation() {} });
     assert.equal(instA.pinnedPopoverId, 'session');
+    assert.equal(
+      capsuleBtn.classList.contains('is-streaming'),
+      false,
+      '模型未工作时点击展开卡片不得将状态圆点置为工作态'
+    );
     const rev4 = instA.switchConversation('conv-3');
     assert.equal(instA.pinnedPopoverId, null, '切换会话后必须清除旧会话锁定的 pinnedPopoverId');
     assert.equal(instA.updateMetrics(sampleMetrics('conv-3', rev4)), true);
@@ -707,6 +714,22 @@ describe('HudInstance 与 AntigravityHudManager 生产模块生命周期、垂�
 
     // 验证后端 SQLite 报告子智能体运行而前端 DOM 空闲时，不会触发无限 STREAMING_CHANGED 乒乓风暴
     subagentStatusNode.remove();
+    assert.equal(manager.resolveStreamingState(paneA.view), false, '子智能体结束后流式状态恢复为 false');
+    const cancelBtn = new FakeElement('button', doc);
+    cancelBtn.setAttribute('data-testid', 'input-cancel-button');
+    cancelBtn.setAttribute('aria-label', 'Cancel (⌃C)');
+    paneA.view.appendChild(cancelBtn);
+    assert.equal(
+      manager.resolveStreamingState(paneA.view),
+      true,
+      '宿主出现 input-cancel-button 时必须立即识别为模型工作态'
+    );
+    cancelBtn.remove();
+    assert.equal(
+      manager.resolveStreamingState(paneA.view),
+      false,
+      'input-cancel-button 移除后必须立即恢复为空闲态'
+    );
     manager.reconcileMounts();
     const streamingEventsBefore = events.filter((e) => e.type === 'STREAMING_CHANGED').length;
     instA.updateMetrics({

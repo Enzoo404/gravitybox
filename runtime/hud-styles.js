@@ -223,12 +223,8 @@ export const HUD_STYLES_CSS = `
   transition: background-color 150ms ease, box-shadow 150ms ease;
 }
 
-.capsule:hover .hud-status-dot,
-.capsule.is-active .hud-status-dot {
-  background-color: var(--hud-accent-blue);
-}
-
-.capsule.is-streaming .hud-status-dot {
+.capsule.is-streaming .hud-status-dot,
+.hud-popover.is-streaming .hud-status-dot {
   background-color: var(--hud-accent-blue);
   animation: hud-pulse-dot 1.4s ease-in-out infinite;
 }
@@ -536,7 +532,8 @@ export const HUD_STYLES_CSS = `
     transition: none !important;
   }
   .capsule.is-skeleton,
-  .capsule.is-streaming .hud-status-dot {
+  .capsule.is-streaming .hud-status-dot,
+  .hud-popover.is-streaming .hud-status-dot {
     animation: none !important;
   }
 }

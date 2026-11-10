@@ -524,9 +524,21 @@ export class AntigravityHudManager {
     if (subState.isSubagentRunning) return true;
 
     const streamingNodes = view.querySelectorAll(
-      '[data-state="streaming"], [data-streaming="true"], .codicon-loading'
+      '[data-testid="input-cancel-button"], [data-testid="send-button-loading"], [data-testid="send-button-pending"], [data-testid="agent-loading"], [data-testid="status-loading-spinner"], [data-testid="status-task-running"], [data-state="streaming"], [data-streaming="true"], .codicon-loading'
     );
     if (streamingNodes && streamingNodes.length > 0) return true;
+
+    const toolStatusNodes = view.querySelectorAll('[data-testid="ephemeral-tool-status"]');
+    if (toolStatusNodes && typeof toolStatusNodes.forEach === 'function') {
+      let hasActiveTool = false;
+      toolStatusNodes.forEach((node) => {
+        const statusText = (node.textContent || '').replace(/\s+/g, ' ').trim();
+        if (statusText && !/(?:Waiting for your approval|等待您的批准)/i.test(statusText)) {
+          hasActiveTool = true;
+        }
+      });
+      if (hasActiveTool) return true;
+    }
 
     const buttons = view.querySelectorAll('button, [role="button"]');
     if (buttons && typeof buttons.forEach === 'function') {
@@ -538,7 +550,11 @@ export class AntigravityHudManager {
           btn.textContent ||
           ''
         ).trim();
-        if (/^(Stop generating|Stop|Cancel generation|停止生成|停止|中断)$/i.test(label)) {
+        if (
+          /^(?:Stop generating|Stop|Cancel generation|Cancel\s*[（(][^）)]+[）)]|停止生成|停止|中断|取消\s*[（(][^）)]+[）)])$/i.test(
+            label
+          )
+        ) {
           foundStop = true;
         }
       });

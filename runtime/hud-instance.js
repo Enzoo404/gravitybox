@@ -629,7 +629,7 @@ export class HudInstance {
         <div class="hud-popover-inner">
           <div class="hud-popover-header">
             <span class="hud-popover-title">
-              <span class="hud-status-dot" style="margin-right:2px;background-color:var(--hud-accent-blue)"></span>
+              <span class="hud-status-dot" style="margin-right:2px" aria-hidden="true"></span>
               <span id="pop-session-title">会话统计</span>
             </span>
             <span class="hud-popover-badge" id="pop-session-badge">0 轮 0 步</span>
@@ -784,8 +784,10 @@ export class HudInstance {
     if (!this.shadow) return;
     const isEn = this.languageMode === 'en';
     const sessionCapsule = this.shadow.querySelector('.capsule-session');
+    const sessionPopover = this.shadow.querySelector('#hud-popover-session');
+    const isWorking = Boolean(this.isStreaming || this.isSubagentRunning);
     if (sessionCapsule && sessionCapsule.classList) {
-      if (this.isStreaming || this.isSubagentRunning) {
+      if (isWorking) {
         sessionCapsule.classList.add('is-streaming');
       } else {
         sessionCapsule.classList.remove('is-streaming');
@@ -794,6 +796,13 @@ export class HudInstance {
         sessionCapsule.classList.add('is-subagent-active');
       } else {
         sessionCapsule.classList.remove('is-subagent-active');
+      }
+    }
+    if (sessionPopover && sessionPopover.classList) {
+      if (isWorking) {
+        sessionPopover.classList.add('is-streaming');
+      } else {
+        sessionPopover.classList.remove('is-streaming');
       }
     }
 

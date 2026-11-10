@@ -900,10 +900,15 @@ ${engine}`,auth.executionContextId);assert.equal(await cdp.evaluate('!!globalThi
       const host = document.querySelector('#__gravitybox_hud_host__');
       const sr = host.shadowRoot;
       const cap1 = sr.querySelector('.capsule-session');
+      const capDot = cap1.querySelector('.hud-status-dot');
+      const idleCollapsedDotColor = getComputedStyle(capDot).backgroundColor;
       const mdEvt = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
       cap1.dispatchEvent(mdEvt);
       cap1.click();
       const pop1 = sr.querySelector('#hud-popover-session');
+      const popDot = pop1.querySelector('.hud-status-dot');
+      const idleActiveDotColor = getComputedStyle(capDot).backgroundColor;
+      const idlePopoverDotColor = getComputedStyle(popDot).backgroundColor;
       const popRect = pop1.getBoundingClientRect();
       const capRect = cap1.getBoundingClientRect();
       const scrollBtn = document.querySelector('#hud-e2e-scroll-btn');
@@ -917,7 +922,10 @@ ${engine}`,auth.executionContextId);assert.equal(await cdp.evaluate('!!globalThi
         popoverVisible: !pop1.hasAttribute('hidden'),
         isUpward: popRect.bottom <= capRect.top,
         outerOverflow: getComputedStyle(pop1).overflow,
-        topLayerAboveZ20Button: topHit === host
+        topLayerAboveZ20Button: topHit === host,
+        idleCollapsedDotColor,
+        idleActiveDotColor,
+        idlePopoverDotColor
       };
     })()`);
     assert.equal(focusAndPopover.defaultPrevented, true, 'mousedown 必须阻止默认行为以防输入框失焦');
@@ -926,6 +934,38 @@ ${engine}`,auth.executionContextId);assert.equal(await cdp.evaluate('!!globalThi
     assert.equal(focusAndPopover.isUpward, true, 'Popover 必须向上展开');
     assert.equal(focusAndPopover.outerOverflow, 'visible', 'Popover 外层必须为 overflow:visible 防止裁切底部小三角');
     assert.equal(focusAndPopover.topLayerAboveZ20Button, true, 'Popover 必须通过 Top Layer 位于 z-index:20 回到底部悬浮按钮之上，绝不被遮挡');
+    assert.equal(focusAndPopover.idleActiveDotColor, focusAndPopover.idleCollapsedDotColor, '空闲时点击展开卡片小圆点必须保持灰色不变蓝');
+    assert.equal(focusAndPopover.idlePopoverDotColor, focusAndPopover.idleCollapsedDotColor, '空闲时展开卡片内标题圆点也必须保持灰色');
+
+    // 3a. 验证宿主运行任务（出现 input-cancel-button）时小圆点实时变蓝，结束后恢复灰色
+    await main.evaluate(`(() => {
+      const box = document.querySelector('#hud-e2e-composer');
+      const cancelBtn = document.createElement('button');
+      cancelBtn.id = 'hud-e2e-cancel-btn';
+      cancelBtn.setAttribute('data-testid', 'input-cancel-button');
+      cancelBtn.setAttribute('aria-label', 'Cancel (⌃C)');
+      box.appendChild(cancelBtn);
+    })()`);
+    await until(async () => await main.evaluate(`(() => {
+      const sr = document.querySelector('#__gravitybox_hud_host__').shadowRoot;
+      return sr.querySelector('.capsule-session').classList.contains('is-streaming') &&
+        getComputedStyle(sr.querySelector('.capsule-session .hud-status-dot')).backgroundColor === 'rgb(49, 134, 255)';
+    })()`));
+    const workingDotColors = await main.evaluate(`(() => {
+      const sr = document.querySelector('#__gravitybox_hud_host__').shadowRoot;
+      return {
+        capDot: getComputedStyle(sr.querySelector('.capsule-session .hud-status-dot')).backgroundColor,
+        popDot: getComputedStyle(sr.querySelector('#hud-popover-session .hud-status-dot')).backgroundColor,
+      };
+    })()`);
+    assert.equal(workingDotColors.capDot, 'rgb(49, 134, 255)', '模型工作时未展开胶囊圆点必须变蓝');
+    assert.equal(workingDotColors.popDot, workingDotColors.capDot, '模型工作时展开卡片圆点同步为蓝色');
+    await main.evaluate(`document.querySelector('#hud-e2e-cancel-btn').remove()`);
+    await until(async () => await main.evaluate(`(() => {
+      const sr = document.querySelector('#__gravitybox_hud_host__').shadowRoot;
+      return !sr.querySelector('.capsule-session').classList.contains('is-streaming') &&
+        getComputedStyle(sr.querySelector('.capsule-session .hud-status-dot')).backgroundColor === 'rgb(113, 113, 122)';
+    })()`));
 
     // 3b. 验证外部控件 stopPropagation() 的 pointerdown 仍能经捕获阶段自动关闭已固定 Popover
     const dismissedByStopPropOutside = await main.evaluate(`(() => {
