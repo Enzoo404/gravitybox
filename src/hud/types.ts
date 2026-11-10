@@ -3,6 +3,8 @@
  * 指标来源、统计范围与缺失值遵循 CONVERSATION_STATUS_HUD_ARCHITECTURE.md。
  */
 
+export type HudActivityPhase = 'idle' | 'generating' | 'executing';
+
 export interface ConversationHudMetrics {
   /** 目标会话 UUID (对应 ~/.gemini/antigravity/conversations/<id>.db) */
   conversationId: string;
@@ -12,6 +14,8 @@ export interface ConversationHudMetrics {
   updatedAt: number;
   /** 当前是否处于活跃流式生成中（含主智能体生成与子智能体后台运行） */
   isStreaming: boolean;
+  /** 当前精确活动阶段：idle=空闲灰，generating=模型思考输出常亮蓝，executing=脚本/工具/后台执行蓝色呼吸 */
+  activityPhase?: HudActivityPhase;
   /** 当前是否有子智能体正在运行 */
   isSubagentRunning?: boolean;
   /** 当前正在运行的子智能体数量 */
@@ -242,6 +246,7 @@ export type HudClientEvent =
       sessionRevision?: number;
       modelId?: string;
       isStreaming?: boolean;
+      activityPhase?: HudActivityPhase;
       isSubagentRunning?: boolean;
       runningSubagentCount?: number;
       childConversationIds?: string[];
@@ -260,6 +265,7 @@ export type HudClientEvent =
       sessionRevision?: number;
       modelId?: string;
       isStreaming?: boolean;
+      activityPhase?: HudActivityPhase;
       isSubagentRunning?: boolean;
       runningSubagentCount?: number;
       childConversationIds?: string[];
@@ -272,6 +278,7 @@ export type HudClientEvent =
       sessionRevision?: number;
       modelId: string;
       isStreaming?: boolean;
+      activityPhase?: HudActivityPhase;
       isSubagentRunning?: boolean;
       runningSubagentCount?: number;
       childConversationIds?: string[];
@@ -284,6 +291,7 @@ export type HudClientEvent =
       sessionRevision?: number;
       modelId?: string;
       isStreaming: boolean;
+      activityPhase?: HudActivityPhase;
       isSubagentRunning?: boolean;
       runningSubagentCount?: number;
       childConversationIds?: string[];

@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import type {
   ConversationHudMetrics,
+  HudActivityPhase,
   ParsedConversationStep,
   ParsedGenMetadata,
 } from './types.js';
@@ -802,6 +803,7 @@ export interface ComputeHudMetricsInput {
   conversationId?: string;
   sessionRevision?: number;
   isStreaming?: boolean;
+  activityPhase?: HudActivityPhase;
   isSubagentRunning?: boolean;
   runningSubagentCount?: number;
   subagentCount?: number;
@@ -970,6 +972,39 @@ export function buildConversationHudMetrics(input: ComputeHudMetricsInput): Conv
   );
   const isSubagentRunning = Boolean(input.isSubagentRunning || runningSubagentCount > 0);
   const isStreaming = Boolean(input.isStreaming || isSubagentRunning);
+  let dbActiveModelStep = false;
+  let dbActiveToolStep = false;
+  if (input.allowDbActiveStepInference) {
+    for (let index = contextSteps.length - 1; index >= 0; index--) {
+      const candidate = contextSteps[index]!;
+      const candidateType = candidate.step_type ?? candidate.stepType ?? 0;
+      if (candidateType === 14) break;
+      const candidateStatus = candidate.status ?? 3;
+      const candidateEnd = candidate.t_end ?? candidate.endTimeSeconds;
+      if (!ACTIVE_STEP_STATUSES.has(candidateStatus) || candidateEnd != null) continue;
+      if (candidateType === 15) {
+        dbActiveModelStep = true;
+        break;
+      }
+      if (!NON_TOOL_STEP_TYPES.has(candidateType)) {
+        dbActiveToolStep = true;
+      }
+    }
+  }
+  let activityPhase: HudActivityPhase = 'idle';
+  if (isStreaming) {
+    if (dbActiveModelStep) {
+      activityPhase = 'generating';
+    } else if (dbActiveToolStep) {
+      activityPhase = 'executing';
+    } else if (input.activityPhase === 'executing' || input.activityPhase === 'generating') {
+      activityPhase = input.activityPhase;
+    } else if (!input.isStreaming && isSubagentRunning) {
+      activityPhase = 'executing';
+    } else {
+      activityPhase = 'generating';
+    }
+  }
   const tpsInfo = computeTps(timedOutputSeconds, timedOutputTokens);
   const outputTpsFormatted = timedOutputCount > 0 ? tpsInfo.formatted : isStreaming ? '计算中...' : '—';
   const averageTtftSeconds = validTtftCount > 0 ? validTtftSum / validTtftCount : 0;
@@ -982,6 +1017,7 @@ export function buildConversationHudMetrics(input: ComputeHudMetricsInput): Conv
     sessionRevision: input.sessionRevision ?? 1,
     updatedAt: Date.now(),
     isStreaming,
+    activityPhase,
     isSubagentRunning,
     runningSubagentCount,
     session: {
@@ -1494,6 +1530,7 @@ export class ConversationMetricsEngine {
     sessionRevision?: number;
     modelId?: string;
     isStreaming?: boolean;
+    activityPhase?: HudActivityPhase;
     isSubagentRunning?: boolean;
     runningSubagentCount?: number;
     childConversationIds?: string[];
@@ -1504,6 +1541,7 @@ export class ConversationMetricsEngine {
       sessionRevision = 1,
       modelId,
       isStreaming = false,
+      activityPhase,
       isSubagentRunning = false,
       runningSubagentCount = 0,
       childConversationIds: domHintChildIds,
@@ -1517,6 +1555,7 @@ export class ConversationMetricsEngine {
         conversationId,
         sessionRevision,
         isStreaming,
+        activityPhase,
         isSubagentRunning,
         runningSubagentCount,
         modelId,
@@ -1591,6 +1630,7 @@ export class ConversationMetricsEngine {
       conversationId,
       sessionRevision,
       isStreaming: isStreaming || effectiveSubagentRunning,
+      activityPhase,
       isSubagentRunning: effectiveSubagentRunning,
       runningSubagentCount: effectiveRunningSubagents,
       subagentCount: verifiedChildIds.size,

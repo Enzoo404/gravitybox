@@ -937,7 +937,7 @@ ${engine}`,auth.executionContextId);assert.equal(await cdp.evaluate('!!globalThi
     assert.equal(focusAndPopover.idleActiveDotColor, focusAndPopover.idleCollapsedDotColor, '空闲时点击展开卡片小圆点必须保持灰色不变蓝');
     assert.equal(focusAndPopover.idlePopoverDotColor, focusAndPopover.idleCollapsedDotColor, '空闲时展开卡片内标题圆点也必须保持灰色');
 
-    // 3a. 验证宿主运行任务（出现 input-cancel-button）时小圆点实时变蓝，结束后恢复灰色
+    // 3a. 验证三态圆点：模型思考/输出常亮蓝色 -> 脚本执行蓝色呼吸 -> 两者停止灰色
     await main.evaluate(`(() => {
       const box = document.querySelector('#hud-e2e-composer');
       const cancelBtn = document.createElement('button');
@@ -948,22 +948,56 @@ ${engine}`,auth.executionContextId);assert.equal(await cdp.evaluate('!!globalThi
     })()`);
     await until(async () => await main.evaluate(`(() => {
       const sr = document.querySelector('#__gravitybox_hud_host__').shadowRoot;
-      return sr.querySelector('.capsule-session').classList.contains('is-streaming') &&
+      return sr.querySelector('.capsule-session').classList.contains('is-generating') &&
         getComputedStyle(sr.querySelector('.capsule-session .hud-status-dot')).backgroundColor === 'rgb(49, 134, 255)';
     })()`));
-    const workingDotColors = await main.evaluate(`(() => {
+    const generatingDotState = await main.evaluate(`(() => {
       const sr = document.querySelector('#__gravitybox_hud_host__').shadowRoot;
+      const capStyle = getComputedStyle(sr.querySelector('.capsule-session .hud-status-dot'));
+      const popStyle = getComputedStyle(sr.querySelector('#hud-popover-session .hud-status-dot'));
       return {
-        capDot: getComputedStyle(sr.querySelector('.capsule-session .hud-status-dot')).backgroundColor,
-        popDot: getComputedStyle(sr.querySelector('#hud-popover-session .hud-status-dot')).backgroundColor,
+        capDot: capStyle.backgroundColor,
+        popDot: popStyle.backgroundColor,
+        capAnim: capStyle.animationName,
+        popAnim: popStyle.animationName,
       };
     })()`);
-    assert.equal(workingDotColors.capDot, 'rgb(49, 134, 255)', '模型工作时未展开胶囊圆点必须变蓝');
-    assert.equal(workingDotColors.popDot, workingDotColors.capDot, '模型工作时展开卡片圆点同步为蓝色');
+    assert.equal(generatingDotState.capDot, 'rgb(49, 134, 255)', '模型思考/输出时胶囊圆点必须显示常亮蓝色');
+    assert.equal(generatingDotState.popDot, 'rgb(49, 134, 255)', '模型思考/输出时展开卡片圆点同步为常亮蓝色');
+    assert.equal(generatingDotState.capAnim, 'none', '模型本身思考/输出时圆点保持常亮不呼吸');
+    assert.equal(generatingDotState.popAnim, 'none', '展开卡片圆点在模型思考/输出时保持常亮不呼吸');
+
+    await main.evaluate(`(() => {
+      const wrap = document.querySelector('#hud-e2e-msg-wrap');
+      const scriptIndicator = document.createElement('span');
+      scriptIndicator.id = 'hud-e2e-script-running';
+      scriptIndicator.className = 'animate-shimmer-text';
+      scriptIndicator.textContent = 'Running npm test';
+      wrap.appendChild(scriptIndicator);
+    })()`);
+    await until(async () => await main.evaluate(`(() => {
+      const sr = document.querySelector('#__gravitybox_hud_host__').shadowRoot;
+      return sr.querySelector('.capsule-session').classList.contains('is-executing') &&
+        getComputedStyle(sr.querySelector('.capsule-session .hud-status-dot')).animationName === 'hud-breathe-dot';
+    })()`));
+    const executingDotState = await main.evaluate(`(() => {
+      const sr = document.querySelector('#__gravitybox_hud_host__').shadowRoot;
+      const capStyle = getComputedStyle(sr.querySelector('.capsule-session .hud-status-dot'));
+      const popStyle = getComputedStyle(sr.querySelector('#hud-popover-session .hud-status-dot'));
+      return {
+        capAnim: capStyle.animationName,
+        popAnim: popStyle.animationName,
+      };
+    })()`);
+    assert.equal(executingDotState.capAnim, 'hud-breathe-dot', '模型暂停且脚本执行时胶囊圆点必须呈蓝色呼吸');
+    assert.equal(executingDotState.popAnim, 'hud-breathe-dot', '模型暂停且脚本执行时展开卡片圆点同步呈蓝色呼吸');
+
+    await main.evaluate(`document.querySelector('#hud-e2e-script-running').remove()`);
     await main.evaluate(`document.querySelector('#hud-e2e-cancel-btn').remove()`);
     await until(async () => await main.evaluate(`(() => {
       const sr = document.querySelector('#__gravitybox_hud_host__').shadowRoot;
       return !sr.querySelector('.capsule-session').classList.contains('is-streaming') &&
+        getComputedStyle(sr.querySelector('.capsule-session .hud-status-dot')).animationName === 'none' &&
         getComputedStyle(sr.querySelector('.capsule-session .hud-status-dot')).backgroundColor === 'rgb(113, 113, 122)';
     })()`));
 

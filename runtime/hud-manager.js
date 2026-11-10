@@ -218,7 +218,8 @@ export class AntigravityHudManager {
       const convId = this.resolveConversationId(view, rawCascadeId, views.length);
       const modelId = this.resolveActiveModel(view);
       const subagentState = this.resolveSubagentState(view);
-      const isStreaming = this.resolveStreamingState(view, subagentState);
+      const activityPhase = this.resolveActivityPhase(view, subagentState);
+      const isStreaming = activityPhase !== 'idle';
       const paneChildIds = isSubpane ? [] : domSubagentIds;
 
       let instance = this.instances.get(cascadeId);
@@ -237,7 +238,8 @@ export class AntigravityHudManager {
             isStreaming,
             subagentState.isSubagentRunning,
             subagentState.runningSubagentCount,
-            paneChildIds
+            paneChildIds,
+            activityPhase
           );
         }
       } else {
@@ -249,7 +251,8 @@ export class AntigravityHudManager {
             isStreaming,
             subagentState.isSubagentRunning,
             subagentState.runningSubagentCount,
-            paneChildIds
+            paneChildIds,
+            activityPhase
           );
         } else {
           instance.notifyModelOrStreamingChange(
@@ -257,7 +260,8 @@ export class AntigravityHudManager {
             isStreaming,
             subagentState.isSubagentRunning,
             subagentState.runningSubagentCount,
-            paneChildIds
+            paneChildIds,
+            activityPhase
           );
         }
       }
@@ -518,49 +522,112 @@ export class AntigravityHudManager {
     };
   }
 
-  resolveStreamingState(view, precomputedSubagentState = null) {
-    if (!view || typeof view.querySelectorAll !== 'function') return false;
+  resolveActivityPhase(view, precomputedSubagentState = null) {
+    if (!view || typeof view.querySelectorAll !== 'function') return 'idle';
     const subState = precomputedSubagentState || this.resolveSubagentState(view);
-    if (subState.isSubagentRunning) return true;
 
-    const streamingNodes = view.querySelectorAll(
-      '[data-testid="input-cancel-button"], [data-testid="send-button-loading"], [data-testid="send-button-pending"], [data-testid="agent-loading"], [data-testid="status-loading-spinner"], [data-testid="status-task-running"], [data-state="streaming"], [data-streaming="true"], .codicon-loading'
+    const foregroundTurnNodes = view.querySelectorAll(
+      '[data-testid="input-cancel-button"], [data-testid="send-button-loading"], [data-testid="send-button-pending"], [data-testid="agent-loading"], [data-state="streaming"], [data-streaming="true"], .codicon-loading'
     );
-    if (streamingNodes && streamingNodes.length > 0) return true;
+    let hasForegroundTurn = Boolean(foregroundTurnNodes && foregroundTurnNodes.length > 0);
+
+    if (!hasForegroundTurn) {
+      const buttons = view.querySelectorAll('button, [role="button"]');
+      if (buttons && typeof buttons.forEach === 'function') {
+        buttons.forEach((btn) => {
+          const label = (
+            btn.getAttribute?.('aria-label') ||
+            btn.getAttribute?.('title') ||
+            btn.textContent ||
+            ''
+          ).trim();
+          if (
+            /^(?:Stop generating|Stop|Cancel generation|Cancel\s*[（(][^）)]+[）)]|停止生成|停止|中断|取消\s*[（(][^）)]+[）)])$/i.test(
+              label
+            )
+          ) {
+            hasForegroundTurn = true;
+          }
+        });
+      }
+    }
 
     const toolStatusNodes = view.querySelectorAll('[data-testid="ephemeral-tool-status"]');
+    let hasApprovalWait = false;
+    let hasEphemeralToolRunning = false;
+    let hasEphemeralThinking = false;
     if (toolStatusNodes && typeof toolStatusNodes.forEach === 'function') {
-      let hasActiveTool = false;
       toolStatusNodes.forEach((node) => {
         const statusText = (node.textContent || '').replace(/\s+/g, ' ').trim();
-        if (statusText && !/(?:Waiting for your approval|等待您的批准)/i.test(statusText)) {
-          hasActiveTool = true;
+        if (!statusText) return;
+        if (/(?:Waiting for your approval|等待您的批准)/i.test(statusText)) {
+          hasApprovalWait = true;
+        } else if (/^(?:Thinking\b|Thought\b|Compacting\b|思考|正在思考|思维|压缩)/i.test(statusText)) {
+          hasEphemeralThinking = true;
+        } else {
+          hasEphemeralToolRunning = true;
         }
       });
-      if (hasActiveTool) return true;
     }
 
-    const buttons = view.querySelectorAll('button, [role="button"]');
-    if (buttons && typeof buttons.forEach === 'function') {
-      let foundStop = false;
-      buttons.forEach((btn) => {
-        const label = (
-          btn.getAttribute?.('aria-label') ||
-          btn.getAttribute?.('title') ||
-          btn.textContent ||
-          ''
-        ).trim();
+    const taskRunningNodes = view.querySelectorAll(
+      '[data-testid="status-task-running"], [data-testid="status-loading-spinner"]'
+    );
+    const hasTaskSpinner = Boolean(taskRunningNodes && taskRunningNodes.length > 0);
+
+    let hasToolCardShimmer = false;
+    let hasModelThinkingShimmer = false;
+    const shimmerNodes = view.querySelectorAll('.animate-shimmer-text');
+    if (shimmerNodes && typeof shimmerNodes.forEach === 'function') {
+      shimmerNodes.forEach((node) => {
+        const parentTestId = node.closest?.('[data-testid]')?.getAttribute?.('data-testid') || '';
+        if (parentTestId === 'idle-status-text') return;
+        const text = (node.textContent || '').replace(/\s+/g, ' ').trim();
         if (
-          /^(?:Stop generating|Stop|Cancel generation|Cancel\s*[（(][^）)]+[）)]|停止生成|停止|中断|取消\s*[（(][^）)]+[）)])$/i.test(
-            label
-          )
+          parentTestId === 'agent-loading' ||
+          /^(?:Thinking\b|Thought\b|Compacting\b|思考|正在思考|思维|压缩)/i.test(text)
         ) {
-          foundStop = true;
+          hasModelThinkingShimmer = true;
+        } else if (text) {
+          hasToolCardShimmer = true;
         }
       });
-      if (foundStop) return true;
     }
-    return false;
+
+    if (!hasForegroundTurn) {
+      if (hasApprovalWait) return 'idle';
+      if (subState.isSubagentRunning || hasTaskSpinner || hasEphemeralToolRunning || hasToolCardShimmer) {
+        return 'executing';
+      }
+      if (hasEphemeralThinking || hasModelThinkingShimmer) {
+        return 'generating';
+      }
+      return 'idle';
+    }
+
+    if (
+      hasApprovalWait &&
+      !hasModelThinkingShimmer &&
+      !hasEphemeralThinking &&
+      !hasToolCardShimmer &&
+      !hasEphemeralToolRunning
+    ) {
+      return 'idle';
+    }
+
+    if (hasModelThinkingShimmer || hasEphemeralThinking) {
+      return 'generating';
+    }
+
+    if (hasEphemeralToolRunning || hasToolCardShimmer || hasTaskSpinner) {
+      return 'executing';
+    }
+
+    return 'generating';
+  }
+
+  resolveStreamingState(view, precomputedSubagentState = null) {
+    return this.resolveActivityPhase(view, precomputedSubagentState) !== 'idle';
   }
 
   dispatchMetrics(metrics) {

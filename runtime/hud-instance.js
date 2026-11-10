@@ -88,6 +88,7 @@ function createDefaultMetrics(conversationId = 'default', sessionRevision = 1) {
     sessionRevision,
     updatedAt: Date.now(),
     isStreaming: false,
+    activityPhase: 'idle',
     isSubagentRunning: false,
     runningSubagentCount: 0,
     session: {
@@ -173,6 +174,9 @@ export class HudInstance {
     this.sessionRevision = 0;
     this.currentModelId = 'gemini-3.8-flash';
     this.domIsStreaming = false;
+    this.domActivityPhase = 'idle';
+    this.backendActivityPhase = null;
+    this.activityPhase = 'idle';
     this.domIsSubagentRunning = false;
     this.domRunningSubagentCount = 0;
     this.backendIsSubagentRunning = false;
@@ -208,7 +212,8 @@ export class HudInstance {
     isStreaming = false,
     isSubagentRunning = false,
     runningSubagentCount = 0,
-    childConversationIds = null
+    childConversationIds = null,
+    activityPhase = null
   ) {
     if (!newConvId) return this.sessionRevision;
     const changed = this.currentConvId !== newConvId;
@@ -217,6 +222,14 @@ export class HudInstance {
     this.domIsSubagentRunning = Boolean(isSubagentRunning);
     this.domRunningSubagentCount = Math.max(0, Number(runningSubagentCount) || 0);
     this.domIsStreaming = Boolean(isStreaming || this.domIsSubagentRunning);
+    this.domActivityPhase =
+      activityPhase === 'generating' || activityPhase === 'executing' || activityPhase === 'idle'
+        ? activityPhase
+        : !this.domIsStreaming
+        ? 'idle'
+        : !isStreaming && this.domIsSubagentRunning
+        ? 'executing'
+        : 'generating';
     if (Array.isArray(childConversationIds)) {
       this.childConversationIds = [...new Set(childConversationIds.filter(Boolean))];
     } else if (changed) {
@@ -225,9 +238,11 @@ export class HudInstance {
     if (changed) {
       this.backendIsSubagentRunning = false;
       this.backendRunningSubagentCount = 0;
+      this.backendActivityPhase = null;
       this.isSubagentRunning = this.domIsSubagentRunning;
       this.runningSubagentCount = this.domRunningSubagentCount;
       this.isStreaming = this.domIsStreaming;
+      this.activityPhase = this.computeMergedActivityPhase();
       this.sessionRevision++;
       this.pinnedPopoverId = null;
       this.lastMetrics = createDefaultMetrics(newConvId, this.sessionRevision);
@@ -241,9 +256,22 @@ export class HudInstance {
         this.backendRunningSubagentCount
       );
       this.isStreaming = Boolean(this.domIsStreaming || this.isSubagentRunning);
+      this.activityPhase = this.computeMergedActivityPhase();
       this.syncStreamingClass();
     }
     return this.sessionRevision;
+  }
+
+  computeMergedActivityPhase() {
+    if (!this.isStreaming && !this.isSubagentRunning) return 'idle';
+    if (this.domActivityPhase === 'executing') return 'executing';
+    if (this.domActivityPhase === 'generating') {
+      if (this.backendActivityPhase === 'executing') return 'executing';
+      return 'generating';
+    }
+    if (this.backendActivityPhase === 'generating') return 'generating';
+    if (this.backendActivityPhase === 'executing' || this.isSubagentRunning) return 'executing';
+    return this.isStreaming ? 'generating' : 'idle';
   }
 
   notifyModelOrStreamingChange(
@@ -251,7 +279,8 @@ export class HudInstance {
     isStreaming,
     isSubagentRunning = false,
     runningSubagentCount = 0,
-    childConversationIds = null
+    childConversationIds = null,
+    activityPhase = null
   ) {
     let changed = false;
     if (modelId && modelId !== this.currentModelId) {
@@ -262,6 +291,14 @@ export class HudInstance {
     const nextDomSubagentRunning = Boolean(isSubagentRunning);
     const nextDomSubagentCount = Math.max(0, Number(runningSubagentCount) || 0);
     const nextDomStreaming = Boolean(isStreaming || nextDomSubagentRunning);
+    const nextDomPhase =
+      activityPhase === 'generating' || activityPhase === 'executing' || activityPhase === 'idle'
+        ? activityPhase
+        : !nextDomStreaming
+        ? 'idle'
+        : !isStreaming && nextDomSubagentRunning
+        ? 'executing'
+        : 'generating';
     const nextChildIds = Array.isArray(childConversationIds)
       ? [...new Set(childConversationIds.filter(Boolean))]
       : this.childConversationIds;
@@ -269,11 +306,19 @@ export class HudInstance {
 
     if (
       nextDomStreaming !== this.domIsStreaming ||
+      nextDomPhase !== this.domActivityPhase ||
       nextDomSubagentRunning !== this.domIsSubagentRunning ||
       nextDomSubagentCount !== this.domRunningSubagentCount ||
       childIdsChanged
     ) {
+      if (
+        (this.domActivityPhase === 'executing' && nextDomPhase === 'generating') ||
+        nextDomPhase === 'idle'
+      ) {
+        this.backendActivityPhase = null;
+      }
       this.domIsStreaming = nextDomStreaming;
+      this.domActivityPhase = nextDomPhase;
       this.domIsSubagentRunning = nextDomSubagentRunning;
       this.domRunningSubagentCount = nextDomSubagentCount;
       this.childConversationIds = nextChildIds;
@@ -283,11 +328,13 @@ export class HudInstance {
         this.backendRunningSubagentCount
       );
       this.isStreaming = Boolean(this.domIsStreaming || this.isSubagentRunning);
+      this.activityPhase = this.computeMergedActivityPhase();
       this.syncStreamingClass();
       if (this.lastMetrics && this.shadow) {
         this.applyMetricsToDom({
           ...this.lastMetrics,
           isStreaming: this.isStreaming,
+          activityPhase: this.activityPhase,
           isSubagentRunning: this.isSubagentRunning,
           runningSubagentCount: this.runningSubagentCount,
         });
@@ -312,6 +359,7 @@ export class HudInstance {
       sessionRevision: this.sessionRevision,
       modelId: this.currentModelId,
       isStreaming: this.domIsStreaming,
+      activityPhase: this.domActivityPhase,
       isSubagentRunning: this.domIsSubagentRunning,
       runningSubagentCount: this.domRunningSubagentCount,
       ...(this.childConversationIds.length > 0
@@ -356,9 +404,17 @@ export class HudInstance {
     this.isSubagentRunning = mergedSubagentRunning;
     this.runningSubagentCount = mergedSubagentCount;
     this.isStreaming = Boolean(metrics.isStreaming || this.domIsStreaming || mergedSubagentRunning);
+    this.backendActivityPhase =
+      metrics.activityPhase === 'generating' ||
+      metrics.activityPhase === 'executing' ||
+      metrics.activityPhase === 'idle'
+        ? metrics.activityPhase
+        : null;
+    this.activityPhase = this.computeMergedActivityPhase();
     this.lastMetrics = {
       ...metrics,
       isStreaming: this.isStreaming,
+      activityPhase: this.activityPhase,
       isSubagentRunning: mergedSubagentRunning,
       runningSubagentCount: mergedSubagentCount,
     };
@@ -786,25 +842,34 @@ export class HudInstance {
     const sessionCapsule = this.shadow.querySelector('.capsule-session');
     const sessionPopover = this.shadow.querySelector('#hud-popover-session');
     const isWorking = Boolean(this.isStreaming || this.isSubagentRunning);
-    if (sessionCapsule && sessionCapsule.classList) {
-      if (isWorking) {
-        sessionCapsule.classList.add('is-streaming');
+    const phase = isWorking ? (this.activityPhase === 'executing' ? 'executing' : 'generating') : 'idle';
+    const applyPhaseClasses = (targetElement) => {
+      if (!targetElement || !targetElement.classList) return;
+      if (phase !== 'idle') {
+        targetElement.classList.add('is-streaming');
       } else {
-        sessionCapsule.classList.remove('is-streaming');
+        targetElement.classList.remove('is-streaming');
       }
+      if (phase === 'generating') {
+        targetElement.classList.add('is-generating');
+      } else {
+        targetElement.classList.remove('is-generating');
+      }
+      if (phase === 'executing') {
+        targetElement.classList.add('is-executing');
+      } else {
+        targetElement.classList.remove('is-executing');
+      }
+    };
+    if (sessionCapsule && sessionCapsule.classList) {
+      applyPhaseClasses(sessionCapsule);
       if (this.isSubagentRunning) {
         sessionCapsule.classList.add('is-subagent-active');
       } else {
         sessionCapsule.classList.remove('is-subagent-active');
       }
     }
-    if (sessionPopover && sessionPopover.classList) {
-      if (isWorking) {
-        sessionPopover.classList.add('is-streaming');
-      } else {
-        sessionPopover.classList.remove('is-streaming');
-      }
-    }
+    applyPhaseClasses(sessionPopover);
 
     const subagentTagEl = this.shadow.querySelector('#hud-txt-session .hud-subagent-tag');
     const subagentRow = this.shadow.querySelector('#row-subagent-status');

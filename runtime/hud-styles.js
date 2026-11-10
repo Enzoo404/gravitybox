@@ -94,16 +94,16 @@ export const HUD_STYLES_CSS = `
   100% { background-position: 200% 0; }
 }
 
-@keyframes hud-pulse-dot {
+@keyframes hud-breathe-dot {
   0%, 100% {
-    transform: scale(1);
+    transform: scale(1.08);
     opacity: 1;
-    box-shadow: 0 0 0 0 rgba(49, 134, 255, 0.45);
+    box-shadow: 0 0 0 0 rgba(49, 134, 255, 0.55);
   }
   50% {
-    transform: scale(1.12);
-    opacity: 0.85;
-    box-shadow: 0 0 0 3px rgba(49, 134, 255, 0);
+    transform: scale(0.82);
+    opacity: 0.28;
+    box-shadow: 0 0 0 3.5px rgba(49, 134, 255, 0);
   }
 }
 
@@ -220,13 +220,22 @@ export const HUD_STYLES_CSS = `
   background-color: var(--hud-text-muted);
   flex-shrink: 0;
   margin-right: 5px;
-  transition: background-color 150ms ease, box-shadow 150ms ease;
+  transition: background-color 150ms ease, box-shadow 150ms ease, opacity 150ms ease;
 }
 
 .capsule.is-streaming .hud-status-dot,
-.hud-popover.is-streaming .hud-status-dot {
+.hud-popover.is-streaming .hud-status-dot,
+.capsule.is-generating .hud-status-dot,
+.hud-popover.is-generating .hud-status-dot {
   background-color: var(--hud-accent-blue);
-  animation: hud-pulse-dot 1.4s ease-in-out infinite;
+  opacity: 1;
+  animation: none;
+}
+
+.capsule.is-executing .hud-status-dot,
+.hud-popover.is-executing .hud-status-dot {
+  background-color: var(--hud-accent-blue);
+  animation: hud-breathe-dot 1.5s ease-in-out infinite;
 }
 
 .capsule-icon {
@@ -533,7 +542,9 @@ export const HUD_STYLES_CSS = `
   }
   .capsule.is-skeleton,
   .capsule.is-streaming .hud-status-dot,
-  .hud-popover.is-streaming .hud-status-dot {
+  .hud-popover.is-streaming .hud-status-dot,
+  .capsule.is-executing .hud-status-dot,
+  .hud-popover.is-executing .hud-status-dot {
     animation: none !important;
   }
 }

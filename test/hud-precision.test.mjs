@@ -498,3 +498,30 @@ test('SQLite drops removed child references and replays generations after timeli
   assert.equal(after.session.steps, 1);
   assert.equal(after.session.outputTps, 30);
 });
+
+test('activityPhase separates model generating (solid blue), script executing (breathing blue), and idle (gray)', () => {
+  const idleResult = metrics([step({ idx: 1, stepType: 14 }), step({ idx: 2, stepType: 15, status: 3 })], {
+    isStreaming: false,
+    allowDbActiveStepInference: true,
+  });
+  assert.equal(idleResult.activityPhase, 'idle');
+
+  const modelGenerating = metrics(
+    [
+      step({ idx: 1, stepType: 14 }),
+      step({ idx: 2, stepType: 15, status: 8, endTimeSeconds: null }),
+    ],
+    { isStreaming: true, allowDbActiveStepInference: true }
+  );
+  assert.equal(modelGenerating.activityPhase, 'generating');
+
+  const scriptExecuting = metrics(
+    [
+      step({ idx: 1, stepType: 14 }),
+      step({ idx: 2, stepType: 15, status: 3 }),
+      step({ idx: 3, stepType: 21, status: 2, endTimeSeconds: null }),
+    ],
+    { isStreaming: true, allowDbActiveStepInference: true }
+  );
+  assert.equal(scriptExecuting.activityPhase, 'executing');
+});

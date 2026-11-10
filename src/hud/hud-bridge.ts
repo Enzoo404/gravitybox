@@ -1,5 +1,5 @@
 import type { CDP } from '../cdp.js';
-import type { ConversationHudMetrics, HudClientEvent, ICdpHudBridge } from './types.js';
+import type { ConversationHudMetrics, HudActivityPhase, HudClientEvent, ICdpHudBridge } from './types.js';
 import { ConversationMetricsEngine } from './metrics-engine.js';
 
 export const HUD_BRIDGE_BINDING_NAME = '__gravityboxHudBridge';
@@ -11,6 +11,7 @@ export interface ActivePaneSession {
   sessionRevision: number;
   modelId: string;
   isStreaming: boolean;
+  activityPhase: HudActivityPhase;
   isSubagentRunning: boolean;
   runningSubagentCount: number;
   childConversationIds: string[];
@@ -46,7 +47,7 @@ export class CdpHudBridge implements ICdpHudBridge {
         geminiDir: options?.geminiDir,
         conversationsDir: options?.conversationsDir,
       });
-    const interval = options?.pollIntervalMs ?? 1000;
+    const interval = options?.pollIntervalMs ?? 500;
     if (interval > 0) {
       this.pollTimer = setInterval(() => {
         void this.pollActiveSessions();
@@ -151,6 +152,20 @@ export class CdpHudBridge implements ICdpHudBridge {
       ? existing.childConversationIds
       : [];
 
+    const resolvedStreaming =
+      typeof parsed.isStreaming === 'boolean'
+        ? parsed.isStreaming || isSubagentRunning
+        : (existing?.isStreaming ?? false) || isSubagentRunning;
+    const resolvedPhase: HudActivityPhase = !resolvedStreaming
+      ? 'idle'
+      : parsed.activityPhase === 'generating' || parsed.activityPhase === 'executing'
+      ? parsed.activityPhase
+      : existing?.activityPhase && existing.activityPhase !== 'idle'
+      ? existing.activityPhase
+      : isSubagentRunning && !parsed.isStreaming
+      ? 'executing'
+      : 'generating';
+
     const session: ActivePaneSession = {
       targetId,
       cascadeId,
@@ -160,10 +175,8 @@ export class CdpHudBridge implements ICdpHudBridge {
         (typeof parsed.modelId === 'string' && parsed.modelId.trim()) ||
         existing?.modelId ||
         'gemini-3.8-flash',
-      isStreaming:
-        typeof parsed.isStreaming === 'boolean'
-          ? parsed.isStreaming || isSubagentRunning
-          : (existing?.isStreaming ?? false) || isSubagentRunning,
+      isStreaming: resolvedStreaming,
+      activityPhase: resolvedPhase,
       isSubagentRunning,
       runningSubagentCount,
       childConversationIds,
@@ -189,6 +202,7 @@ export class CdpHudBridge implements ICdpHudBridge {
       sessionRevision: session.sessionRevision,
       modelId: session.modelId,
       isStreaming: session.isStreaming,
+      activityPhase: session.activityPhase,
       isSubagentRunning: session.isSubagentRunning,
       runningSubagentCount: session.runningSubagentCount,
       childConversationIds: session.childConversationIds,
@@ -207,7 +221,8 @@ export class CdpHudBridge implements ICdpHudBridge {
 
     const fingerprint = JSON.stringify({
       session: metrics.session, tokens: metrics.tokens, context: metrics.context,
-      isStreaming: metrics.isStreaming, isSubagentRunning: metrics.isSubagentRunning,
+      isStreaming: metrics.isStreaming, activityPhase: metrics.activityPhase,
+      isSubagentRunning: metrics.isSubagentRunning,
       runningSubagentCount: metrics.runningSubagentCount,
     });
 

@@ -178,11 +178,13 @@ class FakeElement {
     const out = [];
     const testIdTargets = [...String(sel).matchAll(/\[data-testid="([^"]+)"\]/g)].map((match) => match[1]);
     const matchButtonTag = /\bbutton\b/.test(String(sel));
+    const matchShimmerClass = String(sel).includes('.animate-shimmer-text');
     const visit = (node) => {
       for (const child of node.children || []) {
         const childTestId = child.getAttribute('data-testid');
         if (
           (sel.includes('.surface-composer') && child.classList.contains('surface-composer')) ||
+          (matchShimmerClass && child.classList.contains('animate-shimmer-text')) ||
           (childTestId && testIdTargets.includes(childTestId)) ||
           (matchButtonTag && child.tagName === 'BUTTON')
         ) {
@@ -693,9 +695,20 @@ describe('HudInstance 与 AntigravityHudManager 生产模块生命周期、垂�
     assert.equal(subState.isSubagentRunning, true, '应准确检测到 [data-testid="idle-status-text"] 中的子智能体运行状态');
     assert.equal(subState.runningSubagentCount, 1);
     assert.equal(manager.resolveStreamingState(paneA.view), true, '子智能体运行时流式状态必须为 true');
+    assert.equal(
+      manager.resolveActivityPhase(paneA.view),
+      'executing',
+      '无前台生成但有后台任务/子智能体运行时阶段必须为 executing（蓝色呼吸）'
+    );
 
     manager.reconcileMounts();
     assert.equal(instA.isStreaming, true);
+    assert.equal(instA.activityPhase, 'executing');
+    assert.equal(
+      instA.shadow.querySelector('.capsule-session').classList.contains('is-executing'),
+      true,
+      '脚本/后台任务执行时胶囊必须携带 is-executing 蓝色呼吸类'
+    );
     assert.equal(instA.isSubagentRunning, true);
     assert.equal(
       instA.shadow.querySelector('#hud-txt-session .hud-subagent-tag').textContent,
@@ -720,15 +733,36 @@ describe('HudInstance 与 AntigravityHudManager 生产模块生命周期、垂�
     cancelBtn.setAttribute('aria-label', 'Cancel (⌃C)');
     paneA.view.appendChild(cancelBtn);
     assert.equal(
-      manager.resolveStreamingState(paneA.view),
-      true,
-      '宿主出现 input-cancel-button 时必须立即识别为模型工作态'
+      manager.resolveActivityPhase(paneA.view),
+      'generating',
+      '宿主出现 input-cancel-button 且无脚本执行时必须识别为 generating（常亮蓝色）'
     );
+    manager.reconcileMounts();
+    assert.equal(
+      instA.shadow.querySelector('.capsule-session').classList.contains('is-generating'),
+      true,
+      '模型本身思考/输出时胶囊必须携带 is-generating 常亮蓝色类'
+    );
+    assert.equal(
+      instA.shadow.querySelector('.capsule-session').classList.contains('is-executing'),
+      false,
+      '模型本身思考/输出时不得携带呼吸类'
+    );
+    const cmdShimmer = new FakeElement('span', doc);
+    cmdShimmer.className = 'animate-shimmer-text';
+    cmdShimmer.textContent = 'Running npm test';
+    paneA.view.appendChild(cmdShimmer);
+    assert.equal(
+      manager.resolveActivityPhase(paneA.view),
+      'executing',
+      '模型暂停、脚本命令执行时必须切换为 executing（蓝色呼吸）'
+    );
+    cmdShimmer.remove();
     cancelBtn.remove();
     assert.equal(
-      manager.resolveStreamingState(paneA.view),
-      false,
-      'input-cancel-button 移除后必须立即恢复为空闲态'
+      manager.resolveActivityPhase(paneA.view),
+      'idle',
+      '模型与脚本均停止后必须立即恢复为 idle（灰色）'
     );
     manager.reconcileMounts();
     const streamingEventsBefore = events.filter((e) => e.type === 'STREAMING_CHANGED').length;
