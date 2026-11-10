@@ -208,6 +208,11 @@ import Cocoa
             accounts = [allAccounts[2]]; activeId = "c"; assistant.activeAccountId = "c"; assistant.cachedAccounts = accounts
             window.setFrame(NSRect(origin:window.frame.origin,size:NSSize(width:880,height:580)),display:true)
             assistant.selectPage(1); pump()
+            var waitedActiveId = 0
+            while assistant.accountsPage?.activeId != "c" && waitedActiveId < 30 {
+                assistant.accountsPage?.fetch(); pump()
+                waitedActiveId += 1
+            }
             func quotaBars(_ view:NSView)->[QuotaBarView] { (view as? QuotaBarView).map{[$0]} ?? view.subviews.flatMap{quotaBars($0)} }
             let modelBars = quotaBars(window.contentView!).filter{$0.titleLabel.stringValue.contains("模型配额")}
             check(modelBars.count == 2 && modelBars.allSatisfy{$0.percentageKnown && $0.percentage == 100}, "FREE model quota must render known on both account rows")
