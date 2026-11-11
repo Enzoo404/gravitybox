@@ -705,8 +705,6 @@ export const HUD_STYLES_CSS = `
   border-radius: 9999px;
   flex-shrink: 0;
 }
-.hud-data-state { font-size:10px; color:var(--hud-text-secondary); margin:4px 0; }
-.hud-copy-stats { font:inherit; font-size:10px; color:var(--hud-text-primary); background:var(--hud-bg); border:1px solid var(--hud-border); border-radius:4px; cursor:pointer; padding:3px 6px; margin-bottom:6px; }
 `;
 
 globalThis.__GRAVITYBOX_HUD_STYLES_CSS__ = HUD_STYLES_CSS;

@@ -22,38 +22,72 @@ enum ModelDisplayName {
 
     static func name(_ identifier: String) -> String {
         let names = catalogNames
-        let value = identifier.lowercased()
+        let trimmed = identifier.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return identifier }
+        let value = trimmed.lowercased()
         if let name = names[value] { return name }
         if value.hasPrefix("google/"), let name = names[String(value.dropFirst(7))] { return name }
-        for (suffix, label) in [("-extra-low", "Extra Low"), ("-high", "High"), ("-medium", "Medium"), ("-low", "Low"), ("-thinking", "Thinking")] where value.hasSuffix(suffix) {
-            if let name = names[String(value.dropLast(suffix.count))] {
-                return name + " " + label
-            }
-        }
-        // Only normalize a known display-name qualifier. Opaque IDs stay exact.
-        for qualifier in ["High", "Medium", "Low", "Thinking"] {
-            for brackets in [(" (", ")"), ("（", "）")] {
-                let suffix = brackets.0 + qualifier + brackets.1
-                if identifier.hasSuffix(suffix) {
-                    let base = String(identifier.dropLast(suffix.count))
-                    if names.values.contains(base) { return base + " " + qualifier }
+
+        // Normalize bracketed qualifiers from Antigravity database model_display_name (e.g. "Gemini 3.8 Flash (High)", "Claude Sonnet 4.6 (Thinking)", "GPT-OSS 120B (Medium)")
+        for brackets in [(" (", ")"), ("（", "）"), ("(", ")")] {
+            if trimmed.hasSuffix(brackets.1), let openRange = trimmed.range(of: brackets.0, options: .backwards) {
+                let baseRaw = String(trimmed[..<openRange.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+                let innerRaw = String(trimmed[openRange.upperBound..<trimmed.index(before: trimmed.endIndex)]).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !baseRaw.isEmpty && !innerRaw.isEmpty {
+                    let baseDisplay = names[baseRaw.lowercased()] ?? baseRaw
+                    return "\(baseDisplay) \(innerRaw)"
                 }
             }
         }
-        // Auto-format newly launched Gemini 4+ codename models (e.g. gemini-4-carbon, gemini-4-neon)
-        // while keeping opaque experimental IDs like gemini-3.8-flash-n / gemini-3.8-flash-exp-a untouched.
-        if let regex = try? NSRegularExpression(pattern: "^gemini-([4-9](?:\\.[0-9]+)?)-([a-z][a-z0-9]*?)(?:-(trial|preview))?$", options: [.caseInsensitive]),
-           let match = regex.firstMatch(in: value, range: NSRange(location: 0, length: (value as NSString).length)) {
-            let ns = value as NSString
+
+        // Preserve and format hyphenated variant / tier / experimental suffixes on raw model IDs
+        let suffixTable: [(String, String)] = [
+            ("-extra-low-thinking", "Extra Low Thinking"),
+            ("-high-thinking", "High Thinking"),
+            ("-medium-thinking", "Medium Thinking"),
+            ("-low-thinking", "Low Thinking"),
+            ("-extra-low", "Extra Low"),
+            ("-high", "High"),
+            ("-medium", "Medium"),
+            ("-low", "Low"),
+            ("-thinking", "Thinking"),
+            ("-trial", "Trial"),
+            ("-preview", "Preview"),
+            ("-tiered", "Tiered"),
+            ("-exp-a", "Exp-A"),
+            ("-exp-b", "Exp-B"),
+            ("-exp", "Exp"),
+            ("-safety-le", "Safety-LE"),
+            ("-lite", "Lite"),
+            ("-n", "N"),
+            ("-a", "A"),
+            ("-b", "B")
+        ]
+        let strippedValue = value.hasPrefix("google/") ? String(value.dropFirst(7)) : value
+        for (suffix, label) in suffixTable where strippedValue.hasSuffix(suffix) {
+            let baseKey = String(strippedValue.dropLast(suffix.count))
+            if let baseName = names[baseKey] {
+                return "\(baseName) \(label)"
+            }
+        }
+
+        // Auto-format newly launched Gemini 4+ codename models (e.g. gemini-4-carbon, gemini-4-neon, gemini-4-argon-high)
+        if let regex = try? NSRegularExpression(pattern: "^gemini-([4-9](?:\\.[0-9]+)?)-([a-z][a-z0-9]*?)(?:-([a-z0-9-]+))?$", options: [.caseInsensitive]),
+           let match = regex.firstMatch(in: strippedValue, range: NSRange(location: 0, length: (strippedValue as NSString).length)) {
+            let ns = strippedValue as NSString
             let ver = ns.substring(with: match.range(at: 1))
             let code = ns.substring(with: match.range(at: 2)).capitalized
             if match.range(at: 3).location != NSNotFound {
-                let tail = ns.substring(with: match.range(at: 3)).capitalized
-                return "Gemini \(ver) \(code) \(tail)"
+                let tailRaw = ns.substring(with: match.range(at: 3))
+                let tailFormatted = tailRaw.split(separator: "-").map { part -> String in
+                    let p = String(part)
+                    return p.count <= 1 ? p.uppercased() : p.capitalized
+                }.joined(separator: " ")
+                return "Gemini \(ver) \(code) \(tailFormatted)"
             }
             return "Gemini \(ver) \(code)"
         }
-        return identifier
+        return trimmed
     }
 }
 

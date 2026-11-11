@@ -338,6 +338,43 @@ export function matchPricingKeys(modelName: string): string {
   return lower;
 }
 
+/**
+ * 基于 Antigravity 数据库 (gen_metadata / steps) 提取真实模型全称（带后缀）。
+ * - ChatModelMetadata.field 21 (model_display_name) 与 CascadePlannerConfig.field 27/28 存储真实模型全称（如 "Gemini 3.8 Flash (High)", "Claude Sonnet 4.6 (Thinking)"）；
+ * - ChatModelMetadata.field 19 (response_model) 存储底层模型标识（如 "gemini-3.8-flash-n", "gemini-3.8-flash-exp-a", "gemini-2.5-flash-high"）。
+ * 当展示名具备完整模型版本/代号及后缀时优先采用数据库真实全称；若展示名缺失版本信息（如仅 "Gemini Flash"）或丢失了底层模型 ID 带有的变体/档位后缀，则保留带完整后缀的模型标识。
+ */
+export function resolveDatabaseModelFullName(
+  modelId: string | null | undefined,
+  label: string | null | undefined,
+  plannerModel?: string | null | undefined
+): string {
+  const cleanId = typeof modelId === 'string' ? modelId.trim() : '';
+  const cleanLabel = typeof label === 'string' ? label.trim() : '';
+  const cleanPlanner = typeof plannerModel === 'string' ? plannerModel.trim() : '';
+  const displayCandidate = cleanLabel || cleanPlanner;
+
+  if (displayCandidate) {
+    const hasSpecificModelIdentity =
+      /\d/.test(displayCandidate) ||
+      /\b(?:argon|carbon|neon|xenon|opus|sonnet|haiku)\b/i.test(displayCandidate);
+    if (hasSpecificModelIdentity) {
+      const labelHasSuffix =
+        /[（(]\s*[^）)]+\s*[）)]/.test(displayCandidate) ||
+        /\b(?:extra[\s-]*low|high|medium|low|thinking|trial|preview|tiered|exp(?:-[a-z0-9]+)?|safety(?:-[a-z0-9]+)?|lite)\b/i.test(displayCandidate);
+      if (labelHasSuffix || !cleanId) {
+        return displayCandidate;
+      }
+      const idHasSuffix =
+        /-(?:extra-low|high|medium|low|thinking|trial|preview|tiered|exp(?:-[a-z0-9]+)?|safety(?:-[a-z0-9]+)?|lite|n|[a-z])$/i.test(cleanId);
+      if (!idHasSuffix) {
+        return displayCandidate;
+      }
+    }
+  }
+  return cleanId || displayCandidate || '未知模型';
+}
+
 export function calculateEstimatedUsd(
   inputTokens: number,
   outputTokens: number,
@@ -429,7 +466,7 @@ export class UsageStatsManager {
     this.autoRemotePricingSync = false;
     if (this.geminiDir === defaultGeminiDir && stateDir === defaultStateDir) {
       const cacheTag = options?.dataDirectoryName ?? 'antigravity';
-      this.persistCachePath = join(homedir(), 'Library', 'Caches', 'GravityBox', `usage-db-cache-${cacheTag}-v1.json`);
+      this.persistCachePath = join(homedir(), 'Library', 'Caches', 'GravityBox', `usage-db-cache-${cacheTag}-v2.json`);
     }
   }
 
@@ -503,7 +540,7 @@ export class UsageStatsManager {
     const defaultStateDir = join(homedir(), 'Library', 'Application Support', 'GravityBox');
     if (this.geminiDir === defaultGeminiDir && this.pricingCachePath === join(defaultStateDir, 'api_pricing.json')) {
       const cacheTag = name ?? 'antigravity';
-      this.persistCachePath = join(homedir(), 'Library', 'Caches', 'GravityBox', `usage-db-cache-${cacheTag}-v1.json`);
+      this.persistCachePath = join(homedir(), 'Library', 'Caches', 'GravityBox', `usage-db-cache-${cacheTag}-v2.json`);
       this.persistLoaded = false;
     }
   }
@@ -513,7 +550,7 @@ export class UsageStatsManager {
     this.persistLoaded = true;
     try {
       const raw = JSON.parse(await readFile(this.persistCachePath, 'utf8'));
-      if (raw && raw.version === 1 && typeof raw.entries === 'object' && raw.entries !== null) {
+      if (raw && raw.version === 2 && typeof raw.entries === 'object' && raw.entries !== null) {
         for (const [k, v] of Object.entries(raw.entries as Record<string, any>)) {
           if (v && typeof v.mtimeMs === 'number' && typeof v.size === 'number' && Array.isArray(v.events) && v.events.every((e: GenerationEvent) => typeof e.event_key === 'string') && !v.hasError && !this.fileCache.has(k)) {
             this.fileCache.set(k, v);
@@ -531,7 +568,7 @@ export class UsageStatsManager {
       if (!v.hasError) entries[k] = v;
     }
     const targetPath = this.persistCachePath;
-    await atomicJson(targetPath, { version: 1, entries }, undefined, { durability: 'relaxed' }).catch(() => {
+    await atomicJson(targetPath, { version: 2, entries }, undefined, { durability: 'relaxed' }).catch(() => {
       this.fileCacheDirty = true;
     });
   }
@@ -930,6 +967,20 @@ export class UsageStatsManager {
 
       const modelId = ProtobufReader.findString(wrapped, 19);
       const label = ProtobufReader.findString(wrapped, 21);
+      let plannerModel: string | null = null;
+      const plannerBuf = ProtobufReader.findField(blob, 3);
+      if (plannerBuf) {
+        const modelInfoBuf = ProtobufReader.findField(plannerBuf, 27);
+        if (modelInfoBuf) {
+          plannerModel =
+            ProtobufReader.findString(modelInfoBuf, 20) ||
+            ProtobufReader.findString(modelInfoBuf, 12) ||
+            ProtobufReader.findString(modelInfoBuf, 8);
+        }
+        if (!plannerModel) {
+          plannerModel = ProtobufReader.findString(plannerBuf, 28);
+        }
+      }
       const usage = ProtobufReader.findField(wrapped, 4);
 
       if (!usage) continue;
@@ -953,11 +1004,12 @@ export class UsageStatsManager {
       }
       if(!validTimestamp(timestamp))timestamp=0;
 
-      const assignedModel = modelId || label || '未知模型';
+      const assignedModel = resolveDatabaseModelFullName(modelId, label, plannerModel);
+      const lockModelKey = modelId || label || '未知模型';
       const eventObj: GenerationEvent = {
         event_key: createHash('sha256').update(JSON.stringify([
           dbPath.split('/').pop(), row.idx, ProtobufReader.findField(blob, 4)?.toString('hex'),
-          assignedModel, rawInput, cachedTokens, cacheWriteTokens, outputTokens,
+          lockModelKey, rawInput, cachedTokens, cacheWriteTokens, outputTokens,
         ])).digest('hex'),
         model: assignedModel,
         input_tokens: inputTokens,

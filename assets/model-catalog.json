@@ -1,15 +1,25 @@
 {
   "schema": 1,
   "names": {
+    "gemini-3-flash": "Gemini 3 Flash",
+    "gemini-3-flash-a": "Gemini 3 Flash A",
     "gemini-3.5-flash": "Gemini 3.5 Flash",
     "gemini-3.6-flash": "Gemini 3.6 Flash",
+    "gemini-3.6-flash-tiered": "Gemini 3.6 Flash Tiered",
+    "gemini-3.6-flash-exp-a": "Gemini 3.6 Flash Exp-A",
     "gemini-3.1-pro": "Gemini 3.1 Pro",
     "gemini-3.8-flash": "Gemini 3.8 Flash",
+    "gemini-3.8-flash-n": "Gemini 3.8 Flash N",
+    "gemini-3.8-flash-exp-a": "Gemini 3.8 Flash Exp-A",
+    "gemini-3.8-flash-tiered": "Gemini 3.8 Flash Tiered",
     "gemini-3.7-flash": "Gemini 3.7 Flash",
+    "gemini-3.7-flash-safety-le": "Gemini 3.7 Flash Safety-LE",
+    "gemini-3.7-flash-tiered": "Gemini 3.7 Flash Tiered",
     "gemini-3.9-flash": "Gemini 3.9 Flash",
     "gemini-2.5-flash": "Gemini 2.5 Flash",
     "gemini-2.5-pro": "Gemini 2.5 Pro",
     "gemini-3.8-pro": "Gemini 3.8 Pro",
+    "gemini-pro-default": "Gemini Pro Default",
     "gemini-4-argon": "Gemini 4 Argon",
     "gemini-4-argon-trial": "Gemini 4 Argon Trial",
     "gemini-4-carbon": "Gemini 4 Carbon",
@@ -23,9 +33,7 @@
     "claude-sonnet-4-6": "Claude Sonnet 4.6",
     "gpt-4o": "GPT-4o",
     "gpt-4o-mini": "GPT-4o mini",
-    "gpt-oss-120b": "GPT-OSS 120B",
-    "gemini-3.8-flash-n": "Gemini 3.8 Flash",
-    "gemini-3.8-flash-exp-a": "Gemini 3.8 Flash"
+    "gpt-oss-120b": "GPT-OSS 120B"
   },
   "prices": {
     "gemini-4-carbon": {

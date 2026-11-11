@@ -712,7 +712,7 @@ export class HudInstance {
             <span class="hud-popover-badge" id="pop-session-badge">0 轮 0 步</span>
           </div>
           <div class="hud-popover-divider"></div>
-          <div class="hud-data-state" aria-live="polite"></div><button type="button" class="hud-copy-stats">复制精确统计</button><div class="hud-popover-grid">
+          <div class="hud-popover-grid">
             <div class="hud-popover-row">
               <span class="hud-popover-label" id="lbl-model-dur">模型用时</span>
               <span class="hud-popover-val" id="val-model-dur">0 秒</span>
@@ -756,7 +756,7 @@ export class HudInstance {
             <span class="hud-popover-badge" id="pop-tokens-badge">0 tok</span>
           </div>
           <div class="hud-popover-divider"></div>
-          <div class="hud-data-state" aria-live="polite"></div><button type="button" class="hud-copy-stats">复制精确统计</button><div class="hud-popover-grid">
+          <div class="hud-popover-grid">
             <div class="hud-popover-row">
               <span class="hud-popover-label" id="lbl-cache-hit">缓存命中</span>
               <span class="hud-popover-val" id="val-cache-hit">0%</span>
@@ -806,7 +806,7 @@ export class HudInstance {
             <div class="hud-progress-seg hud-seg-tool" id="seg-tool" style="width: 0%"></div>
             <div class="hud-progress-seg hud-seg-msg" id="seg-msg" style="width: 0%"></div>
           </div>
-          <div class="hud-data-state" aria-live="polite"></div><button type="button" class="hud-copy-stats">复制精确统计</button><div class="hud-popover-grid">
+          <div class="hud-popover-grid">
             <div class="hud-popover-row">
               <span class="hud-popover-label">
                 <span class="hud-legend-dot" style="background-color: var(--hud-seg-sys-color)"></span>
@@ -1333,13 +1333,6 @@ export class HudInstance {
       );
     }
 
-    const stateText = unavailable ? (isEn ? 'Data unavailable' : '数据暂不可用')
-      : metrics.availability === 'cached' ? (isEn ? 'Last successful record' : '上次成功记录')
-      : metrics.availability === 'partial' ? (isEn ? 'Partial data' : '数据不完整') : '';
-    for (const state of this.shadow.querySelectorAll('.hud-data-state')) {
-      state.textContent = [stateText, metrics.observedAt ? new Date(metrics.observedAt).toLocaleTimeString() : '', s.samples && !unavailable ? (isEn ? `${s.samples.timed} timed requests` : `${s.samples.timed} 个计时请求`) : ''].filter(Boolean).join(' · ');
-    }
-    for (const button of this.shadow.querySelectorAll('.hud-copy-stats')) button.textContent = isEn ? 'Copy exact statistics' : '复制精确统计';
     if (unavailable) {
       for (const button of this.shadow.querySelectorAll('.capsule')) button.setAttribute('aria-label', isEn ? 'Data unavailable' : '数据暂不可用');
       for (const sel of ['#hud-txt-session .hud-turns','#hud-txt-session .hud-steps','#hud-txt-session .hud-speed','#hud-txt-tokens .hud-tok-total','#hud-txt-tokens .hud-cache-val','#hud-txt-context','#pop-session-badge','#pop-tokens-badge','#val-cache-hit','#val-uncached-in','#val-cached-read','#val-output-tok','#val-model-dur','#val-tool-dur','#val-ttft','#val-tps','#val-ctx-peak']) setTxt(sel, '—');
@@ -1372,12 +1365,6 @@ export class HudInstance {
     }
 
     if (this.shadow && typeof this.shadow.querySelectorAll === 'function') {
-      for (const button of this.shadow.querySelectorAll('.hud-copy-stats')) button.addEventListener?.('click', async () => {
-        const m = this.lastMetrics;
-        const summary = { observedAt: m.observedAt, availability: m.availability, session: m.session, tokens: m.tokens, context: m.context };
-        try { await navigator.clipboard.writeText(JSON.stringify(summary, null, 2)); button.textContent = this.languageMode === 'en' ? 'Copied' : '已复制'; }
-        catch { button.textContent = this.languageMode === 'en' ? 'Copy unavailable' : '暂无法复制'; }
-      }, { signal });
       const capsules = this.shadow.querySelectorAll('.capsule');
       capsules.forEach((capsule) => {
         if (typeof capsule.addEventListener !== 'function') return;

@@ -165,7 +165,7 @@ import Cocoa
                     if page == 2 {
                         let usage = assistant.usagePage!
                         func labels(_ view:NSView)->[NSTextField] { (view as? NSTextField).map{[$0]} ?? view.subviews.flatMap{labels($0)} }
-                        for targetName in ["gemini-3.8-flash-n", "gemini-3.8-flash-exp-a", "Claude Opus 5.5 Medium"] {
+                        for targetName in ["Gemini 3.8 Flash N", "Gemini 3.8 Flash Exp-A", "Claude Opus 5.5 Medium"] {
                             for label in labels(usage.donutLegendStack) where label.stringValue == targetName {
                                 let width = (label.stringValue as NSString).size(withAttributes:[.font:label.font!]).width
                                 check(label.bounds.width >= ceil(width), "Cost legend constrains model name \(targetName) at \(Int(size.width))pt width (\(label.bounds.width) < \(ceil(width)))")

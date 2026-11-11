@@ -399,7 +399,12 @@ describe('HUD raw 数值精度与缺值展示', () => {
       assert.equal(instance.shadow.querySelector('#pop-ctx-track').getAttribute('aria-valuetext'), '113%');
       assert.match(instance.shadow.querySelector('#val-tps').getAttribute('aria-description'), /等待|waiting/);
       assert.match(instance.shadow.querySelector('#val-ttft').getAttribute('aria-description'), /原始|original/);
-      assert.equal((instance.buildHudHtml().match(/class="hud-popover-row"/g) || []).length, 16);
+      const builtHtml = instance.buildHudHtml();
+      assert.equal((builtHtml.match(/class="hud-popover-row"/g) || []).length, 16);
+      assert.equal(builtHtml.includes('hud-data-state'), false, 'HUD 展开卡片不应包含时间与计时请求数行');
+      assert.equal(builtHtml.includes('hud-copy-stats'), false, 'HUD 展开卡片不应包含复制精确统计按钮');
+      assert.equal(builtHtml.includes('复制精确统计'), false);
+      assert.equal(builtHtml.includes('Copy Exact Stats'), false);
 
       // 当压缩次数为 0 时隐藏徽章，移除 has-compaction 类
       const zeroComp = render({
