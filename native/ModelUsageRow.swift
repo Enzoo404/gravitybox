@@ -65,7 +65,7 @@ final class ModelUsageRow: NSView {
     }
 
     static func displayName(_ id: String) -> String {
-        ModelDisplayName.name(id)
+        id
     }
 
     required init?(coder: NSCoder) { fatalError() }

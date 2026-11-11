@@ -44,14 +44,13 @@ enum ModelDisplayName {
             }
         }
 
-        // Strip preview/trial/thinking suffixes from known models, while keeping opaque response_model variant suffixes (such as -n, -exp-a, -tiered, -safety-le, -high, -medium, -low) verbatim
+        // Strip preview/thinking suffixes from known models, while keeping raw response_model variant suffixes (such as -n, -exp-a, -tiered, -trial, -high, -medium, -low) verbatim
         let suffixTable: [(String, String?)] = [
             ("-extra-low-thinking", "Thinking"),
             ("-high-thinking", "Thinking"),
             ("-medium-thinking", "Thinking"),
             ("-low-thinking", "Thinking"),
             ("-thinking", "Thinking"),
-            ("-trial", "Trial"),
             ("-preview", "Preview")
         ]
         let strippedValue = value.hasPrefix("google/") ? String(value.dropFirst(7)) : value
@@ -65,18 +64,12 @@ enum ModelDisplayName {
             }
         }
 
-        // Auto-format standalone Gemini 4+ codename models (e.g. gemini-4-carbon, gemini-4-neon)
-        if let regex = try? NSRegularExpression(pattern: "^gemini-([4-9](?:\\.[0-9]+)?)-([a-z][a-z0-9]*?)(?:-(trial))?$", options: [.caseInsensitive]),
+        // Auto-format clean standalone Gemini 4+ codename models (e.g. gemini-4-carbon, gemini-4-neon)
+        if let regex = try? NSRegularExpression(pattern: "^gemini-([4-9](?:\\.[0-9]+)?)-([a-z][a-z0-9]*?)$", options: [.caseInsensitive]),
            let match = regex.firstMatch(in: strippedValue, range: NSRange(location: 0, length: (strippedValue as NSString).length)) {
             let ns = strippedValue as NSString
             let ver = ns.substring(with: match.range(at: 1))
             let code = ns.substring(with: match.range(at: 2)).capitalized
-            if match.range(at: 3).location != NSNotFound {
-                let tailRaw = ns.substring(with: match.range(at: 3)).lowercased()
-                if tailRaw == "trial" {
-                    return "Gemini \(ver) \(code) Trial"
-                }
-            }
             return "Gemini \(ver) \(code)"
         }
         return trimmed

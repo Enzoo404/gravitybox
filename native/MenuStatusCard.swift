@@ -1414,7 +1414,7 @@ final class MenuModelUsageItemView: NSView {
 
     init(model: String, tokensText: String, shareFraction: CGFloat) {
         self.rawModel = model
-        let display = ModelDisplayName.name(model)
+        let display = model
         self.nameLabel = text(display, size: 12, weight: .semibold, color: .labelColor, wrap: true)
         self.tokensLabel = text(tokensText, size: 12, weight: .semibold, color: .labelColor)
         super.init(frame: .zero)
@@ -1458,7 +1458,7 @@ final class MenuModelUsageItemView: NSView {
     func update(tokensText: String, shareFraction: CGFloat) {
         if tokensLabel.stringValue != tokensText {
             tokensLabel.stringValue = tokensText
-            let display = ModelDisplayName.name(rawModel)
+            let display = rawModel
             setAccessibilityLabel("\(display)，\(tokensText) Token")
         }
         shareBar.fraction = max(0.02, min(1.0, shareFraction))

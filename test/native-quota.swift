@@ -54,7 +54,7 @@ import Cocoa
         check(QuotaPresentation.warningSummary(same, excluding:["HTTP 403"]).isEmpty, "Single failure renders only once")
         check(ModelDisplayName.name("gemini-3.8-flash-n") == "gemini-3.8-flash-n", "Response model with -n suffix stays exact")
         check(ModelDisplayName.name("claude-opus-5-5-high") == "claude-opus-5-5-high", "Raw response model with -high suffix is preserved verbatim")
-        check(ModelDisplayName.name("gemini-4-argon-trial") == "Gemini 4 Argon Trial", "Preserve trial variant")
+        check(ModelDisplayName.name("gemini-4-argon-trial") == "gemini-4-argon-trial", "Response model with trial variant stays exact raw slug")
         check(ModelDisplayName.name("gemini-4-carbon") == "Gemini 4 Carbon", "Format Gemini 4 Carbon")
         check(ModelDisplayName.name("gemini-4-neon") == "Gemini 4 Neon", "Auto-format future Gemini 4+ codename models")
         check(ModelDisplayName.name("gemini-3.8-flash-exp-a") == "gemini-3.8-flash-exp-a", "Response model with -exp-a suffix stays exact")

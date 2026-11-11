@@ -349,7 +349,7 @@ final class UsagePage: NSObject {
             let mTokens = intVal(item, "totalTokens", fallback: intVal(item, "total_tokens"))
             if idx < topCount || pricedModels.count <= 5 {
                 let color = palette[idx % palette.count]
-                topSlices.append((name: ModelDisplayName.name(name), usd: mUsd, tokens: mTokens, color: color))
+                topSlices.append((name: name, usd: mUsd, tokens: mTokens, color: color))
             } else {
                 otherUsd += mUsd
                 otherTokens += mTokens

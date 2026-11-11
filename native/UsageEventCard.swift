@@ -86,7 +86,7 @@ final class UsageEventCard: NSView {
     }
     func configure(_ event: [String:Any], highlight: String = "") {
         let rawModel = event["model"] as? String ?? "未知模型"
-        let model = ModelDisplayName.name(rawModel)
+        let model = rawModel
         if !highlight.isEmpty, let range = model.range(of: highlight, options: .caseInsensitive) {
             let attr = NSMutableAttributedString(string: model, attributes: [
                 .font: NSFont.systemFont(ofSize: 12, weight: .semibold),

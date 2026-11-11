@@ -308,7 +308,7 @@ final class DashboardPage: NSObject {
             for item in models.prefix(2) {
                 let rawId = (item["model"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
                 let modelId = (rawId?.isEmpty == false) ? rawId! : "未知模型"
-                let displayModel = ModelDisplayName.name(modelId)
+                let displayModel = modelId
                 let mTokens = intVal(item, "totalTokens", fallback: intVal(item, "total_tokens"))
                 let mReqs = intVal(item, "requestCount", fallback: intVal(item, "request_count"))
                 let mUsd = doubleVal(item, "estimatedUsd", fallback: doubleVal(item, "estimated_usd"))
@@ -339,7 +339,7 @@ final class DashboardPage: NSObject {
             let topModel = models[0]
             let rawId = (topModel["model"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
             let modelId = (rawId?.isEmpty == false) ? rawId! : "未知模型"
-            let displayModel = ModelDisplayName.name(modelId)
+            let displayModel = modelId
             let mTokens = intVal(topModel, "totalTokens", fallback: intVal(topModel, "total_tokens"))
             let mReqs = intVal(topModel, "requestCount", fallback: intVal(topModel, "request_count"))
             let mUsd = doubleVal(topModel, "estimatedUsd", fallback: doubleVal(topModel, "estimated_usd"))
