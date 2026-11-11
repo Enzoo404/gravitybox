@@ -13,6 +13,7 @@ test('当前四页原生布局、菜单完整身份、部分计价与真实切�
  const binary=join(temp,'GravityBox-layout-preview');
  const version=JSON.parse(await readFile(join(root,'package.json'),'utf8')).version;
  const output=join(root,'质检报告',`${version}-改造验收`,'原生布局');await mkdir(output,{recursive:true});
+ await rm(join(output,'failure.log'),{force:true});
  try {
   const sources=(await readdir(join(root,'native'))).filter(f=>f.endsWith('.swift')).map(f=>join(root,'native',f));
   await run('/usr/bin/swiftc',['-O','-D','NATIVE_UI_TEST','-parse-as-library','-target','arm64-apple-macosx14.0','-framework','Cocoa','-framework','ServiceManagement','-framework','Security','-framework','ApplicationServices',...sources,join(root,'test/native-ui.swift'),'-o',binary],{maxBuffer:2e6});
@@ -22,6 +23,7 @@ test('当前四页原生布局、菜单完整身份、部分计价与真实切�
   assert.equal(report.stableOnlySelectionPassed,true);assert.equal(report.nativeLayouts,24);assert.equal(report.menuCaptures,4);assert.equal(report.safeSwitchSharedFlowPassed,true);assert.equal(report.emailWidthPassed,true);
   for(const name of report.captures){const data=await readFile(join(output,name));assert.equal(data.subarray(1,4).toString(),'PNG');assert.ok(data.length>10000);}
   for(const sheet of ['light-maintenance-sheet.png','dark-maintenance-sheet.png']){const data=await readFile(join(output,sheet));assert.equal(data.subarray(1,4).toString(),'PNG');assert.ok(data.length>10000);}
+  await rm(join(output,'failure.log'),{force:true});
  }catch(error){await writeFile(join(output,'failure.log'),String(error.stdout??'')+String(error.stderr??'')+String(error));throw error;}
  finally {await rm(temp,{recursive:true,force:true});}
 });

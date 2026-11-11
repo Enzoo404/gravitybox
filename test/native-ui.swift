@@ -8,6 +8,29 @@ import Cocoa
         let end = Date().addingTimeInterval(0.15)
         while Date() < end { RunLoop.main.run(until:Date().addingTimeInterval(0.01)) }
     }
+    @discardableResult
+    static func waitUntil(
+        timeout: TimeInterval = {
+            if let custom = ProcessInfo.processInfo.environment["GRAVITYBOX_CI_TIMEOUT"], let val = TimeInterval(custom), val > 0 {
+                return val
+            }
+            let isCI = ProcessInfo.processInfo.environment["CI"].map { !$0.isEmpty && $0 != "0" && $0.lowercased() != "false" } ?? false
+            return isCI ? 10.0 : 3.0
+        }(),
+        step: TimeInterval = 0.05,
+        description: String = "condition",
+        condition: () -> Bool
+    ) -> Bool {
+        if condition() { return true }
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(step))
+            if condition() { return true }
+        }
+        let satisfied = condition()
+        check(satisfied, "Timed out waiting for \(description) after \(timeout)s")
+        return satisfied
+    }
     static func capture(_ view: NSView, _ url: URL) throws {
         view.layoutSubtreeIfNeeded()
         guard let rep = view.bitmapImageRepForCachingDisplay(in:view.bounds) else { fatalError("No bitmap") }
@@ -214,10 +237,9 @@ import Cocoa
             accounts = [allAccounts[2]]; activeId = "c"; assistant.activeAccountId = "c"; assistant.cachedAccounts = accounts
             window.setFrame(NSRect(origin:window.frame.origin,size:NSSize(width:880,height:580)),display:true)
             assistant.selectPage(1); pump()
-            var waitedActiveId = 0
-            while assistant.accountsPage?.activeId != "c" && waitedActiveId < 30 {
-                assistant.accountsPage?.fetch(); pump()
-                waitedActiveId += 1
+            assistant.accountsPage?.fetch()
+            waitUntil(description: "AccountsPage activeId to sync to c") {
+                assistant.accountsPage?.activeId == "c"
             }
             func quotaBars(_ view:NSView)->[QuotaBarView] { (view as? QuotaBarView).map{[$0]} ?? view.subviews.flatMap{quotaBars($0)} }
             let modelBars = quotaBars(window.contentView!).filter{$0.titleLabel.stringValue.contains("模型配额")}
@@ -441,10 +463,8 @@ import Cocoa
         assistant.confirmSwitchForTesting = { _, reply in reply(true) }
         assistant.switchAccountByIdFromMenu("b")
         check(assistant.activeAccountId == "a","Menu must not optimistically change current identity")
-        var switchWaited = 0
-        while switches < 1 && switchWaited < 20 {
-            pump()
-            switchWaited += 1
+        waitUntil(description: "account switch to complete") {
+            switches >= 1
         }
         check(switches == 1, "Confirmed fixture switch must run exactly once")
         preflightState = "busy"; assistant.switchAccountByIdFromMenu("c"); pump()
@@ -840,8 +860,9 @@ import Cocoa
                 if case .success = result { accepted = true }
                 finished = true
             }
-            let deadline = Date().addingTimeInterval(5)
-            while !finished && Date() < deadline { pump() }
+            waitUntil(description: "preDownloadRelease to finish") {
+                finished
+            }
             check(finished && !accepted && assistant.updateManager.downloadedDMGURL == nil, "Invalid or missing checksum must never produce an installable package")
         }
         let cachedDMG = state.appendingPathComponent("updates/v9.9.9/GravityBox-9.9.9-arm64.dmg")
