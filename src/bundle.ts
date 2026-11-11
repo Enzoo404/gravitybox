@@ -15,6 +15,7 @@ export const SUPPORTED_BUNDLES = new Map([
   ['2.29.1', 'eec7297695f3b4f25d4e92f5f9d0bc4efeec86523cddcddddefc3410c5efe37a'],
   ['2.30.0', '35e0da21894a7f6560075eae2501c88fede5204eb6067fac2653e2c7a63dc403'],
   ['2.31.0', '00c7aa77bcd1f0bce710f98a97be1e10c0b0fe91770d79216c94b47f2e591308'],
+  ['2.31.2', '00c7aa77bcd1f0bce710f98a97be1e10c0b0fe91770d79216c94b47f2e591308'],
 ]);
 export const VERIFIED_VERSIONS = new Set(SUPPORTED_BUNDLES.keys());
 
