@@ -103,6 +103,7 @@ const CSS_SIGNAL = /(?:^|[;{])\s*(?:--[\w-]+|@media|@keyframes|@supports|from|to
 const CODE_SIGNAL = /=>|&&|\|\||\$\{|\bfunction\b|\breturn\b|\bvar\b|\bconst\b|\blet\b|\btypeof\b|\bvoid 0\b|\bnew [A-Z]|\.push\(|\.map\(|Object\.|Array\.|JSON\.|Math\.|window\.|document\.|console\./;
 
 export function looksLikeNoise(text: string): boolean {
+  if (/^!(?:text|bg|border|p|m|w|h|flex|grid)-|\[&[^\]]*\]:/.test(text)) return true;
   if (!text) return true;
   if (text.length < 2 || text.length > 400) return true;
   if (!/[A-Za-z]/.test(text)) return true;

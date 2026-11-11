@@ -119,8 +119,8 @@ test('A03: 未知模型禁止套用默认价计费，统计未计价覆盖率', 
     assert.equal(unknownModelEntry.estimated_usd, 0, '未匹配价格的模型费用必须为 0');
 
     // 关键断言：统计已计价与未计价模型数量
-    assert.equal(summary.all_time.priced_models, 1);
-    assert.equal(summary.all_time.unpriced_models, 1);
+    assert.equal(summary.all_time.priced_models, 0);
+    assert.equal(summary.all_time.unpriced_models, 2);
   } finally {
     await rm(sandbox, { recursive: true, force: true }).catch(() => {});
   }

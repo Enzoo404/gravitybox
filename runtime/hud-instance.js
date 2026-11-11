@@ -1,3 +1,4 @@
+import { compactNumber, durationText } from '../dist/metric-format.js';
 import { HUD_STYLES_CSS } from './hud-styles.js';
 import { computeUpwardPopoverPosition, applyPopoverGeometry } from './hud-popover.js';
 
@@ -24,22 +25,16 @@ function isRawNumber(value) {
 }
 
 function formatInteger(value) {
-  return Math.floor(value).toLocaleString('en-US');
+  return String(Math.max(0, Math.floor(Number(value) || 0)));
 }
 
-function formatDetailCompactNumber(value, trimTrailingZeros = false) {
-  if (value >= 999_995) {
-    const formatted = (value / 1_000_000).toFixed(2);
-    const cleaned = trimTrailingZeros ? formatted.replace(/(\.\d*?[1-9])0+$|\.0+$/, '$1') : formatted;
-    return `${cleaned}M`;
-  }
-  if (value >= 1_000) {
-    const formatted = (value / 1_000).toFixed(2);
-    const cleaned = trimTrailingZeros ? formatted.replace(/(\.\d*?[1-9])0+$|\.0+$/, '$1') : formatted;
-    return `${cleaned}K`;
-  }
-  return formatInteger(value);
-}
+const trimZeros = (text) => text.replace(/(\.\d*?[1-9])0+$|\.0+$/, '$1');
+
+/**
+ * 紧凑数字表示法：固定有效数字（而非固定小数位），并始终去除尾零。
+ * sig：有效数字位数，弹窗明细 3 位（默认），常驻栏 2 位。
+ */
+function formatDetailCompactNumber(value, sig = 3) { return compactNumber(value, sig); }
 
 function formatTokenCount(value, fallback) {
   if (isRawNumber(value)) {
@@ -57,16 +52,27 @@ function formatTokenCount(value, fallback) {
 
 function formatCompactCount(value, fallback = '0') {
   if (!isRawNumber(value)) {
+    const cleanedText = String(fallback).replace(/[,~\s]|tok$/gi, '');
+    const parsedValue = Number(cleanedText);
+    if (Number.isFinite(parsedValue) && parsedValue >= 0) {
+      return formatCompactCount(parsedValue);
+    }
     return String(fallback).replace(/\d+\.\d+/g, (number) => String(Math.round(Number(number))));
   }
-  if (value >= 999_500) return `${Math.round(value / 1_000_000)}M`;
-  if (value >= 1_000) return `${Math.round(value / 1_000)}K`;
-  return formatInteger(value);
+  return formatDetailCompactNumber(value, 2);
 }
 
 function formatMetric(value, formatted, digits, suffix) {
   if (formatted === '—' || !isRawNumber(value)) return '—';
   return `${digits === 0 ? Math.round(value) : value.toFixed(digits)}${suffix}`;
+}
+
+/** 弹窗百分比：3 位有效数字并去尾零（94.15 → 94.2、42.00 → 42、5.25 → 5.25、100 → 100）。 */
+function formatPopoverPercent(value, formatted) {
+  if (formatted === '—' || !isRawNumber(value)) return '—';
+  const percent = value * 100;
+  const decimals = percent >= 100 ? 0 : percent >= 10 ? 1 : 2;
+  return `${trimZeros(percent.toFixed(decimals))}%`;
 }
 
 function formatPercent(value, formatted, digits) {
@@ -75,11 +81,7 @@ function formatPercent(value, formatted, digits) {
 
 function formatDuration(value, formatted, isEn) {
   if (formatted === '—' || !isRawNumber(value)) return '—';
-  const totalSeconds = Math.round(value);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  if (!minutes) return isEn ? `${seconds}s` : `${seconds} 秒`;
-  return isEn ? `${minutes}m ${seconds}s` : `${minutes} 分 ${seconds} 秒`;
+  return durationText(value, isEn ? 'en' : 'zh');
 }
 
 function createDefaultMetrics(conversationId = 'default', sessionRevision = 1) {
@@ -87,6 +89,7 @@ function createDefaultMetrics(conversationId = 'default', sessionRevision = 1) {
     conversationId,
     sessionRevision,
     updatedAt: Date.now(),
+    availability: 'loading', observedAt: null,
     isStreaming: false,
     activityPhase: 'idle',
     isSubagentRunning: false,
@@ -128,7 +131,7 @@ function createDefaultMetrics(conversationId = 'default', sessionRevision = 1) {
     context: {
       hasUsageData: false,
       modelId: 'gemini-3.8-flash',
-      modelDisplayName: 'Gemini 3.8 Flash',
+      modelDisplayName: '—',
       usedTokens: 0,
       usedTokensCompact: '0',
       usedTokensFormatted: '0 tok',
@@ -167,12 +170,17 @@ function createDefaultMetrics(conversationId = 'default', sessionRevision = 1) {
 export class HudInstance {
   constructor(cascadeId, options = {}) {
     this.cascadeId = cascadeId || 'default-pane';
+    this.paneSlotId = options.paneSlotId || this.cascadeId;
     this.isPrimaryPane = Boolean(options.isPrimaryPane);
+    this.isSubpane = Boolean(options.isSubpane);
     this.languageMode = options.languageMode === 'en' ? 'en' : 'zh';
     this.onBridgeEvent = typeof options.onBridgeEvent === 'function' ? options.onBridgeEvent : null;
+    this.allocateRevision = typeof options.allocateRevision === 'function' ? options.allocateRevision : null;
     this.currentConvId = null;
     this.sessionRevision = 0;
-    this.currentModelId = 'gemini-3.8-flash';
+    this.lastMetricsSequence = 0;
+    this.lastAppliedUpdatedAt = 0;
+    this.currentModelId = '';
     this.domIsStreaming = false;
     this.domActivityPhase = 'idle';
     this.backendActivityPhase = null;
@@ -218,7 +226,8 @@ export class HudInstance {
     if (!newConvId) return this.sessionRevision;
     const changed = this.currentConvId !== newConvId;
     this.currentConvId = newConvId;
-    if (modelId) this.currentModelId = modelId;
+    if (changed) this.currentModelId = modelId || '';
+    else if (modelId) this.currentModelId = modelId;
     this.domIsSubagentRunning = Boolean(isSubagentRunning);
     this.domRunningSubagentCount = Math.max(0, Number(runningSubagentCount) || 0);
     this.domIsStreaming = Boolean(isStreaming || this.domIsSubagentRunning);
@@ -243,7 +252,11 @@ export class HudInstance {
       this.runningSubagentCount = this.domRunningSubagentCount;
       this.isStreaming = this.domIsStreaming;
       this.activityPhase = this.computeMergedActivityPhase();
-      this.sessionRevision++;
+      this.sessionRevision = this.allocateRevision
+        ? Math.max(this.sessionRevision + 1, this.allocateRevision())
+        : this.sessionRevision + 1;
+      this.lastMetricsSequence = 0;
+      this.lastAppliedUpdatedAt = 0;
       this.pinnedPopoverId = null;
       this.lastMetrics = createDefaultMetrics(newConvId, this.sessionRevision);
       this.renderSkeleton();
@@ -356,6 +369,7 @@ export class HudInstance {
       type,
       conversationId: this.currentConvId,
       cascadeId: this.cascadeId,
+      paneSlotId: this.paneSlotId,
       sessionRevision: this.sessionRevision,
       modelId: this.currentModelId,
       isStreaming: this.domIsStreaming,
@@ -381,12 +395,36 @@ export class HudInstance {
 
   updateMetrics(metrics) {
     if (!metrics || typeof metrics !== 'object') return false;
-    // 双重防线校验：杜绝跨会话交叉污染与 A->B->A 极速连切迟到数据篡改
-    if (
-      metrics.conversationId !== this.currentConvId ||
-      (typeof metrics.sessionRevision === 'number' && metrics.sessionRevision < this.sessionRevision)
+    // 三重防线校验：杜绝跨会话污染、同会话跨分栏串扰、A->B->A 迟到包及同代乱序旧包回退
+    if (metrics.conversationId !== this.currentConvId) {
+      return false;
+    }
+    if (metrics.paneSlotId && this.paneSlotId && metrics.paneSlotId !== this.paneSlotId) {
+      return false;
+    }
+    if (typeof metrics.sessionRevision === 'number') {
+      if (this.sessionRevision > 0 && metrics.sessionRevision !== this.sessionRevision) {
+        return false;
+      }
+      if (metrics.sessionRevision < this.sessionRevision) {
+        return false;
+      }
+    }
+    if (typeof metrics.metricsSequence === 'number' && metrics.metricsSequence > 0) {
+      if (metrics.metricsSequence <= this.lastMetricsSequence) {
+        return false;
+      }
+      this.lastMetricsSequence = metrics.metricsSequence;
+    } else if (
+      typeof metrics.updatedAt === 'number' &&
+      this.lastAppliedUpdatedAt > 0 &&
+      metrics.sessionRevision === this.lastMetrics?.sessionRevision &&
+      metrics.updatedAt < this.lastAppliedUpdatedAt
     ) {
       return false;
+    }
+    if (typeof metrics.updatedAt === 'number' && metrics.updatedAt > 0) {
+      this.lastAppliedUpdatedAt = metrics.updatedAt;
     }
     this.backendIsSubagentRunning = Boolean(metrics.isSubagentRunning);
     this.backendRunningSubagentCount = Math.max(
@@ -505,51 +543,26 @@ export class HudInstance {
 
   syncVerticalCentering() {
     if (!this.host || !this.targetComposer) return;
-
+    // Own only our box. Never rewrite the host application's ancestor padding.
+    this.restoreModifiedAncestors();
+    this.host.style.marginTop = '4px';
+    this.host.style.marginBottom = '4px';
     const win = typeof window !== 'undefined' ? window : globalThis.window;
-    let cur = this.targetComposer.parentNode;
-    let depth = 0;
-    let foundBottomWrapper = false;
-
-    while (cur && depth < 7) {
-      if (cur.nodeType === 1) {
-        const testId = cur.getAttribute?.('data-testid');
-        const dropScope = cur.getAttribute?.('data-media-drop-scope');
-        if (testId === 'conversation-view' || dropScope === 'subpane') break;
-
-        const cls = typeof cur.className === 'string' ? cur.className : '';
-        const hasTailwindBottomPad = /\bpb-(?:3|4|5|6|8)\b/.test(cls);
-        const alreadyTracked = this.modifiedAncestors.has(cur);
-        let computedPb = 0;
-        if (!hasTailwindBottomPad && !alreadyTracked && win && typeof win.getComputedStyle === 'function') {
-          try {
-            computedPb = parseFloat(win.getComputedStyle(cur).paddingBottom || '0') || 0;
-          } catch {}
-        }
-
-        if (hasTailwindBottomPad || alreadyTracked || computedPb >= 10) {
-          if (!alreadyTracked) {
-            const rawInlinePb = cur.style?.paddingBottom ?? '';
-            const savedPb = hasTailwindBottomPad && rawInlinePb === '0px' ? '' : rawInlinePb;
-            this.modifiedAncestors.set(cur, savedPb);
-          }
-          if (cur.style && cur.style.paddingBottom !== '0px') {
-            cur.style.paddingBottom = '0px';
-          }
-          foundBottomWrapper = true;
-        }
+    if (typeof this.host.getBoundingClientRect !== 'function') return;
+    const composer = this.targetComposer.getBoundingClientRect?.();
+    const rect = this.host.getBoundingClientRect();
+    const vh = Number(win?.innerHeight) || 0;
+    // Align the normal bottom-docked composer; centred welcome-page composers
+    // keep their natural layout instead of being moved towards the viewport edge.
+    if (composer && vh && composer.top > vh / 2 && rect.height > 0) {
+      const topGap = rect.top - composer.bottom;
+      const bottomGap = vh - rect.bottom;
+      const previous = parseFloat(this.host.style.getPropertyValue?.('--hud-offset') || '0') || 0;
+      const offset = Math.max(-8, Math.min(8, previous + (bottomGap - topGap) / 2));
+      if (bottomGap >= 0 && bottomGap < 48) {
+        this.host.style.setProperty?.('--hud-offset', `${offset}px`);
+        this.host.style.translate = `0 var(--hud-offset, 0px)`;
       }
-      cur = cur.parentNode;
-      depth++;
-    }
-
-    const targetTop = foundBottomWrapper ? '7px' : '4px';
-    const targetBottom = foundBottomWrapper ? '7px' : '0px';
-    if (this.host.style.marginTop !== targetTop) {
-      this.host.style.marginTop = targetTop;
-    }
-    if (this.host.style.marginBottom !== targetBottom) {
-      this.host.style.marginBottom = targetBottom;
     }
   }
 
@@ -640,6 +653,13 @@ export class HudInstance {
     }
     this.syncVerticalCentering();
     this.syncTheme();
+    const width =
+      typeof targetComposer.getBoundingClientRect === 'function'
+        ? targetComposer.getBoundingClientRect()?.width ?? 0
+        : targetComposer.clientWidth ?? 0;
+    if (width > 0) {
+      this.handleContainerResize(width);
+    }
   }
 
   buildHudHtml() {
@@ -668,8 +688,9 @@ export class HudInstance {
 
           <span class="hud-seg-sep" aria-hidden="true"></span>
 
-          <!-- 分段 3: 当前上下文实况 (移除原生 title 提示，杜绝遮挡上浮卡片) -->
+          <!-- 分段 3: 当前上下文实况 (左侧显示上下文压缩次数徽章，0 次隐藏，>=1 次显示) -->
           <button type="button" class="capsule capsule-context" data-capsule-id="context" aria-haspopup="dialog" aria-expanded="false" aria-label="当前上下文实况明细">
+            <span class="hud-compaction-badge" id="hud-compaction-badge" hidden></span>
             <svg class="capsule-donut" viewBox="0 0 56 8" aria-hidden="true">
               <rect x="0.5" y="1.5" width="55" height="5" rx="2.5" fill="var(--hud-progress-track)" stroke="var(--hud-divider)" stroke-width="0.6"/>
               <circle class="donut-val" id="hud-donut-val" cx="4" cy="4" r="6" stroke="var(--hud-seg-sys-color)" stroke-width="0" fill="none" stroke-dasharray="37.699" stroke-dashoffset="37.699"/>
@@ -691,7 +712,7 @@ export class HudInstance {
             <span class="hud-popover-badge" id="pop-session-badge">0 轮 0 步</span>
           </div>
           <div class="hud-popover-divider"></div>
-          <div class="hud-popover-grid">
+          <div class="hud-data-state" aria-live="polite"></div><button type="button" class="hud-copy-stats">复制精确统计</button><div class="hud-popover-grid">
             <div class="hud-popover-row">
               <span class="hud-popover-label" id="lbl-model-dur">模型用时</span>
               <span class="hud-popover-val" id="val-model-dur">0 秒</span>
@@ -735,7 +756,7 @@ export class HudInstance {
             <span class="hud-popover-badge" id="pop-tokens-badge">0 tok</span>
           </div>
           <div class="hud-popover-divider"></div>
-          <div class="hud-popover-grid">
+          <div class="hud-data-state" aria-live="polite"></div><button type="button" class="hud-copy-stats">复制精确统计</button><div class="hud-popover-grid">
             <div class="hud-popover-row">
               <span class="hud-popover-label" id="lbl-cache-hit">缓存命中</span>
               <span class="hud-popover-val" id="val-cache-hit">0%</span>
@@ -785,7 +806,7 @@ export class HudInstance {
             <div class="hud-progress-seg hud-seg-tool" id="seg-tool" style="width: 0%"></div>
             <div class="hud-progress-seg hud-seg-msg" id="seg-msg" style="width: 0%"></div>
           </div>
-          <div class="hud-popover-grid">
+          <div class="hud-data-state" aria-live="polite"></div><button type="button" class="hud-copy-stats">复制精确统计</button><div class="hud-popover-grid">
             <div class="hud-popover-row">
               <span class="hud-popover-label">
                 <span class="hud-legend-dot" style="background-color: var(--hud-seg-sys-color)"></span>
@@ -831,7 +852,16 @@ export class HudInstance {
     if (!this.shadow) return;
     const capsules = this.shadow.querySelectorAll('.capsule');
     for (const c of capsules) {
-      if (c.classList) c.classList.add('is-skeleton');
+      if (c.classList) {
+        c.classList.add('is-skeleton');
+        c.classList.remove('has-compaction');
+      }
+    }
+    const compBadgeEl = this.shadow.querySelector('#hud-compaction-badge');
+    if (compBadgeEl) {
+      compBadgeEl.textContent = '';
+      compBadgeEl.setAttribute('hidden', '');
+      compBadgeEl.removeAttribute('aria-label');
     }
     this.hideAllPopovers();
   }
@@ -876,15 +906,21 @@ export class HudInstance {
     const lblSubEl = this.shadow.querySelector('#lbl-subagent-status');
     const valSubEl = this.shadow.querySelector('#val-subagent-status');
     const activeSubagents = Math.max(1, this.runningSubagentCount || 1);
+    const activeSubagentsBar = formatCompactCount(activeSubagents);
+    const activeSubagentsPop = formatDetailCompactNumber(activeSubagents);
+    const subStepsCount = Math.max(0, Number(this.lastMetrics?.session?.subagentSteps) || 0);
+    const subStepsPop = formatDetailCompactNumber(subStepsCount);
+    const subStepSuffix =
+      subStepsCount > 0 ? (isEn ? ` (${subStepsPop} steps)` : `（${subStepsPop} 步）`) : '';
 
     if (this.isSubagentRunning) {
       if (subagentTagEl) {
         subagentTagEl.textContent = isEn
           ? activeSubagents > 1
-            ? ` · ${activeSubagents} Subagents`
+            ? ` · ${activeSubagentsBar} Subagents`
             : ' · Subagent'
           : activeSubagents > 1
-          ? ` · ${activeSubagents} 子智能体运行中`
+          ? ` · ${activeSubagentsBar} 子智能体运行中`
           : ' · 子智能体运行中';
       }
       if (subagentRow) {
@@ -894,10 +930,27 @@ export class HudInstance {
         lblSubEl.textContent = isEn ? 'Subagents' : '子智能体状态';
       }
       if (valSubEl) {
-        valSubEl.textContent = isEn ? `${activeSubagents} running` : `${activeSubagents} 个运行中`;
+        valSubEl.textContent = isEn
+          ? `${activeSubagentsPop} running${subStepSuffix}`
+          : `${activeSubagentsPop} 个运行中${subStepSuffix}`;
       }
-    } else if (subagentTagEl) {
-      subagentTagEl.textContent = '';
+    } else {
+      if (subagentTagEl) {
+        subagentTagEl.textContent = '';
+      }
+      const totalSubagents = Math.max(0, Number(this.lastMetrics?.session?.subagentCount) || 0);
+      if (totalSubagents > 0) {
+        if (subagentRow) subagentRow.removeAttribute('hidden');
+        if (lblSubEl) lblSubEl.textContent = isEn ? 'Subagents' : '子智能体状态';
+        if (valSubEl) {
+          const totalSubPop = formatDetailCompactNumber(totalSubagents);
+          valSubEl.textContent = isEn
+            ? `${totalSubPop} scheduled${subStepSuffix}`
+            : `已调度 ${totalSubPop} 个${subStepSuffix}`;
+        }
+      } else if (subagentRow) {
+        subagentRow.setAttribute('hidden', '');
+      }
     }
   }
 
@@ -916,7 +969,8 @@ export class HudInstance {
     const t = metrics.tokens || {};
     const c = metrics.context || {};
     const b = c.breakdown || {};
-    const hasContextUsage = c.hasUsageData !== false;
+    const unavailable = metrics.availability === 'unavailable' || metrics.availability === 'loading';
+    const hasContextUsage = !unavailable && c.hasUsageData !== false;
 
     const subagentRunning = Boolean(
       metrics.isSubagentRunning ||
@@ -932,28 +986,40 @@ export class HudInstance {
     );
     const totalSubagents = Math.max(Number(s.subagentCount) || 0, activeSubagents);
 
-    // 1. 更新分段 1 (会话统计 + 子智能体实时工作状态)
+    // 1. 更新分段 1 (会话统计 + 子智能体实时工作状态 - 采用紧凑数字表示法)
     const turnsEl = q('#hud-txt-session .hud-turns');
     const stepsEl = q('#hud-txt-session .hud-steps');
     const speedEl = q('#hud-txt-session .hud-speed');
     const subagentTagEl = q('#hud-txt-session .hud-subagent-tag');
-    const turnsCount = formatInteger(isRawNumber(s.turns) ? s.turns : 0);
-    const stepsCount = formatInteger(isRawNumber(s.steps) ? s.steps : 0);
+    const rawTurns = isRawNumber(s.turns) ? s.turns : 0;
+    const rawSteps = isRawNumber(s.steps) ? s.steps : 0;
+    const turnsBarCount = formatCompactCount(rawTurns);
+    const stepsBarCount = formatCompactCount(rawSteps);
+    const turnsPopCount = formatDetailCompactNumber(rawTurns);
+    const stepsPopCount = formatDetailCompactNumber(rawSteps);
+    const activeSubagentsBar = formatCompactCount(activeSubagents);
     const tpsText = (digits) => s.outputTpsFormatted === '计算中...'
       ? (isEn ? 'Measuring…' : '计算中...')
       : formatMetric(s.outputTps, s.outputTpsFormatted, digits, ' tok/s');
 
-    if (turnsEl) turnsEl.textContent = isEn ? `${turnsCount}T ` : `${turnsCount} 轮 `;
-    if (stepsEl) stepsEl.textContent = isEn ? `${stepsCount}S` : `${stepsCount} 步`;
+    if (turnsEl) {
+      turnsEl.textContent =
+        this.isSubpane && rawTurns === 0 && rawSteps > 0
+          ? ''
+          : isEn
+          ? `${turnsBarCount}T `
+          : `${turnsBarCount} 轮 `;
+    }
+    if (stepsEl) stepsEl.textContent = isEn ? `${stepsBarCount}S` : `${stepsBarCount} 步`;
     if (speedEl) speedEl.textContent = ` · ${tpsText(0)}`;
     if (subagentTagEl) {
       if (subagentRunning) {
         subagentTagEl.textContent = isEn
           ? activeSubagents > 1
-            ? ` · ${activeSubagents} Subagents`
+            ? ` · ${activeSubagentsBar} Subagents`
             : ' · Subagent'
           : activeSubagents > 1
-          ? ` · ${activeSubagents} 子智能体运行中`
+          ? ` · ${activeSubagentsBar} 子智能体运行中`
           : ' · 子智能体运行中';
       } else {
         subagentTagEl.textContent = '';
@@ -970,14 +1036,35 @@ export class HudInstance {
     if (cacheLabelEl) cacheLabelEl.textContent = isEn ? ' Hit' : '命中';
     if (cacheValEl) cacheValEl.textContent = formatPercent(t.cacheHitRate, t.cacheHitRateFormatted, 0);
 
-    // 3. 更新分段 3 (上下文实况)
+    // 3. 更新分段 3 (上下文实况 + 左侧上下文压缩次数徽章)
+    const ctxCapsule = q('.capsule-context');
+    const compBadgeEl = q('#hud-compaction-badge');
     const ctxTxtEl = q('#hud-txt-context');
     const donutValEl = q('#hud-donut-val');
     const meterFillEl = q('#hud-meter-fill');
+    const compCount = Math.max(0, Math.floor(Number(s.compactionCount) || 0));
+    if (compBadgeEl) {
+      if (compCount >= 1) {
+        const compBarText = formatCompactCount(compCount);
+        compBadgeEl.textContent = compBarText;
+        compBadgeEl.removeAttribute('hidden');
+        compBadgeEl.setAttribute(
+          'aria-label',
+          isEn ? `Compacted ${compBarText} times` : `已压缩 ${compBarText} 次`
+        );
+        ctxCapsule?.classList?.add('has-compaction');
+      } else {
+        compBadgeEl.textContent = '';
+        compBadgeEl.setAttribute('hidden', '');
+        compBadgeEl.removeAttribute('aria-label');
+        ctxCapsule?.classList?.remove('has-compaction');
+      }
+    }
+
     const ratioClamped = hasContextUsage ? Math.min(1.0, Math.max(0, Number(c.usedRatio) || 0)) : 0;
     const usedCompact = hasContextUsage ? formatCompactCount(c.usedTokens, c.usedTokensCompact) : '—';
     const contextRatio = hasContextUsage ? c.usedRatio : undefined;
-    const pctText = formatPercent(contextRatio, c.usedRatioFormatted, 0);
+    const pctText = `${hasContextUsage && isRawNumber(contextRatio) && c.isFallbackCapacity ? '~' : ''}${formatPercent(contextRatio, c.usedRatioFormatted, 0)}`;
 
     if (ctxTxtEl) {
       ctxTxtEl.textContent = pctText;
@@ -985,7 +1072,7 @@ export class HudInstance {
     }
 
     const strokeColor =
-      ratioClamped >= 0.9
+      ratioClamped >= 0.9 && !c.isFallbackCapacity
         ? 'var(--hud-danger-color)'
         : ratioClamped >= 0.75
         ? 'var(--hud-warn-color)'
@@ -1002,7 +1089,7 @@ export class HudInstance {
       meterFillEl.setAttribute('fill', strokeColor);
     }
 
-    // 4. 更新 Popover 1 (会话统计)
+    // 4. 更新 Popover 1 (会话统计 - 采用紧凑数字表示法)
     const setTxt = (sel, val) => {
       const el = q(sel);
       if (el) el.textContent = val;
@@ -1010,7 +1097,7 @@ export class HudInstance {
     setTxt('#pop-session-title', isEn ? 'Session Stats' : '会话统计');
     setTxt(
       '#pop-session-badge',
-      isEn ? `${turnsCount} turns ${stepsCount} steps` : `${turnsCount} 轮 ${stepsCount} 步`
+      isEn ? `${turnsPopCount} turns ${stepsPopCount} steps` : `${turnsPopCount} 轮 ${stepsPopCount} 步`
     );
     setTxt('#lbl-model-dur', isEn ? 'Model Duration' : '模型用时');
     setTxt(
@@ -1038,8 +1125,11 @@ export class HudInstance {
 
     const subagentRow = q('#row-subagent-status');
     const subStepsCount = Math.max(0, Number(s.subagentSteps) || 0);
+    const subStepsPop = formatDetailCompactNumber(subStepsCount);
+    const activeSubagentsPop = formatDetailCompactNumber(activeSubagents);
+    const totalSubagentsPop = formatDetailCompactNumber(totalSubagents);
     const subStepSuffix =
-      subStepsCount > 0 ? (isEn ? ` (${subStepsCount} steps)` : `（${subStepsCount} 步）`) : '';
+      subStepsCount > 0 ? (isEn ? ` (${subStepsPop} steps)` : `（${subStepsPop} 步）`) : '';
     if (subagentRow) {
       if (subagentRunning || totalSubagents > 0) {
         subagentRow.removeAttribute('hidden');
@@ -1048,15 +1138,15 @@ export class HudInstance {
           setTxt(
             '#val-subagent-status',
             isEn
-              ? `${activeSubagents} running${subStepSuffix}`
-              : `${activeSubagents} 个运行中${subStepSuffix}`
+              ? `${activeSubagentsPop} running${subStepSuffix}`
+              : `${activeSubagentsPop} 个运行中${subStepSuffix}`
           );
         } else {
           setTxt(
             '#val-subagent-status',
             isEn
-              ? `${totalSubagents} completed${subStepSuffix}`
-              : `已调度 ${totalSubagents} 个${subStepSuffix}`
+              ? `${totalSubagentsPop} scheduled${subStepSuffix}`
+              : `已调度 ${totalSubagentsPop} 个${subStepSuffix}`
           );
         }
       } else {
@@ -1068,7 +1158,7 @@ export class HudInstance {
     setTxt('#pop-tokens-title', isEn ? 'Token Usage' : 'Token 用量');
     setTxt('#pop-tokens-badge', formatTokenCount(t.totalTokens, t.totalTokensFormatted));
     setTxt('#lbl-cache-hit', isEn ? 'Cache Hit' : '缓存命中');
-    setTxt('#val-cache-hit', formatPercent(t.cacheHitRate, t.cacheHitRateFormatted, 2));
+    setTxt('#val-cache-hit', formatPopoverPercent(t.cacheHitRate, t.cacheHitRateFormatted));
     setTxt('#lbl-uncached-in', isEn ? 'Uncached Input' : '未缓存输入');
     setTxt('#val-uncached-in', formatTokenCount(t.uncachedInputTokens, t.uncachedInputFormatted));
     setTxt('#lbl-cached-read', isEn ? 'Cached Read' : '缓存读取');
@@ -1105,9 +1195,9 @@ export class HudInstance {
 
     // 6. 更新 Popover 3 (当前上下文实况 - 100% 真实底层数据)
     setTxt('#pop-ctx-prefix', isEn ? 'Current Context ' : '当前上下文 ');
-    setTxt('#pop-ctx-pct', formatPercent(contextRatio, c.usedRatioFormatted, 2));
+    setTxt('#pop-ctx-pct', `${hasContextUsage && isRawNumber(contextRatio) && c.isFallbackCapacity ? '~' : ''}${formatPopoverPercent(contextRatio, c.usedRatioFormatted)}`);
     const capacityText = isRawNumber(c.capacityTokens) && c.capacityTokens > 0
-      ? `${c.isFallbackCapacity ? '~' : ''}${formatDetailCompactNumber(c.capacityTokens, true)}` : '—';
+      ? `${c.isFallbackCapacity ? '~' : ''}${formatDetailCompactNumber(c.capacityTokens)}` : '—';
     const usedText = hasContextUsage && isRawNumber(c.usedTokens) ? formatDetailCompactNumber(c.usedTokens) : '—';
     setTxt(
       '#pop-ctx-capacity',
@@ -1117,7 +1207,7 @@ export class HudInstance {
     const trackEl = q('#pop-ctx-track');
     if (trackEl) {
       trackEl.setAttribute('aria-valuenow', String(Math.round(ratioClamped * 100)));
-      trackEl.setAttribute('aria-valuetext', formatPercent(contextRatio, c.usedRatioFormatted, 2));
+      trackEl.setAttribute('aria-valuetext', formatPopoverPercent(contextRatio, c.usedRatioFormatted));
     }
     const segSysEl = q('#seg-sys');
     const segToolEl = q('#seg-tool');
@@ -1138,24 +1228,123 @@ export class HudInstance {
     const peakRow = q('#row-ctx-peak');
     if (peakRow) {
       setTxt('#lbl-ctx-peak', isEn ? 'Session Peak Context' : '会话历史峰值');
-      const peakVal = formatTokenCount(
-        c.peakContextTokens ?? c.usedTokens,
-        c.peakContextFormatted || c.usedTokensFormatted
-      );
-      const compCount = Number(s.compactionCount) || 0;
-      const compSuffix =
-        compCount > 0 ? (isEn ? ` (${compCount}x compacted)` : ` (已压缩 ${compCount} 次)`) : '';
-      setTxt('#val-ctx-peak', `${peakVal}${compSuffix}`);
+      const hasPeakData = hasContextUsage || (isRawNumber(c.peakContextTokens) && c.peakContextTokens > 0);
+      if (!hasPeakData) {
+        setTxt('#val-ctx-peak', '—');
+      } else {
+        const peakVal = formatTokenCount(
+          c.peakContextTokens ?? c.usedTokens,
+          c.peakContextFormatted || c.usedTokensFormatted
+        );
+        const compPopText = formatDetailCompactNumber(compCount);
+        const compSuffix =
+          compCount > 0 ? (isEn ? ` (${compPopText}x compacted)` : ` (已压缩 ${compPopText} 次)`) : '';
+        setTxt('#val-ctx-peak', `${peakVal}${compSuffix}`);
+      }
     }
     const modelRow = q('#row-ctx-model');
     if (modelRow) {
       setTxt('#lbl-ctx-model', isEn ? 'Active Model' : '当前模型');
-      setTxt('#val-ctx-model', c.modelDisplayName || c.modelId || 'Gemini 3.8 Flash');
+      setTxt('#val-ctx-model', c.modelDisplayName || c.modelId || '—');
     }
 
-    if (this.activePopoverId) {
-      this.repositionActivePopover();
+    // 7. 同步中英文无障碍标签 (aria-label) 与可核查精确整数摘要 (data-exact-summary)
+    const toolbarEl = q('.hud-container');
+    if (toolbarEl) {
+      toolbarEl.setAttribute(
+        'aria-label',
+        isEn ? 'Antigravity Conversation Telemetry Bar' : 'Antigravity 会话遥测状态栏'
+      );
+      if (metrics.availability) {
+        toolbarEl.setAttribute('data-availability', String(metrics.availability));
+      }
     }
+    const isWorking = Boolean(this.isStreaming || this.isSubagentRunning);
+    const phase = isWorking ? (this.activityPhase === 'executing' ? 'executing' : 'generating') : 'idle';
+    const phaseText = isEn
+      ? phase === 'generating'
+        ? 'Generating'
+        : phase === 'executing'
+        ? 'Executing'
+        : 'Idle'
+      : phase === 'generating'
+      ? '模型生成中'
+      : phase === 'executing'
+      ? '工具执行中'
+      : '空闲';
+
+    const capSession = q('.capsule-session');
+    const capTokens = q('.capsule-tokens');
+    const capContext = q('.capsule-context');
+    const sessionReadout = (q('#hud-txt-session')?.textContent || '').replace(/\s+/g, ' ').trim();
+    const tokensReadout = (q('#hud-txt-tokens')?.textContent || '').replace(/\s+/g, ' ').trim();
+    const contextReadout = pctText;
+    if (capSession) {
+      capSession.setAttribute(
+        'aria-label',
+        isEn
+          ? `Session Stats (${phaseText}): ${sessionReadout}`
+          : `会话统计明细（${phaseText}）：${sessionReadout}`
+      );
+    }
+    if (capTokens) {
+      capTokens.setAttribute(
+        'aria-label',
+        isEn ? `Token Usage: ${tokensReadout}` : `Token 用量明细：${tokensReadout}`
+      );
+    }
+    if (capContext) {
+      const compNote =
+        compCount >= 1
+          ? isEn
+            ? `, Compacted ${formatCompactCount(compCount)} times`
+            : `，已压缩 ${formatCompactCount(compCount)} 次`
+          : '';
+      capContext.setAttribute(
+        'aria-label',
+        isEn
+          ? `Current Context: ${contextReadout}${compNote}`
+          : `当前上下文实况明细：${contextReadout}${compNote}`
+      );
+    }
+
+    const popSession = q('#hud-popover-session');
+    const popTokens = q('#hud-popover-tokens');
+    const popContext = q('#hud-popover-context');
+    if (popSession) {
+      popSession.setAttribute('aria-label', isEn ? 'Session Stats Details' : '会话统计明细');
+      popSession.setAttribute(
+        'data-exact-summary',
+        `turns=${rawTurns}; steps=${rawSteps}; modelSec=${Number(s.modelDurationSeconds || 0).toFixed(2)}; toolSec=${Number(s.toolDurationSeconds || 0).toFixed(2)}; ttftSec=${Number(s.averageTtftSeconds || 0).toFixed(2)}; tps=${Number(s.outputTps || 0).toFixed(2)}`
+      );
+    }
+    if (popTokens) {
+      popTokens.setAttribute('aria-label', isEn ? 'Token Usage Details' : 'Token 用量明细');
+      popTokens.setAttribute(
+        'data-exact-summary',
+        `total=${Math.floor(Number(t.totalTokens) || 0)}; uncachedInput=${Math.floor(Number(t.uncachedInputTokens) || 0)}; cachedRead=${Math.floor(Number(t.cachedReadTokens) || 0)}; cacheWrite=${Math.floor(Number(t.cacheWriteTokens) || 0)}; output=${Math.floor(Number(t.outputTokens) || 0)}; reasoning=${Math.floor(Number(t.reasoningTokens) || 0)}; reply=${Math.floor(Number(t.candidateTokens) || 0)}`
+      );
+    }
+    if (popContext) {
+      popContext.setAttribute('aria-label', isEn ? 'Current Context Details' : '当前上下文实况明细');
+      popContext.setAttribute(
+        'data-exact-summary',
+        `used=${Math.floor(Number(c.usedTokens) || 0)}; capacity=${Math.floor(Number(c.capacityTokens) || 0)}; peak=${Math.floor(Number(c.peakContextTokens ?? c.usedTokens) || 0)}; compactions=${compCount}; model=${c.modelDisplayName || c.modelId || ''}`
+      );
+    }
+
+    const stateText = unavailable ? (isEn ? 'Data unavailable' : '数据暂不可用')
+      : metrics.availability === 'cached' ? (isEn ? 'Last successful record' : '上次成功记录')
+      : metrics.availability === 'partial' ? (isEn ? 'Partial data' : '数据不完整') : '';
+    for (const state of this.shadow.querySelectorAll('.hud-data-state')) {
+      state.textContent = [stateText, metrics.observedAt ? new Date(metrics.observedAt).toLocaleTimeString() : '', s.samples && !unavailable ? (isEn ? `${s.samples.timed} timed requests` : `${s.samples.timed} 个计时请求`) : ''].filter(Boolean).join(' · ');
+    }
+    for (const button of this.shadow.querySelectorAll('.hud-copy-stats')) button.textContent = isEn ? 'Copy exact statistics' : '复制精确统计';
+    if (unavailable) {
+      for (const button of this.shadow.querySelectorAll('.capsule')) button.setAttribute('aria-label', isEn ? 'Data unavailable' : '数据暂不可用');
+      for (const sel of ['#hud-txt-session .hud-turns','#hud-txt-session .hud-steps','#hud-txt-session .hud-speed','#hud-txt-tokens .hud-tok-total','#hud-txt-tokens .hud-cache-val','#hud-txt-context','#pop-session-badge','#pop-tokens-badge','#val-cache-hit','#val-uncached-in','#val-cached-read','#val-output-tok','#val-model-dur','#val-tool-dur','#val-ttft','#val-tps','#val-ctx-peak']) setTxt(sel, '—');
+    }
+    if (this.activePopoverId) this.repositionActivePopover();
   }
 
   bindEvents(targetComposer) {
@@ -1183,6 +1372,12 @@ export class HudInstance {
     }
 
     if (this.shadow && typeof this.shadow.querySelectorAll === 'function') {
+      for (const button of this.shadow.querySelectorAll('.hud-copy-stats')) button.addEventListener?.('click', async () => {
+        const m = this.lastMetrics;
+        const summary = { observedAt: m.observedAt, availability: m.availability, session: m.session, tokens: m.tokens, context: m.context };
+        try { await navigator.clipboard.writeText(JSON.stringify(summary, null, 2)); button.textContent = this.languageMode === 'en' ? 'Copied' : '已复制'; }
+        catch { button.textContent = this.languageMode === 'en' ? 'Copy unavailable' : '暂无法复制'; }
+      }, { signal });
       const capsules = this.shadow.querySelectorAll('.capsule');
       capsules.forEach((capsule) => {
         if (typeof capsule.addEventListener !== 'function') return;
@@ -1374,7 +1569,6 @@ export class HudInstance {
             pop.showPopover();
           }
         } catch {}
-        if (pop.classList) pop.classList.add('is-visible');
       } else {
         try {
           if (typeof pop.hidePopover === 'function') {
@@ -1386,7 +1580,12 @@ export class HudInstance {
       }
     });
 
+    // 先在未激活过渡态完成定位与祖先包含块校准，再附加 is-visible 以保留 130ms 入场过渡动画
     this.repositionActivePopover();
+    const activePop = this.shadow.querySelector(`#hud-popover-${id}`);
+    if (activePop && activePop.classList) {
+      activePop.classList.add('is-visible');
+    }
   }
 
   repositionActivePopover() {

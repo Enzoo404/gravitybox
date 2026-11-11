@@ -11,6 +11,8 @@ import { existsSync } from 'node:fs';
 import { TEST_CHROME_PATH } from '../tools/setup-test-browser.mjs';
 import { CDP } from '../dist/cdp.js';
 import { DEEP_STEPS } from '../dist/deep-scan.js';
+import { DatabaseSync } from 'node:sqlite';
+import { ProtobufWriter as HudWriter } from '../dist/usage.js';
 const execute = promisify(execFile);
 const root = fileURLToPath(new URL('../', import.meta.url));
 const releaseVersion = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')).version;
@@ -126,7 +128,7 @@ try {
     await command('pause');
     assert.equal(await main.evaluate('document.querySelector("#own-project").classList.contains("agzh-project-name")'),false);
     assert.equal(await main.evaluate('document.querySelector("#external-project").classList.contains("agzh-project-name")'),true);
-    assert.equal(await main.evaluate('typeof globalThis.__AGZH_BOOT__',ctx.executionContextId),'undefined');
+    assert.equal(await main.evaluate('globalThis.__AGZH_ENGINE_V1__.getLanguageMode()',ctx.executionContextId),'en');
     await main.evaluate('document.querySelector("#own-project").remove();document.querySelector("#external-project").remove()');await command('resume');await until(async()=>await text(main,'#settings')==='设置');
   });
   await check('聊天、代码、输入框、终端、标题及未知区域保持英文', async () => {
@@ -788,7 +790,7 @@ ${engine}`,auth.executionContextId);assert.equal(await cdp.evaluate('!!globalThi
     await until(async () => {
       await main.evaluate(`globalThis.__gravityboxUpdateHudMetrics({
         conversationId: '4ec6348d-0f58-49db-8aed-6f67dbb78f5d',
-        sessionRevision: 1,
+        sessionRevision: [...globalThis.__GRAVITYBOX_HUD_V1__.manager.instances.values()][0].getSessionRevision(),
         updatedAt: Date.now(),
         isStreaming: false,
         session: {
@@ -881,15 +883,15 @@ ${engine}`,auth.executionContextId);assert.equal(await cdp.evaluate('!!globalThi
       };
     })()`);
     assert.equal(precision.speed, '90.13 tok/s');
-    assert.equal(precision.duration, '65 分 59 秒');
+    assert.equal(precision.duration, '1 小时 5 分 59 秒');
     assert.equal(precision.toolDuration, '12 分 31 秒');
     assert.equal(precision.ttft, '19.70 秒');
-    assert.equal(precision.cache, '96.65%');
-    assert.equal(precision.tokensBadge, '58.59M tok');
-    assert.equal(precision.cachedRead, '56.53M tok');
-    assert.equal(precision.outputTok, '105.49K tok');
-    assert.equal(precision.context, '64.08%');
-    assert.equal(precision.ctxCapacity, '672.00K / 1.05M');
+    assert.equal(precision.cache, '96.7%');
+    assert.equal(precision.tokensBadge, '58.6M tok');
+    assert.equal(precision.cachedRead, '56.5M tok');
+    assert.equal(precision.outputTok, '105K tok');
+    assert.equal(precision.context, '64.1%');
+    assert.equal(precision.ctxCapacity, '672K / 1.05M');
     assert.ok(precision.capsuleWidth >= 124);
     assert.equal(precision.ctxPopWidth, 312);
 
@@ -1030,6 +1032,42 @@ ${engine}`,auth.executionContextId);assert.equal(await cdp.evaluate('!!globalThi
 
     await main.evaluate('document.querySelector("#hud-e2e-fixture").remove()');
     await main.evaluate('globalThis.__GRAVITYBOX_HUD_V1__?.reconcileMounts()', ctx.executionContextId);
+  });
+  await check('真实 HUD binding→Worker SQLite→分栏投递；同会话双栏、A→B→A 与英文独立运行', async () => {
+    const ids = ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222'];
+    const directory = join(temp, 'gemini', 'antigravity', 'conversations'); await mkdir(directory, { recursive: true });
+    const metadata = input => Buffer.concat([
+      HudWriter.encodeLengthDelimited(1, HudWriter.encodeVarintField(1, 100)),
+      HudWriter.encodeLengthDelimited(7, HudWriter.encodeVarintField(1, 102)),
+      HudWriter.encodeLengthDelimited(9, Buffer.concat([HudWriter.encodeVarintField(2, input), HudWriter.encodeVarintField(3, 50)])),
+    ]);
+    for (let i=0;i<ids.length;i++) {
+      const db = new DatabaseSync(join(directory, ids[i]+'.db'));
+      db.exec('CREATE TABLE steps(idx INTEGER PRIMARY KEY,step_type INTEGER,status INTEGER,metadata BLOB); CREATE TABLE gen_metadata(idx INTEGER PRIMARY KEY,data BLOB);');
+      db.prepare('INSERT INTO steps VALUES(0,14,3,NULL)').run();
+      db.prepare('INSERT INTO steps VALUES(1,15,3,?)').run(metadata(100+i*100)); db.close();
+    }
+    const tree = await main.send('Page.getFrameTree');
+    const ctx = await main.send('Page.createIsolatedWorld', { frameId: tree.frameTree.frame.id, worldName: 'AGZH-localization-v1' });
+    await main.evaluate(`document.body.insertAdjacentHTML('beforeend', ${JSON.stringify(ids.map((id,i)=>`<div id="binding-pane-${i}" data-testid="conversation-view" data-cascade-id="${id}" style="position:fixed;top:30px;left:${i*470}px;width:450px;background:white"><div data-testid="agent-input-box"><div class="surface-composer" style="height:50px"><button data-testid="model-selector-trigger" aria-label="Select model, current: Gemini 3.8 Flash">Gemini 3.8 Flash</button></div></div></div>`).join(''))})`);
+    const values = () => main.evaluate(`(() => [...globalThis.__GRAVITYBOX_HUD_V1__.manager.instances.values()].map(i => ({ slot:i.paneSlotId, revision:i.sessionRevision, conversation:i.currentConvId, tokens:i.lastMetrics.tokens.totalTokens, availability:i.lastMetrics.availability })))()`, ctx.executionContextId);
+    await until(async()=> { const rows=await values(); return rows.length===2 && rows[0].tokens===150 && rows[1].tokens===250; });
+    const original = await values(); assert.notEqual(original[0].slot, original[1].slot);
+    await until(async()=>await main.evaluate(`document.querySelector('#binding-pane-0 [data-testid="model-selector-trigger"]').getAttribute('aria-label')`)==='选择模型，当前：Gemini 3.8 Flash');
+    assert.equal(await text(main, '#binding-pane-0 [data-testid="model-selector-trigger"]'), 'Gemini 3.8 Flash');
+    await main.evaluate(`document.querySelector('#binding-pane-0').setAttribute('data-cascade-id', '${ids[1]}')`);
+    await until(async()=>{const rows=await values();return rows.length===2&&rows.every(r=>r.conversation===ids[1]&&r.tokens===250);});
+    const db = new DatabaseSync(join(directory,ids[0]+'.db'));db.prepare('UPDATE steps SET metadata=? WHERE idx=1').run(metadata(101));db.close();
+    await main.evaluate(`document.querySelector('#binding-pane-0').setAttribute('data-cascade-id', '${ids[0]}')`);
+    await until(async()=>{const rows=await values();return rows[0]?.conversation===ids[0]&&rows[0].tokens===151;});
+    const returned=await values();assert.equal(returned[0].slot,original[0].slot);assert.ok(returned[0].revision>original[0].revision);assert.equal(returned[1].tokens,250);
+    await command('pause');
+    await until(async()=>await main.evaluate(`globalThis.__GRAVITYBOX_HUD_V1__?.manager?.state().languageMode === 'en'`,ctx.executionContextId));
+    await until(async()=>{const rows=await values();return rows.length===2&&rows[0].tokens===151;});
+    assert.equal(await text(main,'#settings'),'Settings');
+    assert.equal(await main.evaluate(`globalThis.__GRAVITYBOX_HUD_V1__.manager.languageMode`,ctx.executionContextId),'en');
+    await main.evaluate(`document.querySelector('#binding-pane-0').remove();document.querySelector('#binding-pane-1').remove()`);await command('resume');
+    await until(async()=>await text(main,'#settings')==='设置');
   });
   const resources = (await execute('/bin/ps', ['-p', String(backend.pid), '-o', 'rss=,%cpu=,time='])).stdout.trim();
   const finalStatus = await status();

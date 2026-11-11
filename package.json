@@ -45,7 +45,11 @@
     "setup:dev": "node tools/doctor.mjs --setup",
     "prestart": "npm run build",
     "prebuild": "node tools/doctor.mjs --install",
-    "preverify": "node tools/doctor.mjs --install"
+    "preverify": "node tools/doctor.mjs --install",
+    "verify:2.30.0": "node tools/verify.mjs --target-app-version 2.30.0",
+    "package:mac:2.30.0": "npm run verify:2.30.0 && node tools/package-mac.mjs --target-app-version 2.30.0",
+    "verify:2.31.0": "node tools/verify.mjs --target-app-version 2.31.0",
+    "package:mac:2.31.0": "npm run verify:2.31.0 && node tools/package-mac.mjs --target-app-version 2.31.0"
   },
   "engines": {
     "node": ">=22.15.0 <23"

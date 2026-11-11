@@ -231,6 +231,7 @@ class FakeShadowRoot {
       '#hud-txt-tokens .hud-cache-prefix',
       '#hud-txt-tokens .hud-cache-label',
       '#hud-txt-tokens .hud-cache-val',
+      '#hud-compaction-badge',
       '#hud-donut-val',
       '#hud-meter-fill',
       '#hud-txt-context',
@@ -350,7 +351,7 @@ describe('HUD raw 数值精度与缺值展示', () => {
     },
     context: {
       hasUsageData: true, usedTokens: 226412, usedTokensCompact: '226.4K',
-      usedRatio: 1.13206, usedRatioFormatted: '113.21%',
+      usedRatio: 1.13206, usedRatioFormatted: '113%',
       capacityTokens: 200000, capacityTokensCompact: '~200K', isFallbackCapacity: true,
       peakContextTokens: 1234567,
       modelDisplayName: 'Gemini Very Long Model Name With Extended Context Preview',
@@ -363,27 +364,31 @@ describe('HUD raw 数值精度与缺值展示', () => {
   };
 
   for (const languageMode of ['zh', 'en']) {
-    it(`${languageMode}: 胶囊整数、详情按规则保留精度与 M/K 单位，保留全部既有项目`, () => {
+    it(`${languageMode}: 胶囊与展开卡片统一采用紧凑数字表示法（Compact Number Notation）与压缩徽章控制`, () => {
       const { instance, text } = render(metrics, languageMode);
       assert.equal(text('#hud-txt-session .hud-speed'), ' · 83 tok/s');
-      assert.equal(text('#hud-txt-session .hud-steps'), languageMode === 'en' ? '1,234S' : '1,234 步');
+      assert.equal(text('#hud-txt-session .hud-steps'), languageMode === 'en' ? '1.2KS' : '1.2K 步');
+      assert.equal(text('#pop-session-badge'), languageMode === 'en' ? '12 turns 1.23K steps' : '12 轮 1.23K 步');
       assert.equal(text('#hud-txt-tokens .hud-tok-total'), '61M tok');
       assert.equal(text('#hud-txt-tokens .hud-cache-val'), '97%');
-      assert.equal(text('#hud-txt-context'), '113%');
+      assert.equal(text('#hud-compaction-badge'), '2');
+      assert.equal(instance.shadow.querySelector('#hud-compaction-badge').hasAttribute('hidden'), false);
+      assert.equal(instance.shadow.querySelector('.capsule-context').classList.contains('has-compaction'), true);
+      assert.equal(text('#hud-txt-context'), '~113%');
       assert.equal(text('#val-tps'), '82.74 tok/s');
       assert.equal(text('#val-ttft'), languageMode === 'en' ? '3.85s' : '3.85 秒');
       assert.equal(text('#val-model-dur'), languageMode === 'en' ? '22m 28s' : '22 分 28 秒');
       assert.equal(text('#val-tool-dur'), languageMode === 'en' ? '1m 0s' : '1 分 0 秒');
-      assert.equal(text('#val-cache-hit'), '96.94%');
-      assert.equal(text('#pop-tokens-badge'), '61.23M tok');
+      assert.equal(text('#val-cache-hit'), '96.9%');
+      assert.equal(text('#pop-tokens-badge'), '61.2M tok');
       assert.equal(text('#val-uncached-in'), '1.23M tok');
-      assert.equal(text('#val-cached-read'), '59.88M tok');
-      assert.equal(text('#val-output-tok'), '123.46K tok');
-      assert.equal(text('#val-cache-write'), '1.00K tok');
-      assert.equal(text('#val-reasoning-tok'), '12.35K / 111.11K tok');
-      assert.equal(text('#pop-ctx-pct'), '113.21%');
-      assert.equal(text('#pop-ctx-capacity'), '226.41K / ~200K');
-      assert.equal(text('#val-seg-sys'), '218.10K tok');
+      assert.equal(text('#val-cached-read'), '59.9M tok');
+      assert.equal(text('#val-output-tok'), '123K tok');
+      assert.equal(text('#val-cache-write'), '1K tok');
+      assert.equal(text('#val-reasoning-tok'), '12.3K / 111K tok');
+      assert.equal(text('#pop-ctx-pct'), '~113%');
+      assert.equal(text('#pop-ctx-capacity'), '226K / ~200K');
+      assert.equal(text('#val-seg-sys'), '218K tok');
       assert.equal(text('#val-seg-tool'), '8.31K tok');
       assert.equal(text('#val-seg-msg'), '1.24K tok');
       assert.equal(text('#val-ctx-peak'), languageMode === 'en'
@@ -391,10 +396,23 @@ describe('HUD raw 数值精度与缺值展示', () => {
       assert.equal(text('#val-ctx-model'), metrics.context.modelDisplayName);
       assert.equal(instance.shadow.querySelector('#seg-msg').style.width, '0%');
       assert.equal(instance.shadow.querySelector('#pop-ctx-track').getAttribute('aria-valuenow'), '100');
-      assert.equal(instance.shadow.querySelector('#pop-ctx-track').getAttribute('aria-valuetext'), '113.21%');
+      assert.equal(instance.shadow.querySelector('#pop-ctx-track').getAttribute('aria-valuetext'), '113%');
       assert.match(instance.shadow.querySelector('#val-tps').getAttribute('aria-description'), /等待|waiting/);
       assert.match(instance.shadow.querySelector('#val-ttft').getAttribute('aria-description'), /原始|original/);
       assert.equal((instance.buildHudHtml().match(/class="hud-popover-row"/g) || []).length, 16);
+
+      // 当压缩次数为 0 时隐藏徽章，移除 has-compaction 类
+      const zeroComp = render({
+        ...metrics,
+        session: { ...metrics.session, compactionCount: 0, turns: 1500, steps: 2500000, subagentCount: 1200, subagentSteps: 3450 },
+      }, languageMode);
+      assert.equal(zeroComp.instance.shadow.querySelector('#hud-compaction-badge').hasAttribute('hidden'), true);
+      assert.equal(zeroComp.text('#hud-compaction-badge'), '');
+      assert.equal(zeroComp.instance.shadow.querySelector('.capsule-context').classList.contains('has-compaction'), false);
+      assert.equal(zeroComp.text('#hud-txt-session .hud-turns'), languageMode === 'en' ? '1.5KT ' : '1.5K 轮 ');
+      assert.equal(zeroComp.text('#hud-txt-session .hud-steps'), languageMode === 'en' ? '2.5MS' : '2.5M 步');
+      assert.equal(zeroComp.text('#pop-session-badge'), languageMode === 'en' ? '1.5K turns 2.5M steps' : '1.5K 轮 2.5M 步');
+      assert.equal(zeroComp.text('#val-subagent-status'), languageMode === 'en' ? '1.2K scheduled (3.45K steps)' : '已调度 1.2K 个（3.45K 步）');
     });
   }
 
@@ -413,8 +431,8 @@ describe('HUD raw 数值精度与缺值展示', () => {
     assert.equal(zero.text('#val-tps'), '0.00 tok/s');
     assert.equal(zero.text('#val-ttft'), '0.00 秒');
     assert.equal(zero.text('#val-model-dur'), '0 秒');
-    assert.equal(zero.text('#val-cache-hit'), '0.00%');
-    assert.equal(zero.text('#pop-ctx-pct'), '0.00%');
+    assert.equal(zero.text('#val-cache-hit'), '0%');
+    assert.equal(zero.text('#pop-ctx-pct'), '0%');
     const absent = render({ session: { outputTps: 0, outputTpsFormatted: '—',
       averageTtftSeconds: 0, averageTtftFormatted: '—' } });
     assert.equal(absent.text('#val-tps'), '—');
@@ -434,11 +452,11 @@ describe('HUD raw 数值精度与缺值展示', () => {
       const { instance, text } = render({ context: { ...metrics.context, usedRatio: 0.5,
         capacityTokensCompact: '200K', breakdown: { cachedContextRatio: 40,
           uncachedContextRatio: 10, latestOutputTokens: output } } });
-      assert.equal(text('#pop-ctx-capacity'), '226.41K / ~200K');
+      assert.equal(text('#pop-ctx-capacity'), '226K / ~200K');
       assert.equal(instance.shadow.querySelector('#seg-sys').style.width, '40.000%');
       assert.equal(instance.shadow.querySelector('#seg-tool').style.width, '10.000%');
       assert.equal(instance.shadow.querySelector('#seg-msg').style.width, '0%');
-      assert.equal(text('#val-seg-msg'), output >= 1_000_000 ? '1.00M tok' : '1 tok');
+      assert.equal(text('#val-seg-msg'), output >= 1_000_000 ? '1M tok' : '1 tok');
     }
   });
 
@@ -538,9 +556,9 @@ describe('HudInstance 与 AntigravityHudManager 生产模块生命周期、垂�
     assert.equal(manager.state().instanceCount, 2, '左右双分栏应各自独立挂载 1 个 HudInstance');
 
     // 验证 Issue 1: 外层 pb-4 底部内边距被平衡归零，且 HUD 上下 margin 对称居中
-    const instA = manager.instances.get('cascade-alpha');
+    const instA = manager.instances.get(manager.viewToSlotId.get(paneA.view));
     assert.ok(instA);
-    assert.equal(paneA.bottomDock.style.paddingBottom, '0px', '外层 pb-4 容器底部内边距应被自动归零以消除下偏');
+    assert.equal(paneA.bottomDock.style.paddingBottom, '16px', 'HUD 不得修改宿主 pb-4 内边距');
     assert.equal(instA.host.style.marginTop, instA.host.style.marginBottom, 'HUD 上下外边距必须完全对称居中');
 
     const capsuleBtn = instA.shadow.querySelectorAll('.capsule')[0];
@@ -647,12 +665,12 @@ describe('HudInstance 与 AntigravityHudManager 生产模块生命周期、垂�
     assert.equal(instA.updateMetrics(sampleMetrics('conv-3', rev4)), true);
 
     // 验证 Popover 3 展示真实上下文明细而非 1.9K/7.6K 假数据
-    assert.equal(instA.shadow.querySelector('#pop-ctx-capacity').textContent, '226.41K / 262.14K');
+    assert.equal(instA.shadow.querySelector('#pop-ctx-capacity').textContent, '226K / 262K');
     assert.equal(instA.shadow.querySelector('#lbl-seg-sys').textContent, '缓存复用上下文');
-    assert.equal(instA.shadow.querySelector('#val-seg-sys').textContent, '218.10K tok');
+    assert.equal(instA.shadow.querySelector('#val-seg-sys').textContent, '218K tok');
     assert.equal(instA.shadow.querySelector('#lbl-seg-tool').textContent, '本步新增输入');
     assert.equal(instA.shadow.querySelector('#val-seg-tool').textContent, '8.31K tok');
-    assert.equal(instA.shadow.querySelector('#val-ctx-peak').textContent, '226.41K tok (已压缩 1 次)');
+    assert.equal(instA.shadow.querySelector('#val-ctx-peak').textContent, '226K tok (已压缩 1 次)');
     assert.equal(instA.shadow.querySelector('#val-ctx-model').textContent, 'Gemini 3.8 Flash');
 
     // 验证浅色主题显式声明时，即使系统 matchMedia 为 dark 也不得误判为深色
@@ -728,6 +746,30 @@ describe('HudInstance 与 AntigravityHudManager 生产模块生命周期、垂�
     // 验证后端 SQLite 报告子智能体运行而前端 DOM 空闲时，不会触发无限 STREAMING_CHANGED 乒乓风暴
     subagentStatusNode.remove();
     assert.equal(manager.resolveStreamingState(paneA.view), false, '子智能体结束后流式状态恢复为 false');
+
+    // 验证后台普通终端任务 ("1 task running" / "1 个后台任务正在运行")、普通 Working 状态与权限指示器不会误报为子智能体运行中
+    const bgTaskStatusNode = new FakeElement('div', doc);
+    bgTaskStatusNode.setAttribute('data-testid', 'idle-status-text');
+    bgTaskStatusNode.textContent = '1 task running';
+    paneA.view.appendChild(bgTaskStatusNode);
+    assert.equal(
+      manager.resolveSubagentState(paneA.view).isSubagentRunning,
+      false,
+      '普通后台任务 "1 task running" 绝不能误报为子智能体运行中'
+    );
+    bgTaskStatusNode.textContent = '1 个后台任务正在运行';
+    assert.equal(
+      manager.resolveSubagentState(paneA.view).isSubagentRunning,
+      false,
+      '汉化后的 "1 个后台任务正在运行" 绝不能误报为子智能体运行中'
+    );
+    bgTaskStatusNode.textContent = 'Working';
+    assert.equal(
+      manager.resolveSubagentState(paneA.view).isSubagentRunning,
+      false,
+      '主智能体普通 "Working" 状态不得误报为子智能体运行中'
+    );
+    bgTaskStatusNode.remove();
     const cancelBtn = new FakeElement('button', doc);
     cancelBtn.setAttribute('data-testid', 'input-cancel-button');
     cancelBtn.setAttribute('aria-label', 'Cancel (⌃C)');
@@ -790,12 +832,12 @@ describe('HudInstance 与 AntigravityHudManager 生产模块生命周期、垂�
     manager.setEnabled(true);
     assert.equal(manager.state().instanceCount, 2, '重新开启 HUD 后应立即恢复双分栏实例');
     manager.setEnabled(false);
-    assert.equal(paneA.bottomDock.style.paddingBottom, '', '遇到残留内联 0px 的 pb-4 容器时卸载应清空内联样式以恢复原生类内边距');
+    assert.equal(paneA.bottomDock.style.paddingBottom, '0px', 'HUD 不得猜测或修改宿主既有内联样式');
     paneA.bottomDock.style.paddingBottom = '16px';
     manager.setEnabled(true);
 
     // 验证 50 次重挂载零监听器泄漏
-    const refreshedInstA = manager.instances.get('cascade-alpha');
+    const refreshedInstA = manager.instances.get(manager.viewToSlotId.get(paneA.view));
     for (let i = 0; i < 50; i++) {
       refreshedInstA.mount(paneA.composer);
     }

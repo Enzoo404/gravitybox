@@ -227,13 +227,17 @@ final class UsagePage: NSObject {
                 self.totalTokensMetric.stringValue = self.formatCompactTokens(total)
                 let cacheWrite = intVal(summary, "cacheWriteTokens")
                 self.tokensDetail.stringValue = "输入 \(self.formatCompactTokens(prompt)) · 缓存读取 \(self.formatCompactTokens(cached))" + (cacheWrite > 0 ? " · 缓存写入 \(self.formatCompactTokens(cacheWrite))" : "") + " · 输出 \(self.formatCompactTokens(output))"
-                self.tokensDetail.toolTip = "合计 \(total.formatted()) Token · 输入 \(prompt.formatted()) · 缓存读取 \(cached.formatted()) · 缓存写入 \(cacheWrite.formatted()) · 输出 \(output.formatted())"
                 let pricedCount = (summary["pricedModels"] as? Int) ?? (summary["priced_models"] as? Int) ?? (value["pricedModels"] as? Int) ?? 0
                 let unpricedCount = (summary["unpricedModels"] as? Int) ?? (summary["unpriced_models"] as? Int) ?? (value["unpricedModels"] as? Int) ?? 0
                 self.costTitle.stringValue = "API 费用估算"
-                self.priceCoverage.stringValue = ""
-                self.priceCoverage.isHidden = true
-                self.usdMetric.stringValue = unpricedCount > 0 && pricedCount == 0 ? "未计价" : self.formatUsd(usd)
+                let coverageRows = value["byModel"] as? [[String: Any]] ?? []
+                let unpricedTokens = coverageRows.reduce(0) { $0 + intVal($1, "unpricedTokens", fallback: intVal($1, "unpriced_tokens")) }
+                let coverageText = total > 0 && unpricedTokens > 0
+                    ? "已计价部分 · 另有 \(Int((Double(unpricedTokens) / Double(total) * 100).rounded()))% Token 未计价"
+                    : "已计价部分 · 含未计价请求"
+                self.priceCoverage.stringValue = unpricedCount > 0 ? coverageText : ""
+                self.priceCoverage.isHidden = unpricedCount == 0
+                self.usdMetric.stringValue = unpricedCount > 0 && pricedCount == 0 && usd == 0 ? "未计价" : self.formatUsd(usd)
                 self.usdDetail.stringValue = ""
                 self.usdDetail.isHidden = true
 
@@ -245,23 +249,9 @@ final class UsagePage: NSObject {
                 let avgIn = requests > 0 ? total / requests : 0
                 self.requestsDetail.stringValue = requests > 0 ? "平均每次约 \(self.formatCompactTokens(avgIn)) Token" : "当前时段暂无调用"
 
-                let scopeDesc = (summary["scanScopeDescription"] as? String) ?? (summary["scan_scope_description"] as? String) ?? ""
-                let scopeText = scopeDesc.isEmpty ? "统计范围待确认" : scopeDesc
-                // B09: 用量页披露失败库数量、跳过记录数与最后扫描时间（库名由 usage.ts 内部掌握，IPC 不输出路径）。
                 let failedCount = intVal(summary, "failedDatabasesCount", fallback: intVal(summary, "failed_databases_count"))
                 let skippedRecords = intVal(summary, "skippedLargeRecords", fallback: intVal(summary, "skipped_large_records"))
-                let lastScan = doubleVal(summary, "lastScannedAt", fallback: doubleVal(summary, "generated_at"))
-                var scanDetails: [String] = ["统计范围：\(scopeText)"]
-                if failedCount > 0 { scanDetails.append("失败库 \(failedCount) 个") }
-                if skippedRecords > 0 { scanDetails.append("跳过 \(skippedRecords) 条超大记录") }
-                if lastScan > 0 {
-                    let formatter = Self.scanDateFormatter
-                    scanDetails.append("扫描时间 \(formatter.string(from: Date(timeIntervalSince1970: lastScan)))")
-                }
                 let unknown = intVal(summary, "unknownTimeRecords")
-                if unknown > 0 { scanDetails.append("\(unknown) 条时间未知 · \(intVal(summary, "unknownTimeTokens").formatted()) Token") }
-                if (summary["availability"] as? String) == "cached" { scanDetails.append("本轮读取失败，沿用上次统计") }
-                self.statusSummary.toolTip = scanDetails.joined(separator: " · ")
                 self.statusSummary.stringValue = InterfaceText.usageScope(scanned: intVal(summary,"databasesScanned"), discovered: intVal(summary,"databasesDiscovered"), failed:failedCount, skipped:skippedRecords, unknown:unknown)
                 self.statusSummary.textColor = failedCount > 0 || skippedRecords > 0 ? accessibleWarningColor() : .secondaryLabelColor
 
@@ -336,7 +326,7 @@ final class UsagePage: NSObject {
         // 先筛选已计价且有费用的模型，按费用降序排序
         let pricedModels = modelRows.filter {
             let mUsd = doubleVal($0, "estimatedUsd", fallback: doubleVal($0, "estimated_usd"))
-            let isPriced = ($0["priced"] as? Bool) ?? (mUsd > 0)
+            let isPriced = (($0["priced"] as? Bool) ?? (mUsd > 0)) || ($0["partiallyPriced"] as? Bool == true)
             return isPriced && mUsd > 0
         }.sorted {
             let u1 = doubleVal($0, "estimatedUsd", fallback: doubleVal($0, "estimated_usd"))
@@ -386,7 +376,6 @@ final class UsagePage: NSObject {
             nameLbl.lineBreakMode = .byTruncatingTail
             nameLbl.cell?.wraps = false
             nameLbl.cell?.truncatesLastVisibleLine = true
-            nameLbl.toolTip = slice.name
             nameLbl.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
             let usdDisplay = self.formatUsd(slice.usd)
@@ -450,8 +439,8 @@ final class UsagePage: NSObject {
             let sharePct = totalTokens > 0 ? max(0, min(100, Int(round(rawRatio)))) : 0
             let shareText = (mTokens > 0 && sharePct == 0) ? "<1%" : "\(sharePct)%"
             let isItemPriced = (item["priced"] as? Bool) ?? (mUsd > 0)
-            let usdStr: String
-            if isItemPriced {
+            var usdStr: String
+            if isItemPriced || (item["partiallyPriced"] as? Bool == true) {
                 if mUsd > 0 && mUsd < 0.001 {
                     usdStr = "<$0.001"
                 } else if mUsd < 0.01 && mUsd > 0 {
@@ -464,8 +453,8 @@ final class UsagePage: NSObject {
             } else {
                 usdStr = mTokens > 0 ? "未计价" : "$0.00"
             }
+            if item["partiallyPriced"] as? Bool == true { usdStr = "部分 " + usdStr }
             let row = ModelUsageRow(name: name, tokens: formatCompactTokens(mTokens), input: formatCompactTokens(mIn), output: formatCompactTokens(mOut), requests: mReq, cost: usdStr, share: sharePct, shareText: shareText)
-            row.toolTip = "Token 占比 = 该模型 Token ÷ 当前范围总 Token · 含输入、缓存、输出"
             if !modelsBreakdownStack.arrangedSubviews.isEmpty {
                 let line = divider(); modelsBreakdownStack.addArrangedSubview(line); fillWidth(line, in: modelsBreakdownStack)
             }
@@ -509,7 +498,18 @@ final class UsagePage: NSObject {
             return lines.joined(separator:"\n")
         }.joined(separator:"\n\n")
         let failures = rows.filter { ($0["state"] as? String) != "read" }.map { "\($0["id"] as? String ?? "匿名库") · \($0["state"] as? String ?? "未知")" }.joined(separator: "\n")
-        let overview = "会话数据库：\(intVal(summary, "databasesScanned"))/\(intVal(summary, "databasesDiscovered"))\n读取失败：\(intVal(summary, "failedDatabasesCount"))\n未读取记录：\(intVal(summary, "skippedLargeRecords"))\n时间未知记录：\(intVal(summary, "unknownTimeRecords"))\n时间未知 Token：\(intVal(summary, "unknownTimeTokens").formatted())\n\n异常记录\n" + (failures.isEmpty ? "无异常记录" : failures)
+        let failedCount = intVal(summary, "failedDatabasesCount", fallback: intVal(summary, "failed_databases_count"))
+        let skippedRecords = intVal(summary, "skippedLargeRecords", fallback: intVal(summary, "skipped_large_records"))
+        let lastScan = doubleVal(summary, "lastScannedAt", fallback: doubleVal(summary, "generated_at"))
+        var scanDetails: [String] = []
+        if failedCount > 0 { scanDetails.append("失败库 \(failedCount) 个") }
+        if skippedRecords > 0 { scanDetails.append("跳过 \(skippedRecords) 条超大记录") }
+        if lastScan > 0 {
+            let formatter = Self.scanDateFormatter
+            scanDetails.append("扫描时间 \(formatter.string(from: Date(timeIntervalSince1970: lastScan)))")
+        }
+        let scanSummaryText = scanDetails.isEmpty ? "" : "\n扫描状态：" + scanDetails.joined(separator: " · ")
+        let overview = "会话数据库：\(intVal(summary, "databasesScanned"))/\(intVal(summary, "databasesDiscovered"))\n读取失败：\(failedCount)\n未读取记录：\(skippedRecords)\n时间未知记录：\(intVal(summary, "unknownTimeRecords"))\n时间未知 Token：\(intVal(summary, "unknownTimeTokens").formatted())\(scanSummaryText)\n\n异常记录\n" + (failures.isEmpty ? "无异常记录" : failures)
         InspectionDetails.show("统计详情", sections: [("读取概况", overview), ("价格基准", ((summary["pricingWarnings"] as? [String] ?? summary["pricing_warnings"] as? [String] ?? []).joined(separator: "\n")) + "\n\n" + (priceDetail.isEmpty ? "暂无价格数据" : priceDetail)), ("数据库诊断", detail.isEmpty ? "暂无读取记录" : detail)], in: window)
     }
 

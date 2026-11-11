@@ -720,7 +720,6 @@ final class CachePage: NSObject {
             let title = defaults.title
             let subtitle = defaults.subtitle
             let bytes = Int64(intVal(item, "bytes"))
-            let fileCount = intVal(item, "fileCount")
             let clearable = item["clearable"] as? Bool != false
             let canSelect = clearable && bytes > 0
             let isSelected = canSelect && selectedNames.contains(name)
@@ -745,7 +744,6 @@ final class CachePage: NSObject {
             let sizeText = bytes > 0 ? formatBytes(bytes) : "0 B"
             if ctrl.sizeLabel.stringValue != sizeText { ctrl.sizeLabel.stringValue = sizeText }
             ctrl.sizeLabel.textColor = isSelected ? .labelColor : Design.secondary
-            ctrl.rowView.toolTip = fileCount > 0 ? "\(title)（\(name) · \(fileCount.formatted()) 个文件）" : "\(title)（\(name)）"
             rowControlsByName[name] = ctrl
         }
 
@@ -762,10 +760,6 @@ final class CachePage: NSObject {
                 guard let item = sortedEntries.first(where: { ($0["name"] as? String) == name }) else { return true }
                 return !isStatefulItem(item)
             }
-            let statefulNames = nextNames.filter { name in
-                guard let item = sortedEntries.first(where: { ($0["name"] as? String) == name }) else { return false }
-                return isStatefulItem(item)
-            }
 
             if !safeNames.isEmpty {
                 let safeHeader = text("运行加速缓存（推荐清理）", size: 11.5, weight: .semibold, color: Design.secondary)
@@ -778,30 +772,6 @@ final class CachePage: NSObject {
                         itemsStack.addArrangedSubview(line)
                         fillWidth(line, in: itemsStack)
                     }
-                    itemsStack.addArrangedSubview(ctrl.rowView)
-                    fillWidth(ctrl.rowView, in: itemsStack)
-                }
-            }
-
-            if !statefulNames.isEmpty {
-                if !safeNames.isEmpty {
-                    let sep = divider()
-                    itemsStack.addArrangedSubview(sep)
-                    fillWidth(sep, in: itemsStack)
-                }
-                let warnIcon = symbol("exclamationmark.triangle.fill", size: 12, color: Design.color(0xD97706, 0xFBBF24))
-                let statefulTitle = text("会话状态与应用授权（需谨慎清理）", size: 11.5, weight: .semibold, color: Design.color(0xD97706, 0xFBBF24))
-                let statefulHeaderRow = horizontal([warnIcon, statefulTitle], spacing: 6)
-                let statefulSub = text("清理此类数据可能导致扩展登录失效或需要重新授权，核心账号凭据完好保留", size: 10.5, color: Design.secondary)
-                let statefulBox = vertical([statefulHeaderRow, statefulSub], spacing: 3)
-                itemsStack.addArrangedSubview(statefulBox)
-                fillWidth(statefulBox, in: itemsStack)
-
-                for name in statefulNames {
-                    guard let ctrl = rowControlsByName[name] else { continue }
-                    let line = divider()
-                    itemsStack.addArrangedSubview(line)
-                    fillWidth(line, in: itemsStack)
                     itemsStack.addArrangedSubview(ctrl.rowView)
                     fillWidth(ctrl.rowView, in: itemsStack)
                 }
@@ -822,7 +792,7 @@ final class CachePage: NSObject {
             let sizeStr = bytes > 0 ? formatBytes(bytes) : "\(max(1, items.count)) 项"
             recoveryTitleLabel.stringValue = "最近清理 · \(timeStr)（\(sizeStr)）"
             recoverySubtitleLabel.stringValue = "已移入系统废纸篓，支持一键原位还原"
-            recoverySubtitleLabel.toolTip = items.isEmpty ? nil : "包含：\(items.joined(separator: "、"))"
+            recoverySubtitleLabel.toolTip = nil
             restoreLatestButton.isHidden = false
             restoreLatestButton.isEnabled = !busy
         } else if let latestSnap = snapshots.first {
@@ -895,13 +865,10 @@ final class CachePage: NSObject {
         let sel = selectionSummary()
         guard sel.count > 0, sel.bytes > 0 else { return }
         let orderedSelected = entries.compactMap { item -> String? in
-            guard let name = item["name"] as? String, selectedNames.contains(name) else { return nil }
+            guard let name = item["name"] as? String, selectedNames.contains(name), !isStatefulItem(item) else { return nil }
             return name
         }
-        let statefulSelected = entries.compactMap { item -> String? in
-            guard let name = item["name"] as? String, selectedNames.contains(name), isStatefulItem(item) else { return nil }
-            return name
-        }
+        guard !orderedSelected.isEmpty else { return }
         let tokenToClear = scanToken
 
         #if NATIVE_UI_TEST
@@ -909,31 +876,22 @@ final class CachePage: NSObject {
         return
         #else
         let confirm = NSAlert()
-        if !statefulSelected.isEmpty {
-            confirm.alertStyle = .warning
-            confirm.messageText = "⚠️ 包含会话状态项，确认移入废纸篓？"
-            confirm.informativeText = "您勾选了以下会话状态项：\(statefulSelected.joined(separator: "、"))。\n\n清理此类数据可能导致相关扩展或内嵌网页会话失效，需要重新登录授权。核心账号凭据与历史会话已受到隔离保护。"
+        confirm.alertStyle = .informational
+        if appRunning {
+            confirm.messageText = "退出 Antigravity 并清理 \(formatBytes(sel.bytes)) 运行加速缓存？"
+            confirm.informativeText = "确认后将自动重启 Antigravity，并将所选 \(orderedSelected.count) 项缓存移入系统废纸篓。账号登录态与历史对话完好保留。"
+            confirm.addButton(withTitle: "退出并清理")
             confirm.addButton(withTitle: "取消")
-            confirm.addButton(withTitle: appRunning ? "退出并清理" : "移到废纸篓")
         } else {
-            confirm.alertStyle = .informational
-            if appRunning {
-                confirm.messageText = "退出 Antigravity 并清理 \(formatBytes(sel.bytes)) 运行加速缓存？"
-                confirm.informativeText = "确认后将自动重启 Antigravity，并将所选 \(orderedSelected.count) 项缓存移入系统废纸篓。账号登录态与历史对话完好保留。"
-                confirm.addButton(withTitle: "退出并清理")
-                confirm.addButton(withTitle: "取消")
-            } else {
-                confirm.messageText = "确认清理所选 \(formatBytes(sel.bytes)) 运行加速缓存？"
-                confirm.informativeText = "所选 \(orderedSelected.count) 项缓存将移入系统废纸篓并生成恢复快照。账号登录态与历史对话完好保留。"
-                confirm.addButton(withTitle: "移到废纸篓")
-                confirm.addButton(withTitle: "取消")
-            }
+            confirm.messageText = "确认清理所选 \(formatBytes(sel.bytes)) 运行加速缓存？"
+            confirm.informativeText = "所选 \(orderedSelected.count) 项缓存将移入系统废纸篓并生成恢复快照。账号登录态与历史对话完好保留。"
+            confirm.addButton(withTitle: "移到废纸篓")
+            confirm.addButton(withTitle: "取消")
         }
 
         let handleChoice: (NSApplication.ModalResponse) -> Void = { [weak self] response in
             guard let self else { return }
-            let confirmed = statefulSelected.isEmpty ? (response == .alertFirstButtonReturn) : (response == .alertSecondButtonReturn)
-            guard confirmed else { return }
+            guard response == .alertFirstButtonReturn else { return }
             if self.appRunning {
                 self.quitAntigravityAndClear(token: tokenToClear, selected: orderedSelected)
             } else {
@@ -960,8 +918,19 @@ final class CachePage: NSObject {
         feedbackLabel.textColor = Design.secondary
         feedbackLabel.stringValue = "正在退出 Antigravity 并清理所选缓存…"
 
-        app.quitAntigravityAndWait { [weak self] in
+        app.quitAntigravityAndWait { [weak self] exited in
             guard let self else { return }
+            guard exited else {
+                self.busy = false
+                self.scanButton.setBusy(false, available: self.app.reachable)
+                let msg = "请先保存工作并退出 Antigravity，再清理缓存。"
+                self.feedbackLabel.isHidden = false
+                self.feedbackLabel.textColor = accessibleWarningColor()
+                self.feedbackLabel.stringValue = msg
+                self.app.showMessage(msg, error: true)
+                self.fetch(force: true)
+                return
+            }
             // Antigravity 退出期间会刷写日志与缓存文件，需在进程完全静止后重新扫描最新指纹再执行安全清理
             self.app.bridge.send(["command": "maintenance_scan"]) { [weak self] scanRes in
                 guard let self else { return }

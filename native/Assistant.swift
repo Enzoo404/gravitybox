@@ -251,7 +251,7 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
 
         menu.addItem(.separator())
 
-        // 2. 界面汉化
+        // 2. 界面汉化与对话状态栏
         let toggle = add(menu, "界面汉化", #selector(toggleTranslation))
         let stateSize = NSSize(width: 13, height: 13)
         let checkmark = NSImage(systemSymbolName: "checkmark", accessibilityDescription: nil)
@@ -259,6 +259,12 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         toggle.offStateImage = NSImage(size: stateSize, flipped: false) { _ in true }
         toggle.state = statusValue.enabled ? NSControl.StateValue.on : NSControl.StateValue.off
         toggle.isEnabled = reachable && statusValue.mode != "unsupported"
+
+        let hudToggle = add(menu, "对话状态栏", #selector(toggleHud))
+        hudToggle.onStateImage = checkmark
+        hudToggle.offStateImage = toggle.offStateImage
+        hudToggle.state = effectiveHudEnabled() ? NSControl.StateValue.on : NSControl.StateValue.off
+        hudToggle.isEnabled = reachable && statusValue.mode != "unsupported"
 
         menu.addItem(.separator())
 
@@ -479,6 +485,13 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         toggle.offStateImage = NSImage(size: stateSize, flipped: false) { _ in true }
         toggle.state = statusValue.enabled ? NSControl.StateValue.on : NSControl.StateValue.off
         toggle.isEnabled = reachable && statusValue.mode != "unsupported"
+
+        let hudToggle = add(menu, "对话状态栏", #selector(toggleHud))
+        hudToggle.onStateImage = checkmark
+        hudToggle.offStateImage = toggle.offStateImage
+        hudToggle.state = effectiveHudEnabled() ? NSControl.StateValue.on : NSControl.StateValue.off
+        hudToggle.isEnabled = reachable && statusValue.mode != "unsupported"
+
         menu.addItem(.separator())
         add(menu, "设置…", #selector(showSettingsFromMenuPanel), ",")
         menu.addItem(.separator())
@@ -670,12 +683,19 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
                 return
             }
             let appRunning = payload["appRunning"] as? Bool == true
+            let insidersRunning = payload["insidersRunning"] as? Bool == true
+            let stableRunning = (payload["stableRunning"] as? Bool) ?? (appRunning && !insidersRunning)
             let hasRunningTask = (payload["hasRunningTask"] as? Bool == true) || (payload["safe"] as? Bool == false)
             let display: String
             if !name.isEmpty && name.caseInsensitiveCompare(email) != .orderedSame && !email.isEmpty {
                 display = "\(name)（\(email)）"
             } else {
                 display = email.isEmpty ? (name.isEmpty ? "目标账号" : name) : email
+            }
+            if insidersRunning {
+                self.accountSwitchInFlight = false
+                self.showMessage("检测到 Antigravity Insiders 正在运行，请先保存工作并手动退出后再切换账号", error: true)
+                return
             }
             let performSwitch = { [weak self] in
                 guard let self else { return }
@@ -684,10 +704,10 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
                     switch response {
                     case .failure(let error):
                         self.showMessage("切换账号失败：" + error.localizedDescription, error: true)
-                        if appRunning { self.openAntigravity() }
+                        if stableRunning { self.openAntigravity() }
                     case .success(let value):
                         self.showMessage(value["message"] as? String ?? "已切换至账号：\(email)")
-                        if appRunning { self.openAntigravity() }
+                        if stableRunning { self.openAntigravity() }
                         self.refresh(); self.accountsPage?.fetch(); self.overview?.fetch(); completion?()
                     }
                 }
@@ -707,8 +727,16 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
                     return
                 }
                 #endif
-                if appRunning {
-                    self.quitAntigravityAndWait { performSwitch() }
+                if stableRunning {
+                    self.quitAntigravityAndWait { [weak self] exited in
+                        guard let self else { return }
+                        guard exited else {
+                            self.accountSwitchInFlight = false
+                            self.showMessage("请先在 Antigravity 中保存工作并退出应用，再切换账号", error: true)
+                            return
+                        }
+                        performSwitch()
+                    }
                 } else {
                     performSwitch()
                 }
@@ -753,7 +781,7 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             }
         }
     }
-    func quitAntigravityAndWait(completion: @escaping () -> Void) {
+    func quitAntigravityAndWait(completion: @escaping (Bool) -> Void) {
         suppressLifecycleAutoQuitUntil = Date().addingTimeInterval(15.0)
         let allTargets = DesktopApplicationTarget.allTargets
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -780,24 +808,13 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
                 } catch { return false }
             }
             let start = Date()
-            while hasAntigravityProcesses() && Date().timeIntervalSince(start) < 4.5 {
-                if Date().timeIntervalSince(start) > 2.2 {
-                    let remaining = NSWorkspace.shared.runningApplications.filter {
-                        DesktopApplicationTarget.matchesAny($0)
-                    }
-                    for app in remaining { _ = app.forceTerminate() }
-                    for appPath in appPaths {
-                        let pkill = Process()
-                        pkill.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
-                        pkill.arguments = ["-f", NSRegularExpression.escapedPattern(for: appPath + "/Contents/")]
-                        try? pkill.run(); pkill.waitUntilExit()
-                    }
-                }
+            while hasAntigravityProcesses() && Date().timeIntervalSince(start) < 8.5 {
                 Thread.sleep(forTimeInterval: 0.15)
             }
+            let exited = !hasAntigravityProcesses()
             DispatchQueue.main.async {
                 self?.suppressLifecycleAutoQuitUntil = Date().addingTimeInterval(8.0)
-                completion()
+                completion(exited)
             }
         }
     }
@@ -1270,7 +1287,7 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
                         }
                         self.refresh()
                     case .failure(let error):
-                        self.statusValue = previousStatus
+                        self.statusValue.translationEnabled = previousStatus.translationEnabled
                         self.updateViews()
                         self.showMessage(error.localizedDescription, error: true)
                         self.refresh()
@@ -1314,7 +1331,7 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
                     }
                     self.updateViews()
                 case .failure(let error):
-                    self.statusValue = previousStatus
+                    self.statusValue.hudEnabled = previousStatus.hudEnabled
                     self.configuration.value.hudEnabled = previousConfig
                     try? self.configuration.save()
                     self.updateViews()
@@ -1325,6 +1342,9 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     }
     @objc func toggleTranslation() {
         setTranslationEnabled(!statusValue.enabled)
+    }
+    @objc func toggleHud() {
+        setHudEnabled(!effectiveHudEnabled())
     }
     @objc func openAntigravity() {
         #if NATIVE_UI_TEST
@@ -1690,15 +1710,18 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         if let hudTarget = pendingHudTarget {
             merged.hudEnabled = hudTarget
         }
+        if pendingHudTarget == nil, let authoritative = raw["hudEnabled"] as? Bool,
+           let configuration, configuration.value.hudEnabled != authoritative {
+            configuration.value.hudEnabled = authoritative
+            try? configuration.save()
+        }
         return merged
     }
     func syncUpdatePromptControls() {
         preferencesController?.refreshUpdateRowState()
         if let release = updateManager.availableRelease {
             installUpdateButton?.badgeText = "v\(release.version)"
-            installUpdateButton?.toolTip = updateManager.hasDownloadedUpdateReady
-                ? "新版本 GravityBox v\(release.version) 已预下载就绪，点击立即安装"
-                : "发现新版本 GravityBox v\(release.version)，点击安装更新"
+            installUpdateButton?.toolTip = nil
             installUpdateButton?.isHidden = false
         } else {
             installUpdateButton?.badgeText = ""

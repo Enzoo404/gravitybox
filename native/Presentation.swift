@@ -40,6 +40,19 @@ enum ModelDisplayName {
                 }
             }
         }
+        // Auto-format newly launched Gemini 4+ codename models (e.g. gemini-4-carbon, gemini-4-neon)
+        // while keeping opaque experimental IDs like gemini-3.8-flash-n / gemini-3.8-flash-exp-a untouched.
+        if let regex = try? NSRegularExpression(pattern: "^gemini-([4-9](?:\\.[0-9]+)?)-([a-z][a-z0-9]*?)(?:-(trial|preview))?$", options: [.caseInsensitive]),
+           let match = regex.firstMatch(in: value, range: NSRange(location: 0, length: (value as NSString).length)) {
+            let ns = value as NSString
+            let ver = ns.substring(with: match.range(at: 1))
+            let code = ns.substring(with: match.range(at: 2)).capitalized
+            if match.range(at: 3).location != NSNotFound {
+                let tail = ns.substring(with: match.range(at: 3)).capitalized
+                return "Gemini \(ver) \(code) \(tail)"
+            }
+            return "Gemini \(ver) \(code)"
+        }
         return identifier
     }
 }

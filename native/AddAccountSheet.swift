@@ -38,7 +38,6 @@ final class AddAccountSheet: NSObject {
         let currentEmail = app.statusValue.liveAccountEmail.isEmpty ? app.statusValue.activeAccountEmail : app.statusValue.liveAccountEmail
         currentButton.title = "保存当前账号"
         currentButton.isEnabled = true
-        currentButton.toolTip = currentEmail
         currentButton.bezelColor = nil
         googleButton.bezelColor = Design.blue
         googleButton.keyEquivalent = "\r"
@@ -62,9 +61,9 @@ final class AddAccountSheet: NSObject {
             var textViews: [NSView] = [titleLbl, subLbl]
             if action === currentButton, !currentEmail.isEmpty {
                 let emailLbl = text(currentEmail, size: 10.5, color: .secondaryLabelColor)
+                enableTextCopy(emailLbl, title: "复制完整邮箱")
                 emailLbl.font = .systemFont(ofSize: 11.5, weight: .regular)
                 emailLbl.lineBreakMode = .byTruncatingMiddle
-                emailLbl.toolTip = currentEmail
                 emailLbl.setContentHuggingPriority(.defaultLow, for: .horizontal)
                 emailLbl.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
                 textViews.append(emailLbl)

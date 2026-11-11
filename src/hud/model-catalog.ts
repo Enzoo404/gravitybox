@@ -1,3 +1,4 @@
+import { normalizeModelId } from '../model-identity.js';
 /**
  * Antigravity 模型有效上下文窗口阈值映射目录
  * 严格对齐 Antigravity 官方运行时与 assets/model-catalog.json 标准上下文阈值 (<=200K / 256K / 128K)
@@ -31,8 +32,8 @@ interface ModelFamilyRule {
 }
 
 /**
- * Antigravity 宿主内各模型系列的真实有效上下文阈值
- * 在 Antigravity 中，Gemini 与 Claude 系列均在 ~200K 标准上下文窗口内运行并在达到阈值时自动触发 Checkpoint 压缩，
+ * 模型族参考容量（只有请求明确返回的容量才是实测值）
+ * 缺少明确容量时才使用这些参考值；不能据此断言宿主实际窗口或压缩阈值，
  * 绝不展示虚构的 1M / 2M 容量。
  */
 const MODEL_CAPACITY_RULES: readonly ModelFamilyRule[] = [
@@ -53,6 +54,18 @@ const MODEL_CAPACITY_RULES: readonly ModelFamilyRule[] = [
     capacityTokens: 200_000,
     capacityCompact: '200K',
     defaultDisplayName: 'Gemini 4 Argon',
+  },
+  {
+    pattern: /^gemini-4-carbon/i,
+    capacityTokens: 200_000,
+    capacityCompact: '200K',
+    defaultDisplayName: 'Gemini 4 Carbon',
+  },
+  {
+    pattern: /^gemini-[4-9](?:\.\d+)?-[a-z0-9]+/i,
+    capacityTokens: 200_000,
+    capacityCompact: '200K',
+    defaultDisplayName: 'Gemini',
   },
   {
     pattern: /^claude-(?:3|4|5)|^claude-(?:sonnet|opus|haiku)/i,
@@ -77,6 +90,8 @@ const MODEL_CAPACITY_RULES: readonly ModelFamilyRule[] = [
 const DISPLAY_NAME_MAP: Record<string, string> = {
   'gemini-4-argon': 'Gemini 4 Argon',
   'gemini-4-argon-trial': 'Gemini 4 Argon Trial',
+  'gemini-4-carbon': 'Gemini 4 Carbon',
+  'gemini-4-carbon-trial': 'Gemini 4 Carbon Trial',
   'gemini-3.9-flash': 'Gemini 3.9 Flash',
   'gemini-3.8-flash': 'Gemini 3.8 Flash',
   'gemini-3.8-flash-n': 'Gemini 3.8 Flash',
@@ -108,6 +123,19 @@ const DISPLAY_NAME_MAP: Record<string, string> = {
   'gpt-oss-120b': 'GPT-OSS 120B',
 };
 
+function autoFormatDynamicModelName(normalizedId: string): string | null {
+  const geminiMatch = normalizedId.match(/^gemini-([4-9](?:\.\d+)?)-([a-z][a-z0-9]*?)(?:-(trial|preview|exp))?$/i);
+  if (geminiMatch) {
+    const ver = geminiMatch[1]!;
+    const code = geminiMatch[2]!.charAt(0).toUpperCase() + geminiMatch[2]!.slice(1).toLowerCase();
+    const suffix = geminiMatch[3]
+      ? ` ${geminiMatch[3].charAt(0).toUpperCase() + geminiMatch[3].slice(1).toLowerCase()}`
+      : '';
+    return `Gemini ${ver} ${code}${suffix}`;
+  }
+  return null;
+}
+
 /**
  * 归一化前端 DOM 探针或 SQLite gen_metadata 传入的模型字符串，解析对应的 Antigravity 有效上下文阈值与展示名称
  */
@@ -123,29 +151,37 @@ export function resolveModelCapacity(rawModelInput?: string | null): ModelCapaci
     };
   }
 
-  // 清理前端按钮可能附带的加号、思考档位后缀（如 "+ Gemini 3.8 Flash High ^"）
-  const cleanedRaw = raw
-    .replace(/^[+\s·•]+|[⌃⌄^v\s]+$/g, '')
+  // 清理 API 前缀、前端按钮可能附带的加号、下拉箭头及思考档位后缀（如 "models/gemini-3.8-flash", "+ Gemini 3.8 Flash High ^"）
+  const withoutApiPrefix = raw.replace(/^models\//i, '').trim();
+  const cleanedRaw = (withoutApiPrefix || raw)
+    .replace(/^[+\s·•]+|[⌃⌄^\s]+$/g, '')
     .replace(/[（(]\s*(?:High|Medium|Low|Extra\s+Low|Thinking|高|中|低|思考)\s*[）)]/gi, '')
     .replace(/\s+(?:High|Medium|Low|Extra\s+Low|Thinking)\b.*$/i, '')
     .trim();
 
-  let normalizedId = (cleanedRaw || raw)
+  let normalizedId = (cleanedRaw || withoutApiPrefix || raw)
     .toLowerCase()
+    .replace(/^models-/, '')
     .replace(/（[^）]*）/g, '')
     .replace(/\([^)]*\)/g, '')
     .replace(/[^a-z0-9.]+/g, '-')
     .replace(/^-+|-+$/g, '');
 
-  normalizedId = normalizedId
+  normalizedId = normalizeModelId(normalizedId)
     .replace(/^claude-3\.([57])-/, 'claude-3-$1-')
+    .replace(/^claude-(opus|sonnet)-3\.([57])\b/, 'claude-3-$2-$1')
     .replace(/^claude-4\.6-opus/, 'claude-opus-4-6')
     .replace(/^claude-4\.6-sonnet/, 'claude-sonnet-4-6')
     .replace(/^claude-5\.5-opus/, 'claude-opus-5-5')
     .replace(/^claude-5\.5-sonnet/, 'claude-sonnet-5-5')
-    .replace(/-(?:high|medium|low|extra-low|thinking|latest)$/, '');
+    .replace(/^claude-(opus|sonnet)-(\d+)\.(\d+)/, 'claude-$1-$2-$3')
+    .replace(/(?:-(?:high|medium|low|extra-low|thinking|latest))+$/, '');
 
-  const displayName = DISPLAY_NAME_MAP[normalizedId] || cleanedRaw || raw;
+  const displayName =
+    DISPLAY_NAME_MAP[normalizedId] ||
+    autoFormatDynamicModelName(normalizedId) ||
+    cleanedRaw ||
+    raw;
 
   for (const rule of MODEL_CAPACITY_RULES) {
     if (rule.pattern.test(normalizedId)) {

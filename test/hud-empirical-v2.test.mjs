@@ -247,7 +247,7 @@ test('复验 5: ConversationMetricsEngine 两级 lstat 门控、子智能体会�
     const childStepBlob = Buffer.from([
       ...encodeTimestampField(1, 1794282032, 0),
       ...encodeTimestampField(6, 1794282033, 0),
-      ...encodeTimestampField(7, 1794282038, 0),
+
       ...encodeUsageField9({
         rawInput: 5000,
         cachedTokens: 45000,

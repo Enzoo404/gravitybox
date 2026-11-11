@@ -12,6 +12,10 @@ const RESTRICTED_HUD_ROUTE = /^\/(?:onboarding|oauth|auth|login|sign-in)(?:\/|$)
 export class AntigravityHudManager {
   constructor(options = {}) {
     this.instances = new Map();
+    this.viewToInstance = typeof WeakMap === 'function' ? new WeakMap() : null;
+    this.viewToSlotId = typeof WeakMap === 'function' ? new WeakMap() : null;
+    this.nextSlotSeq = 1;
+    this.nextRevisionCounter = Number(globalThis.__GRAVITYBOX_HUD_REVISION__) || 0;
     this.mutationObserver = null;
     this.domReadyAbort = null;
     this.reconcileTimer = null;
@@ -21,6 +25,12 @@ export class AntigravityHudManager {
     this.routeExcluded = false;
     this.languageMode = options.languageMode === 'en' ? 'en' : 'zh';
     this.onBridgeEvent = typeof options.onBridgeEvent === 'function' ? options.onBridgeEvent : null;
+  }
+
+  allocateSessionRevision() {
+    this.nextRevisionCounter = Math.max(this.nextRevisionCounter, Number(globalThis.__GRAVITYBOX_HUD_REVISION__) || 0) + 1;
+    globalThis.__GRAVITYBOX_HUD_REVISION__ = this.nextRevisionCounter;
+    return this.nextRevisionCounter;
   }
 
   start() {
@@ -88,6 +98,7 @@ export class AntigravityHudManager {
     if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
       this.routeTimer = setInterval(() => {
         if (this.active) {
+          if (typeof document !== 'undefined' && document.hidden === true) return;
           if (!this.mutationObserver && typeof document !== 'undefined' && document.body) {
             attachDomObservers();
           }
@@ -114,6 +125,7 @@ export class AntigravityHudManager {
         instance.dispose();
       }
       this.instances.clear();
+      this.viewToInstance = new WeakMap();
     } else if (this.active && !this.routeExcluded) {
       this.reconcileMounts();
     }
@@ -142,6 +154,7 @@ export class AntigravityHudManager {
         instance.dispose();
       }
       this.instances.clear();
+      this.viewToInstance = new WeakMap();
     } else if (this.active && this.enabled) {
       this.reconcileMounts();
     }
@@ -194,85 +207,43 @@ export class AntigravityHudManager {
       return;
     }
 
-    const activeCascadeIds = new Set();
+    const panes = views.filter(Boolean).map((view, index) => {
+      const subConvNode = view.getAttribute?.('data-media-drop-scope') === 'subpane'
+        ? view.querySelector?.('[data-testid="subagent-tab-conversation"][data-cascade-id]') : null;
+      const rawCascadeId = view.getAttribute?.('data-cascade-id') || subConvNode?.getAttribute?.('data-cascade-id');
+      let slotId = this.viewToSlotId.get(view);
+      if (!slotId) { slotId = `slot-${this.nextSlotSeq++}`; this.viewToSlotId.set(view, slotId); }
+      return { view, index, subConvNode, rawCascadeId, slotId, composer: this.resolveComposerElement(view) };
+    }).filter(p => p.composer);
+    const activeSlots = new Set(panes.map(p => p.slotId));
+    for (const [slot, instance] of this.instances) {
+      if (!activeSlots.has(slot)) { instance.dispose(); this.instances.delete(slot); }
+    }
     const domSubagentIds = this.collectDomSubagentIds();
-
-    views.forEach((view, index) => {
-      if (!view) return;
-      const subConvNode =
-        view.getAttribute?.('data-media-drop-scope') === 'subpane'
-          ? view.querySelector?.('[data-testid="subagent-tab-conversation"][data-cascade-id]')
-          : null;
-      const rawCascadeId =
-        view.getAttribute?.('data-cascade-id') || subConvNode?.getAttribute?.('data-cascade-id');
-      const cascadeId =
-        rawCascadeId && rawCascadeId !== 'conversation'
-          ? rawCascadeId
-          : `pane-${index}`;
-      activeCascadeIds.add(cascadeId);
-
-      const composer = this.resolveComposerElement(view);
-      if (!composer) return;
-
+    for (const { view, index, subConvNode, rawCascadeId, slotId, composer } of panes) {
       const isSubpane = Boolean(subConvNode || view.getAttribute?.('data-media-drop-scope') === 'subpane');
       const convId = this.resolveConversationId(view, rawCascadeId, views.length);
-      const modelId = this.resolveActiveModel(view);
+      const modelId = this.resolveActiveModel(view, views.length);
       const subagentState = this.resolveSubagentState(view);
       const activityPhase = this.resolveActivityPhase(view, subagentState);
       const isStreaming = activityPhase !== 'idle';
-      const paneChildIds = isSubpane ? [] : domSubagentIds;
-
-      let instance = this.instances.get(cascadeId);
+      let instance = this.instances.get(slotId);
       if (!instance) {
-        instance = new InstanceCtor(cascadeId, {
-          isPrimaryPane: index === 0 && !isSubpane,
-          languageMode: this.languageMode,
-          onBridgeEvent: this.onBridgeEvent,
-        });
-        this.instances.set(cascadeId, instance);
-        instance.mount(composer);
-        if (convId) {
-          instance.switchConversation(
-            convId,
-            modelId,
-            isStreaming,
-            subagentState.isSubagentRunning,
-            subagentState.runningSubagentCount,
-            paneChildIds,
-            activityPhase
-          );
-        }
-      } else {
-        instance.reconcile(composer);
-        if (convId && instance.getCurrentConvId() !== convId) {
-          instance.switchConversation(
-            convId,
-            modelId,
-            isStreaming,
-            subagentState.isSubagentRunning,
-            subagentState.runningSubagentCount,
-            paneChildIds,
-            activityPhase
-          );
-        } else {
-          instance.notifyModelOrStreamingChange(
-            modelId,
-            isStreaming,
-            subagentState.isSubagentRunning,
-            subagentState.runningSubagentCount,
-            paneChildIds,
-            activityPhase
-          );
-        }
+        instance = new InstanceCtor(slotId, { paneSlotId: slotId, isPrimaryPane: index === 0 && !isSubpane,
+          isSubpane, languageMode: this.languageMode, onBridgeEvent: this.onBridgeEvent,
+          allocateRevision: () => this.allocateSessionRevision() });
+        this.instances.set(slotId, instance); instance.mount(composer);
+      } else instance.reconcile(composer);
+      instance.isSubpane = isSubpane;
+      if (!convId) {
+        if (instance.currentConvId) { instance.emitBridgeEvent('SESSION_DETACHED'); instance.currentConvId = null; }
+        instance.renderSkeleton(); continue;
       }
-    });
-
-    // 自动回收已关闭的分栏实例
-    for (const [id, instance] of this.instances.entries()) {
-      if (!activeCascadeIds.has(id)) {
-        instance.dispose();
-        this.instances.delete(id);
-      }
+      if (instance.getCurrentConvId() !== convId) {
+        instance.switchConversation(convId, modelId, isStreaming, subagentState.isSubagentRunning,
+          subagentState.runningSubagentCount, isSubpane ? [] : domSubagentIds, activityPhase);
+      } else instance.notifyModelOrStreamingChange(modelId, isStreaming, subagentState.isSubagentRunning,
+        subagentState.runningSubagentCount, isSubpane ? [] : domSubagentIds, activityPhase);
     }
   }
 
@@ -345,6 +316,7 @@ export class AntigravityHudManager {
    * 4. 单栏模式下回退至 window.location.pathname 中的 /c/<uuid>
    */
   resolveConversationId(view, rawCascadeId, totalViews = 1) {
+    const allowUrl = totalViews === 1 && view?.getAttribute?.('data-media-drop-scope') !== 'subpane';
     if (view && typeof view.getAttribute === 'function') {
       const directId = view.getAttribute('data-conversation-id');
       if (directId && directId !== 'conversation') return directId;
@@ -361,7 +333,7 @@ export class AntigravityHudManager {
           ? window.location
           : globalThis.window?.location;
       const urlMatch =
-        totalViews === 1 && loc && typeof loc.pathname === 'string'
+        allowUrl && loc && typeof loc.pathname === 'string'
           ? loc.pathname.match(/\/c\/([a-zA-Z0-9_-]+)/)
           : null;
       if (urlMatch && urlMatch[1] && urlMatch[1] !== '_new' && !/^[0-9a-f-]{36}$/i.test(rawCascadeId)) {
@@ -370,34 +342,34 @@ export class AntigravityHudManager {
       return rawCascadeId;
     }
     if (view && typeof view.querySelector === 'function') {
-      const anchor = view.querySelector('a[href*="/c/"]');
+      const anchor = view.querySelector('[data-testid="conversation-header"] a[href*="/c/"], a[data-conversation-link][href*="/c/"]');
       if (anchor) {
         const href = anchor.getAttribute?.('href') || anchor.href || '';
         const match = String(href).match(/\/c\/([a-zA-Z0-9_-]+)/);
         if (match && match[1] && match[1] !== '_new') return match[1];
       }
     }
-    const loc =
-      typeof window !== 'undefined' && window.location
-        ? window.location
-        : globalThis.window?.location;
-    if (loc && typeof loc.pathname === 'string') {
-      const urlMatch = loc.pathname.match(/\/c\/([a-zA-Z0-9_-]+)/);
-      if (urlMatch && urlMatch[1] && urlMatch[1] !== '_new') return urlMatch[1];
+    if (allowUrl) {
+      const loc =
+        typeof window !== 'undefined' && window.location
+          ? window.location
+          : globalThis.window?.location;
+      if (loc && typeof loc.pathname === 'string') {
+        const urlMatch = loc.pathname.match(/\/c\/([a-zA-Z0-9_-]+)/);
+        if (urlMatch && urlMatch[1] && urlMatch[1] !== '_new') return urlMatch[1];
+      }
     }
-    return 'default';
+    return totalViews > 1 ? null : 'default';
   }
 
-  resolveActiveModel(view) {
-    if (!view || typeof view.querySelector !== 'function') return 'gemini-3.8-flash';
-    const trigger =
+  resolveActiveModel(view, totalViews = 1) {
+    if (!view || typeof view.querySelector !== 'function') return '';
+    const localTrigger =
       view.querySelector('[data-testid="model-selector-trigger"]') ||
-      view.querySelector('.model-selector') ||
-      (typeof document !== 'undefined'
-        ? document.querySelector('[data-testid="model-selector-trigger"], .model-selector')
-        : null);
+      view.querySelector('.model-selector');
 
-    if (trigger) {
+    const extractFromTrigger = (trigger) => {
+      if (!trigger) return null;
       const dataModel =
         trigger.getAttribute?.('data-model-id') || trigger.getAttribute?.('data-value');
       if (dataModel && dataModel.trim()) return dataModel.trim();
@@ -410,9 +382,13 @@ export class AntigravityHudManager {
       if (text && !/^(Model|模型|Select model|选择模型)$/i.test(text)) {
         return text;
       }
-    }
+      return null;
+    };
 
-    // 兼容无 data-testid="model-selector-trigger" 时的工具栏模型按钮探测
+    const localModel = extractFromTrigger(localTrigger);
+    if (localModel) return localModel;
+
+    // 优先扫描当前分栏内部的工具栏模型按钮，避免双分栏/子分栏被全局 document 覆盖
     if (typeof view.querySelectorAll === 'function') {
       const buttons = view.querySelectorAll('.surface-composer button, [data-testid="agent-input-box"] button');
       if (buttons && typeof buttons.forEach === 'function') {
@@ -428,7 +404,15 @@ export class AntigravityHudManager {
       }
     }
 
-    return 'gemini-3.8-flash';
+    if (totalViews === 1 && typeof document !== 'undefined') {
+      const globalTrigger = document.querySelector(
+        '[data-testid="model-selector-trigger"], .model-selector'
+      );
+      const globalModel = extractFromTrigger(globalTrigger);
+      if (globalModel) return globalModel;
+    }
+
+    return '';
   }
 
   /**
@@ -450,7 +434,7 @@ export class AntigravityHudManager {
       idleStatusNodes.forEach((node) => {
         const txt = (node.textContent || '').replace(/\s+/g, ' ').trim();
         if (!txt) return;
-        const countMatch = txt.match(/(\d+)\s*(?:个)?\s*(?:subagents?(?:\/tasks?)?|tasks?|子智能体|子代理|后台任务)/i);
+        const countMatch = txt.match(/(\d+)\s*(?:个)?\s*(?:subagents?(?:\/tasks?)?|子智能体|子代理)/i);
         if (
           countMatch &&
           /(?:running|working|运行中|正在运行|执行中|处理中)/i.test(txt)
@@ -459,7 +443,7 @@ export class AntigravityHudManager {
           const parsed = parseInt(countMatch[1], 10);
           if (parsed > runningCount) runningCount = parsed;
         } else if (
-          /\b(?:subagents?(?:\/tasks?)?\s+running|working)\b|(?:子智能体|子代理).*(?:运行|工作|执行)/i.test(
+          /\bsubagents?(?:\/tasks?)?\s+(?:running|working)\b|(?:子智能体|子代理).*(?:运行|工作|执行)/i.test(
             txt
           )
         ) {
@@ -474,26 +458,50 @@ export class AntigravityHudManager {
     );
     if (activeSubagentMarkers && activeSubagentMarkers.length > 0) {
       detected = true;
-      if (runningCount < activeSubagentMarkers.length) {
-        runningCount = Math.max(1, runningCount);
+      const markerContainers = new Set();
+      if (typeof activeSubagentMarkers.forEach === 'function') {
+        activeSubagentMarkers.forEach((m) => {
+          const container =
+            m.closest?.('[data-testid="browser-subagent-row"], [id^="subagentView-"], [data-cascade-id]') || m;
+          markerContainers.add(container);
+        });
+      }
+      const markerCount = Math.max(1, markerContainers.size);
+      if (runningCount < markerCount) {
+        runningCount = markerCount;
       }
     }
 
-    // 检查 Started :: <Role> 子智能体引用芯片是否仍处于加载态（未出现 done / killed / canceled 图标）
+    // 检查子智能体引用芯片是否仍处于加载态（必须具备明确正向活跃指示器，排除权限来源标签、已完成/未读状态及无指示器的静态卡片）
     const agentRefs = view.querySelectorAll(
       '[aria-label^="Open Subagent:"], [aria-label^="打开子智能体："], [aria-label^="打开子智能体:"], [aria-label^="打开子代理："], [aria-label^="打开子代理:"]'
     );
     if (agentRefs && typeof agentRefs.forEach === 'function') {
-      let activeRefCount = 0;
+      const activeRefOwners = new Set();
       agentRefs.forEach((ref) => {
         if (typeof ref.querySelector !== 'function') return;
+        if (
+          ref.getAttribute?.('data-testid') === 'subagent-permission-source' ||
+          ref.closest?.('[data-testid="subagent-permission-source"]')
+        ) {
+          return;
+        }
         const finishedIcon = ref.querySelector(
-          '[data-testid="agent-status-done"], [data-testid="agent-status-killed"], [data-testid="agent-status-canceled"], [data-testid="agent-status-error"], [data-testid="agent-status-failed"]'
+          '[data-testid="agent-status-done"], [data-testid="agent-status-killed"], [data-testid="agent-status-canceled"], [data-testid="agent-status-error"], [data-testid="agent-status-failed"], [data-testid="status-unread-dot"]'
         );
-        if (!finishedIcon) {
-          activeRefCount++;
+        if (finishedIcon) return;
+        const hasActiveDotOrSpinner = Boolean(
+          ref.querySelector(
+            '[data-agent-state-dot], [data-testid="status-loading-spinner"], [data-testid="status-task-running"], .animate-spin, .codicon-loading, .spinner'
+          )
+        );
+        if (hasActiveDotOrSpinner) {
+          const owner = ref.closest?.('[data-testid="browser-subagent-row"], [id^="subagentView-"]') || ref;
+          const id = owner.getAttribute?.('data-cascade-id') || owner.getAttribute?.('id');
+          activeRefOwners.add(id || owner);
         }
       });
+      const activeRefCount = activeRefOwners.size;
       if (activeRefCount > 0) {
         detected = true;
         if (activeRefCount > runningCount) runningCount = activeRefCount;
@@ -532,7 +540,7 @@ export class AntigravityHudManager {
     let hasForegroundTurn = Boolean(foregroundTurnNodes && foregroundTurnNodes.length > 0);
 
     if (!hasForegroundTurn) {
-      const buttons = view.querySelectorAll('button, [role="button"]');
+      const buttons = (this.resolveComposerElement(view) || view).querySelectorAll('button, [role="button"]');
       if (buttons && typeof buttons.forEach === 'function') {
         buttons.forEach((btn) => {
           const label = (
@@ -634,6 +642,9 @@ export class AntigravityHudManager {
     if (!metrics || typeof metrics !== 'object') return false;
     let handled = false;
     for (const instance of this.instances.values()) {
+      if (metrics.paneSlotId && instance.paneSlotId && instance.paneSlotId !== metrics.paneSlotId) {
+        continue;
+      }
       if (instance.getCurrentConvId() === metrics.conversationId) {
         if (instance.updateMetrics(metrics)) {
           handled = true;

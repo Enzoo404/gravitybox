@@ -70,6 +70,7 @@ final class MenuMeterRow: NSView {
         resetLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         let top = horizontal([titleLabel, flexibleSpace(), resetLabel, valueLabel], spacing: 6)
         top.alignment = .firstBaseline
+        top.detachesHiddenViews = true
         let stack = vertical([top, bar], spacing: 4)
         stack.alignment = .leading
         addSubview(stack); pin(stack, to: self)
@@ -85,8 +86,11 @@ final class MenuMeterRow: NSView {
     }
 
     /// percentage == nil 时只画灰色空轨道，并显示占位文字（未知 / 不可用 / 已过期）。
+    var accessibilityGroupName = ""
     func apply(percentage: Int?, placeholder: String, reset: String, stale: Bool) {
         let compactReset = MenuStatusCard.compactReset(reset)
+        let titleEmpty = titleLabel.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if titleLabel.isHidden != titleEmpty { titleLabel.isHidden = titleEmpty }
         let key = "\(titleLabel.stringValue)|\(percentage.map(String.init) ?? "nil")|\(placeholder)|\(compactReset)|\(stale)"
         guard key != lastAppliedKey else { return }
         lastAppliedKey = key
@@ -116,7 +120,7 @@ final class MenuMeterRow: NSView {
             resetLabel.textColor = .secondaryLabelColor
             setAccessibilityValue(nil)
         }
-        setAccessibilityLabel([titleLabel.stringValue, valueLabel.stringValue, compactReset].filter { !$0.isEmpty }.joined(separator: "，"))
+        setAccessibilityLabel([accessibilityGroupName, titleLabel.stringValue, valueLabel.stringValue, compactReset].filter { !$0.isEmpty }.joined(separator: "，"))
     }
 }
 
@@ -248,7 +252,6 @@ final class MenuAccountRowButton: NSButton {
         emailLbl.font = .systemFont(ofSize: 11.5, weight: .regular)
         emailLbl.alignment = .left
         emailLbl.lineBreakMode = .byTruncatingMiddle
-        emailLbl.toolTip = email
         emailLbl.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         let rightStack = vertical([topRow, emailLbl, quotaLbl], spacing: 2.5)
@@ -338,6 +341,8 @@ final class MenuStatusCard: NSView {
     let claude5h = MenuMeterRow(title: "5 小时")
     let claudeWeekly = MenuMeterRow(title: "每周")
     let argon = MenuMeterRow(title: "Gemini 4 Argon")
+    let carbon = MenuMeterRow(title: "Gemini 4 Carbon")
+    let extraStandaloneStack = NSStackView()
     let footerLabel = text("", size: 10.5, color: .secondaryLabelColor)
     private let quotaStack: NSStackView
     private let accountListStack = NSStackView()
@@ -349,36 +354,82 @@ final class MenuStatusCard: NSView {
     private var showingAccountList = false
     weak var assistant: Assistant?
 
+    static func groupHeader(_ title: String, brands: [String], fontSize: CGFloat = 11, iconSize: CGFloat = 12, spacing: CGFloat = 4) -> NSView {
+        var views: [NSView] = brands.compactMap { brand in
+            guard let image = ModelIcons.image(brand) else { return nil }
+            let icon = NSImageView(image: image); icon.imageScaling = .scaleProportionallyUpOrDown
+            icon.contentTintColor = ModelIcons.tintColor(for: image)
+            icon.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([icon.widthAnchor.constraint(equalToConstant: iconSize), icon.heightAnchor.constraint(equalToConstant: iconSize)])
+            icon.setAccessibilityElement(false); return icon
+        }
+        let lbl = text(title, size: fontSize, weight: .semibold, color: .secondaryLabelColor)
+        lbl.alignment = .left
+        views.append(lbl)
+        let row = horizontal(views, spacing: spacing)
+        row.alignment = .centerY
+        return row
+    }
+
+    static func syncExtraStandaloneGroups(_ models: [QuotaPresentation.Argon], into stack: NSStackView, withLeadingDividers: Bool, headerFontSize: CGFloat = 11, iconSize: CGFloat = 12) {
+        stack.arrangedSubviews.forEach {
+            stack.removeArrangedSubview($0)
+            $0.removeFromSuperview()
+        }
+        guard !models.isEmpty else {
+            stack.isHidden = true
+            return
+        }
+        stack.isHidden = false
+        for (idx, item) in models.enumerated() {
+            if withLeadingDividers || idx > 0 {
+                let div = divider()
+                stack.addArrangedSubview(div)
+                fillWidth(div, in: stack)
+            }
+            let brands = ModelIcons.brands(for: item.modelName)
+            let hdr = Self.groupHeader(item.modelName, brands: brands, fontSize: headerFontSize, iconSize: iconSize, spacing: 5)
+            let rowTitle: String
+            switch item.periodLabel {
+            case "5小时": rowTitle = "5 小时"
+            case "每周": rowTitle = "每周"
+            case "周期未知": rowTitle = "周期未知"
+            default: rowTitle = ""
+            }
+            let row = MenuMeterRow(title: rowTitle)
+            row.accessibilityGroupName = item.modelName
+            let placeholder = item.availability == "disabled" ? "不可用" : item.placeholder
+            row.apply(percentage: item.percentage, placeholder: placeholder, reset: item.percentage == nil ? "" : item.resetText, stale: item.stale)
+            let grp = vertical([hdr, row], spacing: 6)
+            grp.alignment = .leading
+            fillWidth(hdr, in: grp)
+            fillWidth(row, in: grp)
+            stack.addArrangedSubview(grp)
+            fillWidth(grp, in: stack)
+        }
+    }
+
     /// account == nil 时用 placeholder 作为主标题（服务未就绪 / 尚未保存账号），不显示配额区。
     init(target: Assistant, account: [String: Any]?, placeholder: String = "尚未保存账号", enabled: Bool) {
         refreshButton = MenuRefreshButton(target: nil, action: #selector(refreshPressed))
         assistant = target
-        func groupHeader(_ title: String, brands: [String]) -> NSView {
-            var views: [NSView] = brands.compactMap { brand in
-                guard let image = ModelIcons.image(brand) else { return nil }
-                let icon = NSImageView(image: image); icon.imageScaling = .scaleProportionallyUpOrDown
-                icon.contentTintColor = ModelIcons.tintColor(for: image)
-                icon.translatesAutoresizingMaskIntoConstraints = false
-                NSLayoutConstraint.activate([icon.widthAnchor.constraint(equalToConstant: 12), icon.heightAnchor.constraint(equalToConstant: 12)])
-                icon.setAccessibilityElement(false); return icon
-            }
-            let lbl = text(title, size: 11, weight: .semibold, color: .secondaryLabelColor)
-            lbl.alignment = .left
-            views.append(lbl)
-            let row = horizontal(views, spacing: 4)
-            row.alignment = .centerY
-            return row
-        }
-        let geminiGroup = vertical([groupHeader("Gemini", brands: ["gemini"]), gemini5h, geminiWeekly], spacing: 7)
-        let claudeGroup = vertical([groupHeader("Claude/GPT", brands: ["claude", "openai"]), claude5h, claudeWeekly], spacing: 7)
-        let argonGroup = vertical([groupHeader("Gemini 4 Argon", brands: ["gemini"]), argon], spacing: 7)
-        for (group, rows) in [(geminiGroup, [gemini5h, geminiWeekly]), (claudeGroup, [claude5h, claudeWeekly]), (argonGroup, [argon])] {
+        let geminiGroup = vertical([Self.groupHeader("Gemini", brands: ["gemini"]), gemini5h, geminiWeekly], spacing: 7)
+        let claudeGroup = vertical([Self.groupHeader("Claude/GPT", brands: ["claude", "openai"]), claude5h, claudeWeekly], spacing: 7)
+        let argonGroup = vertical([Self.groupHeader("Gemini 4 Argon", brands: ["gemini"]), argon], spacing: 7)
+        let carbonGroup = vertical([Self.groupHeader("Gemini 4 Carbon", brands: ["gemini"]), carbon], spacing: 7)
+        for (group, rows) in [(geminiGroup, [gemini5h, geminiWeekly]), (claudeGroup, [claude5h, claudeWeekly]), (argonGroup, [argon]), (carbonGroup, [carbon])] {
             group.alignment = .leading
             for row in rows { fillWidth(row, in: group) }
         }
-        quotaStack = vertical([geminiGroup, claudeGroup, argonGroup], spacing: 14)
+        extraStandaloneStack.orientation = .vertical
+        extraStandaloneStack.alignment = .leading
+        extraStandaloneStack.spacing = 10
+        extraStandaloneStack.isHidden = true
+        extraStandaloneStack.detachesHiddenViews = true
+        quotaStack = vertical([geminiGroup, claudeGroup, argonGroup, carbonGroup, extraStandaloneStack], spacing: 14)
+        quotaStack.detachesHiddenViews = true
         quotaStack.alignment = .leading
-        for group in [geminiGroup, claudeGroup, argonGroup] { fillWidth(group, in: quotaStack) }
+        for group in [geminiGroup, claudeGroup, argonGroup, carbonGroup, extraStandaloneStack] { fillWidth(group, in: quotaStack) }
 
         accountListStack.orientation = .vertical
         accountListStack.alignment = .leading
@@ -560,8 +611,8 @@ final class MenuStatusCard: NSView {
         let display = AccountIdentity.displayName(name: account["name"] as? String, email: email)
         nameLabel.stringValue = display
         emailLabel.stringValue = email
-        emailLabel.toolTip = email
-        accountSwitcher.toolTip = email
+        emailLabel.toolTip = nil
+        accountSwitcher.toolTip = nil
         let emailMenu = NSMenu()
         let copyEmail = NSMenuItem(title: "复制完整邮箱", action: #selector(copyHeaderEmail), keyEquivalent: "")
         copyEmail.target = self
@@ -602,10 +653,21 @@ final class MenuStatusCard: NSView {
         case "5小时": argon.titleLabel.stringValue = "5 小时"
         case "每周": argon.titleLabel.stringValue = "每周"
         case "周期未知": argon.titleLabel.stringValue = "周期未知"
-        default: argon.titleLabel.stringValue = "模型配额"
+        default: argon.titleLabel.stringValue = ""
         }
         argon.apply(percentage: argonState?.percentage, placeholder: argonPlaceholder,
                     reset: argonState?.percentage == nil ? "" : (argonState?.resetText ?? ""), stale: argonState?.stale == true)
+        let carbonState = contract.carbon
+        let carbonPlaceholder = carbonState?.availability == "disabled" ? "不可用" : (carbonState?.placeholder ?? "未知")
+        switch carbonState?.periodLabel {
+        case "5小时": carbon.titleLabel.stringValue = "5 小时"
+        case "每周": carbon.titleLabel.stringValue = "每周"
+        case "周期未知": carbon.titleLabel.stringValue = "周期未知"
+        default: carbon.titleLabel.stringValue = ""
+        }
+        carbon.apply(percentage: carbonState?.percentage, placeholder: carbonPlaceholder,
+                     reset: carbonState?.percentage == nil ? "" : (carbonState?.resetText ?? ""), stale: carbonState?.stale == true)
+        Self.syncExtraStandaloneGroups(contract.extraStandaloneModels, into: extraStandaloneStack, withLeadingDividers: false)
 
         let quota = account["quota"] as? [String: Any]
         lastUpdated = QuotaPresentation.number(quota?["last_updated"]) ?? QuotaPresentation.number(account["quota_last_updated"]) ?? 0
@@ -1306,7 +1368,7 @@ final class MenuPlainClickButton: NSButton {
         bezelStyle = .inline
         isBordered = false
         focusRingType = .none
-        refusesFirstResponder = true
+        refusesFirstResponder = false
         wantsLayer = true
     }
     required init?(coder: NSCoder) { fatalError() }
@@ -1361,7 +1423,6 @@ final class MenuModelUsageItemView: NSView {
         nameLabel.lineBreakMode = .byWordWrapping
         nameLabel.setContentHuggingPriority(.defaultHigh, for: .horizontal)
         nameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        nameLabel.toolTip = model
         tokensLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
         tokensLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
 
@@ -1428,6 +1489,8 @@ final class MenuExpandableAccountCardView: NSBox {
     let claude5hRow = MenuMeterRow(title: "Claude/GPT · 5 小时")
     let claudeWeeklyRow = MenuMeterRow(title: "Claude/GPT · 每周")
     let argonRow = MenuMeterRow(title: "Gemini 4 Argon")
+    let carbonRow = MenuMeterRow(title: "Gemini 4 Carbon")
+    let extraStandaloneStack = NSStackView()
     let warningLabel = text("", size: 10.5, color: accessibleWarningColor(), wrap: true)
     let timestampLabel = text("", size: 10.5, color: Design.secondary)
     let switchButton = button("切换账号…", target: nil, action: #selector(switchPressed))
@@ -1504,7 +1567,7 @@ final class MenuExpandableAccountCardView: NSBox {
         stateButton.isBordered = false
         stateButton.focusRingType = .none
         stateButton.setButtonType(.momentaryChange)
-        stateButton.refusesFirstResponder = true
+        stateButton.refusesFirstResponder = false
         stateButton.target = self
         stateButton.action = #selector(stateIconClicked)
         stateButton.addSubview(stateIcon)
@@ -1557,6 +1620,12 @@ final class MenuExpandableAccountCardView: NSBox {
         actionRow.alignment = .centerY
         actionRow.detachesHiddenViews = true
 
+        extraStandaloneStack.orientation = .vertical
+        extraStandaloneStack.alignment = .leading
+        extraStandaloneStack.spacing = 6
+        extraStandaloneStack.isHidden = true
+        extraStandaloneStack.detachesHiddenViews = true
+
         let detailViews: [NSView] = [
             divider(),
             gemini5hRow,
@@ -1564,6 +1633,8 @@ final class MenuExpandableAccountCardView: NSBox {
             claude5hRow,
             claudeWeeklyRow,
             argonRow,
+            carbonRow,
+            extraStandaloneStack,
             warningLabel,
             actionRow
         ]
@@ -1605,12 +1676,12 @@ final class MenuExpandableAccountCardView: NSBox {
 
         stateIcon.image = NSImage(systemSymbolName: isCurrent ? "checkmark.circle.fill" : "circle", accessibilityDescription: isCurrent ? "当前账号" : "切换至该账号")
         stateIcon.contentTintColor = isCurrent ? Design.blue : Design.secondary.withAlphaComponent(0.45)
-        stateButton.toolTip = isCurrent ? "当前使用账号" : "点击切换至该账号"
+        stateButton.toolTip = nil
         stateButton.setAccessibilityLabel(isCurrent ? "当前账号" : "切换至该账号")
         stateButton.setAccessibilityRole(.button)
         nameLabel.stringValue = display
         emailLabel.stringValue = email
-        emailLabel.toolTip = email
+        emailLabel.toolTip = nil
 
         tierBadge.title = tier
         tierBadge.tint = tier == "ULTRA" ? .systemPurple : (tier == "PRO" ? .systemBlue : Design.inactivePill)
@@ -1663,6 +1734,25 @@ final class MenuExpandableAccountCardView: NSBox {
         let argonPlaceholder = argonState?.availability == "disabled" ? "不可用" : (argonState?.placeholder ?? "未知")
         argonRow.titleLabel.stringValue = argonState?.title ?? "Gemini 4 Argon"
         argonRow.apply(percentage: argonState?.percentage, placeholder: argonPlaceholder, reset: argonState?.percentage == nil ? "" : (argonState?.resetText ?? ""), stale: argonState?.stale == true)
+
+        let carbonState = contract.carbon
+        let carbonPlaceholder = carbonState?.availability == "disabled" ? "不可用" : (carbonState?.placeholder ?? "未知")
+        carbonRow.titleLabel.stringValue = carbonState?.title ?? "Gemini 4 Carbon"
+        carbonRow.apply(percentage: carbonState?.percentage, placeholder: carbonPlaceholder, reset: carbonState?.percentage == nil ? "" : (carbonState?.resetText ?? ""), stale: carbonState?.stale == true)
+
+        extraStandaloneStack.arrangedSubviews.forEach {
+            extraStandaloneStack.removeArrangedSubview($0)
+            $0.removeFromSuperview()
+        }
+        let extraModels = contract.extraStandaloneModels
+        extraStandaloneStack.isHidden = extraModels.isEmpty
+        for extra in extraModels {
+            let row = MenuMeterRow(title: extra.title)
+            let ph = extra.availability == "disabled" ? "不可用" : extra.placeholder
+            row.apply(percentage: extra.percentage, placeholder: ph, reset: extra.percentage == nil ? "" : extra.resetText, stale: extra.stale)
+            extraStandaloneStack.addArrangedSubview(row)
+            fillWidth(row, in: extraStandaloneStack)
+        }
 
         var warnings: [String] = []
         if let readiness = account["credentialReadiness"] as? [String: Any], readiness["state"] as? String == "needs_authorization" {
@@ -1794,6 +1884,8 @@ final class MenuPanelController: NSViewController {
     let quotaClaude5h = MenuMeterRow(title: "5 小时")
     let quotaClaudeWeekly = MenuMeterRow(title: "每周")
     let quotaArgon = MenuMeterRow(title: "每周")
+    let quotaCarbon = MenuMeterRow(title: "每周")
+    let quotaExtraStandaloneStack = NSStackView()
     let quotaWarningLabel = text("", size: 11, color: accessibleWarningColor(), wrap: true)
     let quotaFooterLabel = text("", size: 11, color: .secondaryLabelColor, wrap: true)
     let quotaGroupsContainer = NSStackView()
@@ -1849,11 +1941,11 @@ final class MenuPanelController: NSViewController {
         super.init(nibName: nil, bundle: nil)
 
         headerRefreshButton.target = self
-        headerRefreshButton.refusesFirstResponder = true
+        headerRefreshButton.refusesFirstResponder = false
         moreButton.target = self
-        moreButton.refusesFirstResponder = true
+        moreButton.refusesFirstResponder = false
         moreButton.setAccessibilityLabel("更多操作")
-        moreButton.toolTip = "汉化开关、设置、关于与退出"
+        moreButton.toolTip = nil
         moreButton.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             moreButton.widthAnchor.constraint(equalToConstant: 30),
@@ -2146,23 +2238,39 @@ final class MenuPanelController: NSViewController {
         fillWidth(quotaGemini5h, in: geminiStack)
         fillWidth(quotaGeminiWeekly, in: geminiStack)
 
-        let claudeHeader = groupHeader("Claude / GPT", brands: ["claude", "openai"])
+        let claudeHeader = groupHeader("Claude/GPT", brands: ["claude", "openai"])
         let claudeStack = vertical([claudeHeader, quotaClaude5h, quotaClaudeWeekly], spacing: 6)
         fillWidth(claudeHeader, in: claudeStack)
         fillWidth(quotaClaude5h, in: claudeStack)
         fillWidth(quotaClaudeWeekly, in: claudeStack)
 
+        quotaArgon.accessibilityGroupName = "Gemini 4 Argon"
         let argonHeader = groupHeader("Gemini 4 Argon", brands: ["gemini"])
         let argonStack = vertical([argonHeader, quotaArgon], spacing: 6)
         fillWidth(argonHeader, in: argonStack)
         fillWidth(quotaArgon, in: argonStack)
+
+        quotaCarbon.accessibilityGroupName = "Gemini 4 Carbon"
+        let carbonHeader = groupHeader("Gemini 4 Carbon", brands: ["gemini"])
+        let carbonStack = vertical([carbonHeader, quotaCarbon], spacing: 6)
+        fillWidth(carbonHeader, in: carbonStack)
+        fillWidth(quotaCarbon, in: carbonStack)
+
+        quotaExtraStandaloneStack.orientation = .vertical
+        quotaExtraStandaloneStack.alignment = .leading
+        quotaExtraStandaloneStack.spacing = 8
+        quotaExtraStandaloneStack.isHidden = true
+        quotaExtraStandaloneStack.detachesHiddenViews = true
 
         let unifiedQuotaContent = vertical([
             geminiStack,
             divider(),
             claudeStack,
             divider(),
-            argonStack
+            argonStack,
+            divider(),
+            carbonStack,
+            quotaExtraStandaloneStack
         ], spacing: 8)
         unifiedQuotaContent.detachesHiddenViews = true
         for v in unifiedQuotaContent.arrangedSubviews { fillWidth(v, in: unifiedQuotaContent) }
@@ -2340,15 +2448,13 @@ final class MenuPanelController: NSViewController {
         quotaRoot.isHidden = (selectedTab != 1)
         accountsRoot.isHidden = (selectedTab != 2)
         headerRefreshButton.title = "刷新"
+        headerRefreshButton.toolTip = nil
         switch selectedTab {
         case 0:
-            headerRefreshButton.toolTip = "重新读取当前时间范围的本机用量统计"
             openMainBtn.title = "打开用量页 ↗"
         case 1:
-            headerRefreshButton.toolTip = "仅刷新当前展示账号的配额"
             openMainBtn.title = "打开总览页 ↗"
         default:
-            headerRefreshButton.toolTip = "刷新所有已保存账号的配额"
             openMainBtn.title = "打开账号页 ↗"
         }
         if resetScroll {
@@ -2392,7 +2498,8 @@ final class MenuPanelController: NSViewController {
 
     @objc private func morePressed() {
         let menu = app.buildMoreMenu()
-        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: -4), in: moreButton)
+        let yOffset = moreButton.isFlipped ? (moreButton.bounds.maxY + 6) : -6
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: yOffset), in: moreButton)
     }
 
     @objc private func openAntigravityFromFooter() {
@@ -2530,8 +2637,8 @@ final class MenuPanelController: NSViewController {
         tokensTile.setValueText(InterfaceText.formatCompactTokens(total, formatSmallWithLocale: true))
         tokensTile.toolTip = nil
         requestsTile.setValueText("\(requests.formatted())")
-        let isAllUnpriced = unpricedCount > 0 && pricedCount == 0 && total > 0
-        costTile.setValueText(isAllUnpriced ? "未计价" : InterfaceText.formatUsd(usd))
+        let isAllUnpriced = unpricedCount > 0 && pricedCount == 0 && total > 0 && usd == 0
+        costTile.setValueText(isAllUnpriced ? "未计价" : (unpricedCount > 0 ? "部分 " : "") + InterfaceText.formatUsd(usd))
         cacheTile.setValueText(denom > 0 ? String(format: "%.1f%%", cacheHit) : "—")
 
         let snapKey = "\(report["snapshotId"] ?? ""):\(periodKey):\(selectedChartDimension.rawValue):\(total):\(requests):\(failed):\(unknown)"
@@ -2787,7 +2894,7 @@ final class MenuPanelController: NSViewController {
         let tier = AccountIdentity.normalizeTier(account["subscription_tier"] as? String)
         quotaAccountNameLabel.stringValue = display
         quotaEmailLabel.stringValue = email
-        quotaEmailLabel.toolTip = email
+        quotaEmailLabel.toolTip = nil
         quotaTierBadge.title = tier
         quotaTierBadge.tint = tier == "ULTRA" ? .systemPurple : (tier == "PRO" ? .systemBlue : Design.inactivePill)
         quotaTierBadge.isHidden = tier.isEmpty
@@ -2825,9 +2932,21 @@ final class MenuPanelController: NSViewController {
         case "5小时": quotaArgon.titleLabel.stringValue = "5 小时"
         case "每周": quotaArgon.titleLabel.stringValue = "每周"
         case "周期未知": quotaArgon.titleLabel.stringValue = "周期未知"
-        default: quotaArgon.titleLabel.stringValue = "模型配额"
+        default: quotaArgon.titleLabel.stringValue = ""
         }
         quotaArgon.apply(percentage: argonState?.percentage, placeholder: argonPlaceholder, reset: argonState?.percentage == nil ? "" : (argonState?.resetText ?? ""), stale: argonState?.stale == true)
+
+        let carbonState = contract.carbon
+        let carbonPlaceholder = carbonState?.availability == "disabled" ? "不可用" : (carbonState?.placeholder ?? "未知")
+        switch carbonState?.periodLabel {
+        case "5小时": quotaCarbon.titleLabel.stringValue = "5 小时"
+        case "每周": quotaCarbon.titleLabel.stringValue = "每周"
+        case "周期未知": quotaCarbon.titleLabel.stringValue = "周期未知"
+        default: quotaCarbon.titleLabel.stringValue = ""
+        }
+        quotaCarbon.apply(percentage: carbonState?.percentage, placeholder: carbonPlaceholder, reset: carbonState?.percentage == nil ? "" : (carbonState?.resetText ?? ""), stale: carbonState?.stale == true)
+
+        MenuStatusCard.syncExtraStandaloneGroups(contract.extraStandaloneModels, into: quotaExtraStandaloneStack, withLeadingDividers: true, headerFontSize: 11.5, iconSize: 13)
 
         var warnings: [String] = []
         if let readiness = account["credentialReadiness"] as? [String: Any], readiness["state"] as? String == "needs_authorization" {
@@ -2971,6 +3090,7 @@ final class MenuPanelController: NSViewController {
         let activeRoot: NSView = selectedTab == 0 ? usageRoot : (selectedTab == 1 ? quotaRoot : accountsRoot)
         activeRoot.frame.size.width = contentWidth
         activeRoot.layoutSubtreeIfNeeded()
+        documentContainer.layoutSubtreeIfNeeded()
         let contentHeight = ceil(activeRoot.fittingSize.height) + 20 // 10pt top + 10pt bottom inset
         let chromeHeight: CGFloat = 86 + 42 // header (86pt) + footer (42pt)
         let rawTotal = chromeHeight + contentHeight

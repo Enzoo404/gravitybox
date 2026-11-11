@@ -35,7 +35,7 @@ export const EXTENDED_CACHE_NAMES = [
   'blob_storage',
 ] as const;
 
-// 含状态/授权的可选缓存（存在时自动发现，默认不勾选，将删与不删的选择权交给用户）
+// 受保护的会话、站点存储与网络授权状态目录（严禁纳入清理，仅作只读保护统计）
 export const STATEFUL_CACHE_NAMES = [
   'Service Worker',
   'Session Storage',
@@ -46,7 +46,7 @@ export const STATEFUL_CACHE_NAMES = [
 ] as const;
 
 export const ALL_SAFE_CACHE_NAMES = [...CACHE_NAMES, ...EXTENDED_CACHE_NAMES] as const;
-export const ALL_ALLOWED_CACHE_NAMES = [...ALL_SAFE_CACHE_NAMES, ...STATEFUL_CACHE_NAMES] as const;
+export const ALL_ALLOWED_CACHE_NAMES = [...ALL_SAFE_CACHE_NAMES] as const;
 
 export const CACHE_METADATA: Record<string, CacheItemMetadata> = {
   'Cache': {
@@ -373,9 +373,12 @@ export class CacheMaintenance {
       {
         id: 'workspace',
         title: '工作区与核心账号凭据',
-        subtitle: 'User/globalStorage（OAuth 令牌库 state.vscdb）与工作区配置',
+        subtitle: 'User/globalStorage（OAuth 令牌库 state.vscdb）、Cookies、Local Storage 与工作区配置',
         icon: 'folder.badge.gearshape',
-        paths: [join(this.profile, 'User')],
+        paths: [
+          join(this.profile, 'User'),
+          ...STATEFUL_CACHE_NAMES.map(name => join(this.profile, name)),
+        ],
       },
     ];
     if (this.options.geminiDir) {
@@ -486,7 +489,7 @@ export class CacheMaintenance {
 
   async scan() {
     return this.mutex.run(async () => {
-    const [baseEntries, extEntries, statefulEntries] = await Promise.all([
+    const [baseEntries, extEntries] = await Promise.all([
       Promise.all(CACHE_NAMES.map(name => this.inspect(name))),
       Promise.all(EXTENDED_CACHE_NAMES.map(async extName => {
         try {
@@ -496,19 +499,10 @@ export class CacheMaintenance {
           return null;
         }
       })),
-      Promise.all(STATEFUL_CACHE_NAMES.map(async statefulName => {
-        try {
-          await lstat(join(this.profile, statefulName));
-          return await this.inspect(statefulName);
-        } catch {
-          return null;
-        }
-      })),
     ]);
     const entries = [
       ...baseEntries,
       ...extEntries.filter((e): e is NonNullable<typeof e> => e !== null),
-      ...statefulEntries.filter((e): e is NonNullable<typeof e> => e !== null),
     ];
     const token = randomUUID();
     this.prepared = {
@@ -529,15 +523,14 @@ export class CacheMaintenance {
       this.scanProtectedSummary(),
       this.history(),
     ]);
-    const safeBytes = entries.filter(e => e.category === 'safe').reduce((n, e) => n + e.bytes, 0);
-    const statefulBytes = entries.filter(e => e.category === 'stateful').reduce((n, e) => n + e.bytes, 0);
+    const safeBytes = entries.reduce((n, e) => n + e.bytes, 0);
     return {
       ok: true,
       token,
       entries,
       safeBytes,
-      statefulBytes,
-      totalBytes: entries.reduce((n, e) => n + e.bytes, 0),
+      statefulBytes: 0,
+      totalBytes: safeBytes,
       totalFiles: entries.reduce((n, e) => n + e.fileCount, 0),
       protectedEntries: protectedSummary.protectedEntries,
       protectedBytes: protectedSummary.protectedBytes,
@@ -549,27 +542,15 @@ export class CacheMaintenance {
     }, { label: '缓存扫描' });
   }
 
-  async clear(token: unknown, selectedNames?: unknown, options?: { force?: boolean }) {
+  async clear(token: unknown, selectedNames?: unknown, _options?: { force?: boolean }) {
     return this.mutex.run(async () => {
-    const force = options?.force === true;
     const saved = this.prepared;
     this.prepared = undefined;
-    if (!force && (!saved || saved.token !== token || Date.now() - saved.at > 120000)) {
+    if (!saved || saved.token !== token || Date.now() - saved.at > 120000) {
       throw Error('缓存清单已过期，请重新扫描');
     }
     if (await this.running()) {
-      if (force) {
-        try {
-          await promisify(execFile)('/usr/bin/pkill', ['-f', ((this.options.appPath ?? '/Applications/Antigravity.app') + '/Contents/').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')]);
-        } catch {}
-        const deadline = Date.now() + 3000;
-        while ((await this.running()) && Date.now() < deadline) {
-          await new Promise(r => setTimeout(r, 150));
-        }
-      }
-      if (await this.running()) {
-        throw Error('请先退出 Antigravity，再清理缓存；未改动任何缓存');
-      }
+      throw Error('请先退出 Antigravity，再清理缓存；未改动任何缓存');
     }
     const allowedSet = new Set<string>(ALL_ALLOWED_CACHE_NAMES);
     let targetNames: string[];
@@ -578,32 +559,18 @@ export class CacheMaintenance {
       if (targetNames.length === 0 || targetNames.length !== selectedNames.length) {
         throw Error('所选缓存项无效，请重新扫描后再试');
       }
-    } else if (saved) {
-      // 未显式传参时默认仅清理无损安全缓存（safe tier），彻底保护 Cookies、Local Storage 等状态数据
-      targetNames = saved.entries.filter(e => e.defaultSelected !== false).map(e => e.name);
     } else {
-      targetNames = [...ALL_SAFE_CACHE_NAMES];
+      targetNames = saved.entries.filter(e => e.defaultSelected !== false).map(e => e.name);
     }
     const targetSet = new Set(targetNames);
     const current = [];
-    if (force) {
-      for (const name of targetNames) {
-        const inspected = await this.inspect(name);
-        if (!inspected.clearable) {
-          const reason = 'reason' in inspected ? (inspected as { reason?: string }).reason : undefined;
-          throw Error(`缓存目录 ${name} 受限（${reason || '包含符号链接'}），已中止清理`);
+    for (const savedEntry of saved.entries) {
+      const inspected = await this.inspect(savedEntry.name);
+      if (targetSet.has(savedEntry.name)) {
+        if (!inspected.clearable || inspected.fingerprint !== savedEntry.fingerprint) {
+          throw Error('缓存内容或路径已变化，请重新扫描');
         }
         current.push(inspected);
-      }
-    } else {
-      for (const savedEntry of saved!.entries) {
-        const inspected = await this.inspect(savedEntry.name);
-        if (targetSet.has(savedEntry.name)) {
-          if (!inspected.clearable || inspected.fingerprint !== savedEntry.fingerprint) {
-            throw Error('缓存内容或路径已变化，请重新扫描');
-          }
-          current.push(inspected);
-        }
       }
     }
     const target = join(this.trash, `GravityBox-缓存-${Date.now()}`);
@@ -612,10 +579,8 @@ export class CacheMaintenance {
     try {
       for (const row of current) {
         if (!row.exists) continue;
-        if (!force) {
-          if (await this.running()) throw Error('应用已重新打开，停止清理');
-          if ((await this.inspect(row.name)).fingerprint !== row.fingerprint) throw Error('缓存正在变化，停止清理');
-        }
+        if (await this.running()) throw Error('应用已重新打开，停止清理');
+        if ((await this.inspect(row.name)).fingerprint !== row.fingerprint) throw Error('缓存正在变化，停止清理');
         const from = join(this.profile, row.name), to = join(target, row.name);
         try {
           await rename(from, to);
@@ -623,23 +588,21 @@ export class CacheMaintenance {
           throw Error(`移动缓存到废纸篓失败（${row.name}）: ${(err as Error).message}`);
         }
         const movedSidecars: string[] = [];
-        if (row.name === 'Cookies') {
-          for (const suffix of ['-journal', '-wal', '-shm']) {
-            const sideFrom = `${from}${suffix}`, sideTo = `${to}${suffix}`;
-            try {
-              const st = await lstat(sideFrom);
-              if (!st.isSymbolicLink() && st.isFile()) {
-                await rename(sideFrom, sideTo);
-                movedSidecars.push(suffix);
+        for (const suffix of ['-journal', '-wal', '-shm']) {
+          const sideFrom = `${from}${suffix}`, sideTo = `${to}${suffix}`;
+          try {
+            const st = await lstat(sideFrom);
+            if (!st.isSymbolicLink() && st.isFile()) {
+              await rename(sideFrom, sideTo);
+              movedSidecars.push(suffix);
+            }
+          } catch (sideErr) {
+            if ((sideErr as NodeJS.ErrnoException).code !== 'ENOENT') {
+              for (const rolledSuffix of movedSidecars) {
+                await rename(`${to}${rolledSuffix}`, `${from}${rolledSuffix}`).catch(() => {});
               }
-            } catch (sideErr) {
-              if ((sideErr as NodeJS.ErrnoException).code !== 'ENOENT') {
-                for (const rolledSuffix of movedSidecars) {
-                  await rename(`${to}${rolledSuffix}`, `${from}${rolledSuffix}`).catch(() => {});
-                }
-                await rename(to, from).catch(() => {});
-                throw Error(`移动 Cookies 事务日志 (${suffix}) 失败: ${(sideErr as Error).message}`);
-              }
+              await rename(to, from).catch(() => {});
+              throw Error(`移动 ${row.name} 事务日志 (${suffix}) 失败: ${(sideErr as Error).message}`);
             }
           }
         }
@@ -659,17 +622,15 @@ export class CacheMaintenance {
             } catch {}
           }
         }
-        if (item.name === 'Cookies' || (item.sidecars && item.sidecars.length > 0)) {
-          const suffixes = item.sidecars && item.sidecars.length > 0 ? item.sidecars : ['-journal', '-wal', '-shm'];
-          for (const suffix of suffixes) {
-            const sideTo = `${item.to}${suffix}`, sideFrom = `${item.from}${suffix}`;
-            try {
-              const st = await lstat(sideTo);
-              if (!st.isSymbolicLink()) {
-                await rename(sideTo, sideFrom).catch(() => {});
-              }
-            } catch {}
-          }
+        const suffixes = item.sidecars && item.sidecars.length > 0 ? item.sidecars : ['-journal', '-wal', '-shm'];
+        for (const suffix of suffixes) {
+          const sideTo = `${item.to}${suffix}`, sideFrom = `${item.from}${suffix}`;
+          try {
+            const st = await lstat(sideTo);
+            if (!st.isSymbolicLink()) {
+              await rename(sideTo, sideFrom).catch(() => {});
+            }
+          } catch {}
         }
         recovery.push({ from: item.from, to: item.to, restored });
       }
@@ -726,7 +687,9 @@ export class CacheMaintenance {
     const moved = Array.isArray(manifest.moved) ? manifest.moved : [];
     if (moved.length === 0) throw Error('快照内没有可恢复的缓存目录');
 
-    const allowedSet = new Set<string>(ALL_ALLOWED_CACHE_NAMES);
+    // Older releases could create state-store snapshots. They remain recoverable
+    // through this explicit, stopped-application restore, but never clearable.
+    const allowedSet = new Set<string>([...ALL_ALLOWED_CACHE_NAMES, ...STATEFUL_CACHE_NAMES]);
     const seenNames = new Set<string>();
 
     // === 阶段 1：全量预检 ===
@@ -743,17 +706,15 @@ export class CacheMaintenance {
       if (!toStat || toStat.isSymbolicLink()) {
         throw Error(`快照中的 ${name} 已缺失或为符号链接，无法完整恢复`);
       }
-      if (name === 'Cookies') {
-        for (const suffix of ['-journal', '-wal', '-shm']) {
-          const sideTo = `${expectedTo}${suffix}`;
-          const sideStat = await lstat(sideTo).catch(() => null);
-          if (sideStat && sideStat.isSymbolicLink()) {
-            throw Error(`快照中的 Cookies 日志 (${suffix}) 为符号链接，已拒绝恢复`);
-          }
-          const sideExisting = await lstat(`${expectedFrom}${suffix}`).catch(() => null);
-          if (sideExisting && sideExisting.isSymbolicLink()) {
-            throw Error(`目标路径 Cookies${suffix} 存在符号链接，已拒绝恢复`);
-          }
+      for (const suffix of ['-journal', '-wal', '-shm']) {
+        const sideTo = `${expectedTo}${suffix}`;
+        const sideStat = await lstat(sideTo).catch(() => null);
+        if (sideStat && sideStat.isSymbolicLink()) {
+          throw Error(`快照中的 ${name} 日志 (${suffix}) 为符号链接，已拒绝恢复`);
+        }
+        const sideExisting = await lstat(`${expectedFrom}${suffix}`).catch(() => null);
+        if (sideExisting && sideExisting.isSymbolicLink()) {
+          throw Error(`目标路径 ${name}${suffix} 存在符号链接，已拒绝恢复`);
         }
       }
       const existingFrom = await lstat(expectedFrom).catch(() => null);
@@ -776,16 +737,14 @@ export class CacheMaintenance {
           await rename(expectedFrom, displacedPath);
           displacedItems.push({ original: expectedFrom, displaced: displacedPath });
         }
-        if (name === 'Cookies') {
-          for (const suffix of ['-journal', '-wal', '-shm']) {
-            const sideFrom = `${expectedFrom}${suffix}`;
-            const sideStat = await lstat(sideFrom).catch(() => null);
-            if (sideStat) {
-              await mkdir(displacedDir, { recursive: true, mode: 0o700 });
-              const sideDisplaced = join(displacedDir, `Cookies${suffix}.displaced-${Date.now()}`);
-              await rename(sideFrom, sideDisplaced);
-              displacedItems.push({ original: sideFrom, displaced: sideDisplaced, isCookiesSidecar: true });
-            }
+        for (const suffix of ['-journal', '-wal', '-shm']) {
+          const sideFrom = `${expectedFrom}${suffix}`;
+          const sideStat = await lstat(sideFrom).catch(() => null);
+          if (sideStat) {
+            await mkdir(displacedDir, { recursive: true, mode: 0o700 });
+            const sideDisplaced = join(displacedDir, `${name}${suffix}.displaced-${Date.now()}`);
+            await rename(sideFrom, sideDisplaced);
+            displacedItems.push({ original: sideFrom, displaced: sideDisplaced, isCookiesSidecar: true });
           }
         }
       }
@@ -806,14 +765,12 @@ export class CacheMaintenance {
         const expectedFrom = join(this.profile, name);
         await rename(expectedTo, expectedFrom);
         restoredRecords.push({ from: expectedTo, to: expectedFrom });
-        if (name === 'Cookies') {
-          for (const suffix of ['-journal', '-wal', '-shm']) {
-            const sideTo = `${expectedTo}${suffix}`, sideFrom = `${expectedFrom}${suffix}`;
-            const sideStat = await lstat(sideTo).catch(() => null);
-            if (sideStat && !sideStat.isSymbolicLink() && sideStat.isFile()) {
-              await rename(sideTo, sideFrom);
-              restoredRecords.push({ from: sideTo, to: sideFrom, isCookiesSidecar: true });
-            }
+        for (const suffix of ['-journal', '-wal', '-shm']) {
+          const sideTo = `${expectedTo}${suffix}`, sideFrom = `${expectedFrom}${suffix}`;
+          const sideStat = await lstat(sideTo).catch(() => null);
+          if (sideStat && !sideStat.isSymbolicLink() && sideStat.isFile()) {
+            await rename(sideTo, sideFrom);
+            restoredRecords.push({ from: sideTo, to: sideFrom, isCookiesSidecar: true });
           }
         }
         restoredNames.push(name);

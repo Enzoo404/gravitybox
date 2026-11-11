@@ -40,12 +40,19 @@ export function computeUpwardPopoverPosition(
   const maxLeft = Math.max(minLeft, viewportWidth - effectivePopoverWidth - safeMargin);
   const clampedLeft = Math.max(minLeft, Math.min(idealLeft, maxLeft));
 
-  // 5. 向上垂直坐标 (紧贴胶囊顶边向上留出间距)
-  const bottom = viewportHeight - rect.top + verticalGap;
-
-  // 6. 纵向顶部防裁切检查：计算卡片距离视口顶部的可用高度
+  // 5. 向上/向下垂直坐标与顶部防裁切检查：当上方空间不足容纳最小卡片且下方空间更充裕时自动向下翻转
   const topAvailableSpace = rect.top - verticalGap;
-  const maxAllowedHeight = Math.max(100, topAvailableSpace - safeMargin);
+  const bottomAvailableSpace = viewportHeight - rect.bottom - verticalGap;
+  const direction =
+    topAvailableSpace < Math.min(popoverHeight, 140) && bottomAvailableSpace > topAvailableSpace
+      ? 'down'
+      : 'up';
+  const bottom = Math.round(viewportHeight - rect.top + verticalGap);
+  const top = Math.round(rect.bottom + verticalGap);
+  const maxAllowedHeight =
+    direction === 'down'
+      ? Math.max(100, bottomAvailableSpace - safeMargin)
+      : Math.max(100, topAvailableSpace - safeMargin);
 
   // 7. 指示小三角平直底边避障计算 (小三角半宽 7px, 圆角半径 borderRadius)
   const minArrow = borderRadius + 7; // 12 + 7 = 19px
@@ -65,6 +72,8 @@ export function computeUpwardPopoverPosition(
   return {
     left: Math.round(clampedLeft),
     bottom: Math.round(bottom),
+    top: Math.round(top),
+    direction,
     width: Math.round(effectivePopoverWidth),
     maxHeight: Math.round(maxAllowedHeight),
     arrowOffsetPercent,
@@ -84,7 +93,15 @@ export function applyPopoverGeometry(popoverEl, arrowEl, pos) {
   popoverEl.style.width = `${pos.width}px`;
   popoverEl.style.maxHeight = `${pos.maxHeight}px`;
   popoverEl.style.left = `${pos.left}px`;
-  popoverEl.style.bottom = `${pos.bottom}px`;
+  if (pos.direction === 'down' && typeof pos.top === 'number') {
+    popoverEl.style.top = `${pos.top}px`;
+    popoverEl.style.bottom = 'auto';
+    popoverEl.classList?.add?.('is-downward');
+  } else {
+    popoverEl.style.bottom = `${pos.bottom}px`;
+    popoverEl.style.top = 'auto';
+    popoverEl.classList?.remove?.('is-downward');
+  }
 
   if (arrowEl) {
     arrowEl.style.left = `${pos.arrowPixelOffset}px`;
@@ -104,12 +121,20 @@ export function applyPopoverGeometry(popoverEl, arrowEl, pos) {
       popoverEl.style.transform = prevTransform;
       popoverEl.style.transition = prevTransition;
       if (actualRect && (actualRect.width > 0 || actualRect.height > 0)) {
-        const expectedBottomY = vh - pos.bottom;
         const deltaX = actualRect.left - pos.left;
-        const deltaY = actualRect.bottom - expectedBottomY;
-        if (Math.abs(deltaX) > 1 || Math.abs(deltaY) > 1) {
-          popoverEl.style.left = `${Math.round(pos.left - deltaX)}px`;
-          popoverEl.style.bottom = `${Math.round(pos.bottom + deltaY)}px`;
+        if (pos.direction === 'down' && typeof pos.top === 'number') {
+          const deltaY = actualRect.top - pos.top;
+          if (Math.abs(deltaX) > 1 || Math.abs(deltaY) > 1) {
+            popoverEl.style.left = `${Math.round(pos.left - deltaX)}px`;
+            popoverEl.style.top = `${Math.round(pos.top - deltaY)}px`;
+          }
+        } else {
+          const expectedBottomY = vh - pos.bottom;
+          const deltaY = actualRect.bottom - expectedBottomY;
+          if (Math.abs(deltaX) > 1 || Math.abs(deltaY) > 1) {
+            popoverEl.style.left = `${Math.round(pos.left - deltaX)}px`;
+            popoverEl.style.bottom = `${Math.round(pos.bottom + deltaY)}px`;
+          }
         }
       }
     }

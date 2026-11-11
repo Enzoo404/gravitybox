@@ -1,5 +1,25 @@
 import Cocoa
 
+private final class CopyTextMenuItem: NSMenuItem {
+    weak var label: NSTextField?
+    var rawValue: String?
+    init(label: NSTextField, value: String?, title: String) {
+        self.label = label; self.rawValue = value
+        super.init(title: title, action: #selector(copyText), keyEquivalent: "")
+        target = self
+    }
+    required init(coder: NSCoder) { fatalError() }
+    @objc func copyText() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(rawValue ?? label?.stringValue ?? "", forType: .string)
+    }
+}
+func enableTextCopy(_ label: NSTextField, value: String? = nil, title: String = "复制完整内容") {
+    let menu = NSMenu()
+    menu.addItem(CopyTextMenuItem(label: label, value: value, title: title))
+    label.menu = menu
+}
+
 func text(_ value: String, size: CGFloat = 13, weight: NSFont.Weight = .regular, color: NSColor = .labelColor, wrap: Bool = false) -> NSTextField {
     let label = wrap ? NSTextField(wrappingLabelWithString: value) : NSTextField(labelWithString: value)
     label.font = .systemFont(ofSize: size, weight: weight); label.textColor = color
@@ -707,7 +727,7 @@ final class PillBadge: NSView {
     let label = text("", size: 11, weight: .semibold)
     var emphasized = false { didSet { updateLabelTextColor(); needsDisplay = true } }
     var tint: NSColor { didSet { updateLabelTextColor(); needsDisplay = true } }
-    var title: String { get { label.stringValue } set { label.stringValue = newValue; toolTip = newValue; setAccessibilityLabel(newValue); invalidateIntrinsicContentSize(); needsDisplay = true } }
+    var title: String { get { label.stringValue } set { label.stringValue = newValue; setAccessibilityLabel(newValue); invalidateIntrinsicContentSize(); needsDisplay = true } }
 
     static func isNeutralOrInactiveTint(_ color: NSColor, in appearance: NSAppearance) -> Bool {
         if color === Design.inactivePill || color === Design.secondary || color == .secondaryLabelColor || color == .systemGray {
@@ -808,7 +828,6 @@ func settingRow(icon: String, tint: NSColor, title: String, badge: NSView? = nil
         let sub = text(subtitle, size: 11, color: Design.secondary, wrap: true)
         sub.maximumNumberOfLines = 1
         sub.lineBreakMode = .byTruncatingTail
-        sub.toolTip = subtitle
         labels.append(sub)
     }
     let captions = vertical(labels, spacing: 2)
@@ -1212,8 +1231,6 @@ final class QuotaBarView: NSView {
     }
 
     private func updateAccessibility() {
-        titleLabel.toolTip = titleLabel.stringValue
-        resetLabel.toolTip = resetLabel.stringValue
         var desc = titleLabel.stringValue.isEmpty ? "剩余配额" : titleLabel.stringValue
         desc += percentageKnown ? " 剩余 \(percentage)%" : " \(unknownPlaceholder)"
         if staleData { desc += " · 数据已过期" }

@@ -1,5 +1,6 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
+import { Script } from 'node:vm';
 
 /**
  * 由 runtime/ 合并生成到 dist/ 的产物（无 src/*.ts 对应）。
@@ -19,7 +20,7 @@ const HUD_RUNTIME_FILES = [
  */
 function stripEsmForClassicRuntime(code) {
   return code
-    .replace(/^\s*import\s+[\s\S]*?from\s+['"]\.\/hud-[^'"]+['"];?\s*$/gm, '')
+    .replace(/^\s*import\s+[^;]*?from\s+['"][^'"]+['"];?\s*$/gm, '')
     .replace(/^\s*export\s+(?=(?:const|let|var|function|class)\s+)/gm, '')
     .replace(/^\s*export\s*\{[^}]*\};?\s*$/gm, '');
 }
@@ -36,8 +37,11 @@ export async function copyRuntime(distUrl = new URL('../dist/', import.meta.url)
       return stripEsmForClassicRuntime(raw);
     })
   );
-  const hudBundle = `(function bootstrapGravityBoxHud() {\n'use strict';\n${hudSources.join('\n')}\n})();`;
-  await writeFile(new URL('engine.js', distUrl), [...baseSources, hudBundle].join('\n'));
+  const formatSource = stripEsmForClassicRuntime(await readFile(new URL('metric-format.js', distUrl), 'utf8'));
+  const hudBundle = `(function bootstrapGravityBoxHud() {\n'use strict';\n${formatSource}\n${hudSources.join('\n')}\n})();`;
+  const mergedSource = [...baseSources, hudBundle].join('\n');
+  new Script(mergedSource, { filename: 'GravityBox-runtime.js' });
+  await writeFile(new URL('engine.js', distUrl), mergedSource);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await copyRuntime();

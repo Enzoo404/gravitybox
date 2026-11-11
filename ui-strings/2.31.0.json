@@ -4,12 +4,12 @@
  "source": "vendor/antigravity/2.31.0/main.js",
  "bundleSha256": "00c7aa77bcd1f0bce710f98a97be1e10c0b0fe91770d79216c94b47f2e591308",
  "bundleBytes": 11871831,
- "extractedAt": "2026-11-10T14:54:16.139Z",
+ "extractedAt": "2026-11-11T12:20:32.029Z",
  "counts": {
-  "total": 3717,
+  "total": 3715,
   "template": 1466,
   "fragment": 240,
-  "text": 1302,
+  "text": 1300,
   "placeholder": 57,
   "description": 133,
   "label": 490,
@@ -727,13 +727,6 @@
    "text": "!!! NLS MISSING: ${a} !!!",
    "kinds": [
     "template"
-   ],
-   "count": 1
-  },
-  {
-   "text": "!text-black",
-   "kinds": [
-    "text"
    ],
    "count": 1
   },
@@ -13861,13 +13854,6 @@
     "message"
    ],
    "count": 2
-  },
-  {
-   "text": "items-start overflow-y-auto overflow-x-hidden [&>*]:my-auto",
-   "kinds": [
-    "text"
-   ],
-   "count": 1
   },
   {
    "text": "Its customizations are now available",

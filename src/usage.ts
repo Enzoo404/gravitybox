@@ -1,3 +1,4 @@
+import { normalizeModelId } from './model-identity.js';
 import { ALLOWED_DATA_DIRECTORY_NAMES, type DataDirectoryName } from './application-target.js';
 import { MODEL_PRICES, MODEL_PRICE_ALIASES } from './model-catalog.js';
 import { SqliteReadSnapshot } from './sqlite-read.js';
@@ -35,6 +36,8 @@ export interface ModelTokenUsage {
   request_count: number;
   estimated_usd: number;
   priced?: boolean;
+  partiallyPriced?: boolean;
+  unpriced_tokens?: number;
   pricingKey?: string; pricingStatus?: string; pricingProvenance?: ApiPricing["provenance"] | null;
 }
 
@@ -121,7 +124,7 @@ export function resolvePricingForTimestamp(
   timestampSeconds: number,
   fallbackModelName = ''
 ): ApiPricing | null {
-  if (!entry) return null;
+  if (!entry || !Number.isFinite(timestampSeconds) || timestampSeconds <= 0) return null;
   const intervals: ApiPricingInterval[] | null = Array.isArray(entry)
     ? entry
     : (entry.intervals && Array.isArray(entry.intervals) && entry.intervals.length > 0)
@@ -134,31 +137,19 @@ export function resolvePricingForTimestamp(
   }
   if (intervals.length === 0) return null;
 
-  const eventMs = timestampSeconds > 0 ? timestampSeconds * 1000 : Date.now();
+  const eventMs = timestampSeconds * 1000;
 
   let match: ApiPricingInterval | null = null;
   for (const interval of intervals) {
     const fromMs = interval.validFrom ? Date.parse(interval.validFrom) : Number.NEGATIVE_INFINITY;
     const untilMs = interval.validUntil ? Date.parse(interval.validUntil) : Number.POSITIVE_INFINITY;
-    if (eventMs >= fromMs && eventMs <= untilMs) {
+    if (eventMs >= fromMs && eventMs < untilMs) {
       match = interval;
       break;
     }
   }
 
-  if (!match) {
-    let earliest = intervals[0]!;
-    let latest = intervals[intervals.length - 1]!;
-    let minFrom = earliest.validFrom ? Date.parse(earliest.validFrom) : Number.POSITIVE_INFINITY;
-    let maxUntil = latest.validUntil ? Date.parse(latest.validUntil) : Number.NEGATIVE_INFINITY;
-    for (const item of intervals) {
-      const f = item.validFrom ? Date.parse(item.validFrom) : Number.NEGATIVE_INFINITY;
-      const u = item.validUntil ? Date.parse(item.validUntil) : Number.POSITIVE_INFINITY;
-      if (f < minFrom) { minFrom = f; earliest = item; }
-      if (u > maxUntil) { maxUntil = u; latest = item; }
-    }
-    match = eventMs < minFrom ? earliest : latest;
-  }
+  if (!match) return null;
 
   return {
     model: match.model ?? fallbackModelName ?? (!Array.isArray(entry) ? entry.model : ''),
@@ -172,6 +163,7 @@ export function resolvePricingForTimestamp(
 }
 
 export interface GenerationEvent {
+  event_key?: string;
   model: string;
   input_tokens: number;
   output_tokens: number;
@@ -325,7 +317,7 @@ export function matchPricingKeys(modelName: string): string {
     return '';
   }
   if (Object.hasOwn(MODEL_PRICE_ALIASES,modelName)) return MODEL_PRICE_ALIASES[modelName]!;
-  let lower = modelName.toLowerCase().trim();
+  let lower = normalizeModelId(modelName);
   // 先将所有非字母数字和小数点的字符统一替换为 '-'，并去除首尾连字符
   lower = lower.replace(/[^a-z0-9.]+/g, '-').replace(/^-+|-+$/g, '');
 
@@ -380,6 +372,11 @@ export function formatLocalDate(d: Date): string {
 }
 
 export class UsageStatsManager {
+  private rateLocksPath: string;
+  private rateLocks: Record<string, { usd: number; price: ApiPricing }> = Object.create(null);
+  private rateLocksLoaded = false;
+  private rateLocksDirty = false;
+  private rateLocksUnavailable = false;
   private geminiDir: string;
   private dataDirectoryNames: readonly DataDirectoryName[];
   private pricingCachePath: string;
@@ -425,14 +422,72 @@ export class UsageStatsManager {
     if (options?.dataDirectoryName && !ALLOWED_DATA_DIRECTORY_NAMES.includes(options.dataDirectoryName)) throw new Error('仅统计 Antigravity 正式版用量');
     this.dataDirectoryNames = options?.dataDirectoryName ? [options.dataDirectoryName] : ALLOWED_DATA_DIRECTORY_NAMES;
     const stateDir = options?.stateDir ?? defaultStateDir;
+    this.rateLocksPath = join(stateDir, 'usage-rate-locks.json');
     this.pricingCachePath = join(stateDir, 'api_pricing.json');
     this.remotePricingCachePath = join(stateDir, 'remote_pricing.json');
     this.remotePricingUrl = options?.remotePricingUrl ?? process.env.GRAVITYBOX_PRICING_FEED_URL ?? 'https://raw.githubusercontent.com/Enzoo404/gravitybox/main/assets/pricing-feed.json';
-    this.autoRemotePricingSync = Boolean(options?.remotePricingUrl || (this.geminiDir === defaultGeminiDir && stateDir === defaultStateDir));
+    this.autoRemotePricingSync = false;
     if (this.geminiDir === defaultGeminiDir && stateDir === defaultStateDir) {
       const cacheTag = options?.dataDirectoryName ?? 'antigravity';
       this.persistCachePath = join(homedir(), 'Library', 'Caches', 'GravityBox', `usage-db-cache-${cacheTag}-v1.json`);
     }
+  }
+
+  setAutoRemotePricingSync(enabled: boolean) { this.autoRemotePricingSync = enabled; }
+
+  async revalueHistory(confirmed = false): Promise<{ before: number; after: number; message: string }> {
+    if (!confirmed) throw Error('重新估算历史费用需要明确确认');
+    const before = (await this.getUsageSummary(true)).all_time.estimated_usd;
+    if (this.rateLocksUnavailable) throw Error('历史费率账本不可读，未重新估算');
+    const original = structuredClone(this.rateLocks);
+    const receipt = `${this.rateLocksPath}.revalue-${Date.now()}.json`;
+    // Preserve the old rates before touching the active ledger, including on crash.
+    await atomicJson(receipt, { version: 1, at: new Date().toISOString(), before, entries: original });
+    this.rateLocks = Object.create(null);
+    this.rateLocksDirty = true;
+    this.cachedSummary = null; this.lastAggregationKey = ''; this.snapshots.clear();
+    try {
+      const after = (await this.getUsageSummary(true)).all_time.estimated_usd;
+      await atomicJson(receipt, { version: 1, at: new Date().toISOString(), before, after, entries: original,
+        changes: Object.entries(this.rateLocks).filter(([key,value]) => original[key]?.usd !== value.usd)
+          .map(([key,value]) => ({ key, before: original[key]?.usd ?? null, after: value.usd })) });
+      return { before, after, message: `历史费用已重新估算：$${before.toFixed(2)} → $${after.toFixed(2)}；原费率与前后对照已保留` };
+    } catch (error) {
+      this.rateLocks = original; this.rateLocksDirty = false;
+      this.cachedSummary = null; this.lastAggregationKey = ''; this.snapshots.clear();
+      await atomicJson(this.rateLocksPath, { version: 1, entries: original });
+      throw error;
+    }
+  }
+
+  private async loadRateLocks(): Promise<void> {
+    if (this.rateLocksLoaded) return;
+    this.rateLocksLoaded = true;
+    try {
+      const data = JSON.parse(await readFile(this.rateLocksPath, 'utf8'));
+      if (data.version !== 1 || !data.entries || typeof data.entries !== 'object') throw Error('费率账本格式无效');
+      for (const [key, value] of Object.entries<any>(data.entries)) {
+        if (!/^[a-f0-9]{64}$/.test(key) || !Number.isFinite(value?.usd) || value.usd < 0 || !value.price) throw Error('费率账本条目无效');
+        this.rateLocks[key] = value;
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        this.rateLocksUnavailable = true;
+        this.pricingWarnings.push('历史费率账本不可读，停止重新计价；请保留原文件供恢复');
+      }
+    }
+  }
+
+  private lockedCost(event: GenerationEvent, price: ApiPricing | null): number | null {
+    if (this.rateLocksUnavailable || event.timestamp_seconds <= 0) return null;
+    if (event.event_key && Object.hasOwn(this.rateLocks, event.event_key)) return this.rateLocks[event.event_key]!.usd;
+    if (!price || ((event.cache_write_tokens ?? 0) > 0 && !Number.isFinite(price.cacheWrite))) return null;
+    const usd = calculateEstimatedUsd(event.input_tokens, event.output_tokens, event.cached_tokens, price, event.cache_write_tokens ?? 0);
+    if (event.event_key) {
+      this.rateLocks[event.event_key] = { usd, price: structuredClone(price) };
+      this.rateLocksDirty = true;
+    }
+    return usd;
   }
 
   setDataDirectoryName(name?: DataDirectoryName): void {
@@ -460,7 +515,7 @@ export class UsageStatsManager {
       const raw = JSON.parse(await readFile(this.persistCachePath, 'utf8'));
       if (raw && raw.version === 1 && typeof raw.entries === 'object' && raw.entries !== null) {
         for (const [k, v] of Object.entries(raw.entries as Record<string, any>)) {
-          if (v && typeof v.mtimeMs === 'number' && typeof v.size === 'number' && Array.isArray(v.events) && !v.hasError && !this.fileCache.has(k)) {
+          if (v && typeof v.mtimeMs === 'number' && typeof v.size === 'number' && Array.isArray(v.events) && v.events.every((e: GenerationEvent) => typeof e.event_key === 'string') && !v.hasError && !this.fileCache.has(k)) {
             this.fileCache.set(k, v);
           }
         }
@@ -900,6 +955,10 @@ export class UsageStatsManager {
 
       const assignedModel = modelId || label || '未知模型';
       const eventObj: GenerationEvent = {
+        event_key: createHash('sha256').update(JSON.stringify([
+          dbPath.split('/').pop(), row.idx, ProtobufReader.findField(blob, 4)?.toString('hex'),
+          assignedModel, rawInput, cachedTokens, cacheWriteTokens, outputTokens,
+        ])).digest('hex'),
         model: assignedModel,
         input_tokens: inputTokens,
         output_tokens: outputTokens,
@@ -994,8 +1053,9 @@ export class UsageStatsManager {
     const pricingSource = rawPricing ?? prices;
     return { rows: events.slice().reverse().slice(safeOffset, safeOffset + safeLimit).map(e => {
       const price = this.resolvePricing(pricingSource, e.model, e.timestamp_seconds);
-      const priced=!!price&&(!(e.cache_write_tokens??0)||Number.isFinite(price.cacheWrite)&&price.cacheWrite!>=0);
-      return { ...e, estimated_usd: priced ? calculateEstimatedUsd(e.input_tokens, e.output_tokens, e.cached_tokens, price!,e.cache_write_tokens??0) : null, priced };
+      const cost = this.lockedCost(e, price);
+      const { event_key: _key, ...publicEvent } = e;
+      return { ...publicEvent, estimated_usd: cost, priced: cost !== null };
     }), total: events.length, offset: safeOffset, limit: safeLimit, generated_at: summary.generated_at, snapshot_id: summary.snapshot_id, availability: summary.availability, scope: summary.scan_scope_description };
   }
 
@@ -1082,6 +1142,8 @@ export class UsageStatsManager {
 
     await this.savePersistentFileCache();
     const rawPricing = await this.getRawPricingTable();
+    await this.loadRateLocks();
+    if (this.rateLocksUnavailable && !this.pricingWarnings.some(w => w.includes('费率账本'))) this.pricingWarnings.push('历史费率账本不可读，未重新计价');
     const now = Math.floor(Date.now() / 1000);
     const pricing = await this.getPricingTable(now);
     if (this.autoRemotePricingSync) {
@@ -1150,8 +1212,8 @@ export class UsageStatsManager {
         entry.count++;
 
         const evPrice = this.resolvePricing(rawPricing, mKey, ev.timestamp_seconds);
-        if (evPrice && (!ev.cache_write_tokens || (Number.isFinite(evPrice.cacheWrite) && evPrice.cacheWrite! >= 0))) {
-          const evCost = calculateEstimatedUsd(ev.input_tokens, ev.output_tokens, ev.cached_tokens, evPrice, ev.cache_write_tokens ?? 0);
+        const evCost = this.lockedCost(ev, evPrice);
+        if (evCost !== null) {
           entry.cost += evCost;
           periodUsd += evCost;
         } else {
@@ -1167,9 +1229,9 @@ export class UsageStatsManager {
       for (const [mName, stats] of modelMap.entries()) {
         const currentPrice = this.resolvePricing(rawPricing, mName, now);
         const canonicalKey = matchPricingKeys(mName);
-        const isPriced = stats.cost > 0 || (stats.unpricedTokens === 0 && currentPrice !== null);
-        if (isPriced && currentPrice) {
-          pricedCount++;
+        const isPriced = stats.unpricedTokens === 0;
+        if (isPriced || stats.cost > 0) {
+          if (isPriced) pricedCount++; else unpricedCount++;
           const mUsd = Math.round(stats.cost * 1e8) / 1e8;
           byModel.push({
             model: mName,
@@ -1180,10 +1242,12 @@ export class UsageStatsManager {
             total_tokens: stats.total,
             request_count: stats.count,
             estimated_usd: mUsd,
-            priced: true,
+            priced: isPriced,
+            partiallyPriced: !isPriced,
+            unpriced_tokens: stats.unpricedTokens,
             pricingKey: canonicalKey || mName,
-            pricingStatus: priceStatus(currentPrice, now * 1000),
-            pricingProvenance: currentPrice.provenance ?? null,
+            pricingStatus: currentPrice ? priceStatus(currentPrice, now * 1000) : 'historical',
+            pricingProvenance: currentPrice?.provenance ?? null,
           });
         } else {
           unpricedCount++;
@@ -1197,6 +1261,7 @@ export class UsageStatsManager {
             request_count: stats.count,
             estimated_usd: 0,
             priced: false,
+            unpriced_tokens: stats.unpricedTokens,
           });
         }
       }
@@ -1324,6 +1389,7 @@ export class UsageStatsManager {
         const hash = createHash('sha256');
         for (const ev of allEvents) {
           hash.update(`${ev.model}|${ev.timestamp_seconds}|${ev.input_tokens}|${ev.output_tokens}|${ev.cached_tokens}|${ev.cache_write_tokens ?? 0}|${ev.total_tokens}\n`);
+          hash.update(`locked-cost:${ev.event_key ? this.rateLocks[ev.event_key]?.usd ?? 'unpriced' : 'unpriced'}\n`);
         }
         hash.update(JSON.stringify([pricing, this.calendarKey()]));
         return hash.digest('hex').slice(0, 20);
@@ -1332,6 +1398,11 @@ export class UsageStatsManager {
       pricing_warnings: [...this.pricingWarnings],
     };
 
+    if (this.rateLocksDirty) {
+      // Commit before exposing a new summary: never report an unlocked historical amount.
+      await atomicJson(this.rateLocksPath, { version: 1, entries: this.rateLocks });
+      this.rateLocksDirty = false;
+    }
     this.periodKey=calKey;
     this.lastAggregationKey=aggKey;
     this.cachedSummary = { data: summary, expiresAt: Date.now() + 30_000 };

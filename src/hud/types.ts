@@ -4,12 +4,26 @@
  */
 
 export type HudActivityPhase = 'idle' | 'generating' | 'executing';
+export type HudDataAvailability = 'loading' | 'ready' | 'partial' | 'cached' | 'unavailable';
+export type HudCapacitySource = 'explicit' | 'reference' | 'unknown';
 
 export interface ConversationHudMetrics {
   /** 目标会话 UUID (对应 ~/.gemini/antigravity/conversations/<id>.db) */
   conversationId: string;
+  /** 物理分栏稳定槽位标识 (用于同会话多分栏定向隔离) */
+  paneSlotId?: string;
   /** 会话代数版本号 (单调自增，用于防跨会话污染与异步迟到包篡改) */
   sessionRevision: number;
+  /** 同代单调递增消息序号 (拒绝同会话同代乱序旧包) */
+  metricsSequence?: number;
+  /** 数据可信度与可用性状态 */
+  availability?: HudDataAvailability;
+  /** 底层数据库/WAL 真实观测毫秒时间戳 (读失败回退旧缓存时不刷新) */
+  observedAt?: number | null;
+  /** 最近一次成功读取底层数据库的毫秒时间戳 */
+  lastSuccessAt?: number | null;
+  /** 读取失败的关联子会话数据库数量 */
+  failedChildCount?: number;
   /** 毫秒级快照生成时间戳 */
   updatedAt: number;
   /** 当前是否处于活跃流式生成中（含主智能体生成与子智能体后台运行） */
@@ -29,6 +43,7 @@ export interface ConversationHudMetrics {
     steps: number;
     /** 模型生成步数 (step_type === 15 计数) */
     modelSteps?: number;
+    samples?: { usage: number; timed: number; ttft: number };
     /** 工具执行步数 (工具调用 step 计数) */
     toolSteps?: number;
     /** 上下文自动压缩次数 (step_type === 23 CHECKPOINT 计数) */
@@ -128,6 +143,8 @@ export interface ConversationHudMetrics {
     hasExplicitDbCapacity?: boolean;
     /** 是否为未知模型回退容量 */
     isFallbackCapacity?: boolean;
+    /** 容量来源分类：explicit=数据库明确返回，reference=模型族参考阈值，unknown=未知模型默认参考 */
+    capacitySource?: HudCapacitySource;
     /** 当前上下文占有效容量比例 (0.0 ~ 1.0 夹紧值) */
     usedRatio: number;
     /** 上下文占比格式化 (如 "88%") */
@@ -180,6 +197,8 @@ export interface ParsedConversationStep {
   status: number;
   /** 步骤创建时间 (CortexStepMetadata.field 1 created_at) */
   createdAtSeconds?: number | null;
+  /** 原始 metadata 字节长度 (用于增量缓存前缀校验) */
+  metadataByteLength?: number;
   /** 工具实际启动时间 (CortexStepMetadata.field 32 started_at) */
   startedAtSeconds?: number | null;
   /** 步骤有效起始时间 (模型步取 created_at，工具步优先取 started_at) */

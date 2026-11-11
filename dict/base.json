@@ -1,7 +1,6 @@
 {
   "— narrow matched events by status, priority, or event details": "— 按状态、优先级或事件详情缩小匹配范围",
   "— specify at least one user, team, component, or resource (joined with": "— 指定至少一个用户、团队、组件或资源（使用",
-  "!text-black": "!text-black",
   "? This action cannot be undone.": "吗？此操作无法撤销。",
   ". I understand I can choose to opt out later whenever I want via my settings.": "。我理解我随时可以根据需要通过设置选择退出。",
   ". It is not visible in the agent's sandbox and is shared across all your projects.": "。该凭据在智能体沙箱中不可见，并在您的所有项目间共享。",
@@ -2430,7 +2429,6 @@
   "Issued to": "颁发给",
   "Issues": "议题",
   "It was already sent or couldn't be removed from the queue.": "消息已经发送或无法从队列中移除。",
-  "items-start overflow-y-auto overflow-x-hidden [&>*]:my-auto": "items-start overflow-y-auto overflow-x-hidden [&>*]:my-auto",
   "Its customizations are now available": "其自定义项现已可用",
   "JavaScript Result": "JavaScript 执行结果",
   "JetBrains Mono": "JetBrains Mono",
@@ -5134,5 +5132,8 @@
   "Zoom Level": "缩放级别",
   "Zoom out": "缩小",
   "Zoom Out": "缩小",
-  "Zoom out (-)": "缩小 (-)"
+  "Zoom out (-)": "缩小 (-)",
+  "Gemini 4 Carbon": "Gemini 4 Carbon",
+  "Gemini 4 Carbon Weekly Limit": "Gemini 4 Carbon 每周限额",
+  "Select model, current: {0}": "选择模型，当前：{0}"
 }

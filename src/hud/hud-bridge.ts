@@ -6,10 +6,13 @@ export const HUD_BRIDGE_BINDING_NAME = '__gravityboxHudBridge';
 
 export interface ActivePaneSession {
   targetId: string;
+  paneSlotId: string;
   cascadeId: string;
   conversationId: string;
   sessionRevision: number;
+  metricsSequence: number;
   modelId: string;
+  foregroundStreaming: boolean;
   isStreaming: boolean;
   activityPhase: HudActivityPhase;
   isSubagentRunning: boolean;
@@ -33,6 +36,9 @@ export class CdpHudBridge implements ICdpHudBridge {
   private readonly clientEventHandlers = new Set<(event: HudClientEvent) => void>();
   private pollTimer: NodeJS.Timeout | null = null;
   private pollInFlight = false;
+  private lastPollStartedAt = 0;
+  private sequenceCounter = 0;
+  private readonly basePollIntervalMs: number;
   private disposed = false;
 
   constructor(options?: {
@@ -48,9 +54,10 @@ export class CdpHudBridge implements ICdpHudBridge {
         conversationsDir: options?.conversationsDir,
       });
     const interval = options?.pollIntervalMs ?? 500;
+    this.basePollIntervalMs = interval;
     if (interval > 0) {
       this.pollTimer = setInterval(() => {
-        void this.pollActiveSessions();
+        void this.pollActiveSessions(false);
       }, interval);
       this.pollTimer.unref?.();
     }
@@ -114,79 +121,88 @@ export class CdpHudBridge implements ICdpHudBridge {
     }
 
     const cascadeId = String(parsed.cascadeId || 'default-pane');
+    const paneSlotId = String((parsed as { paneSlotId?: string }).paneSlotId || cascadeId);
     const conversationId = String(parsed.conversationId || '');
     if (!conversationId) return;
 
-    const paneKey = `${targetId}::${cascadeId}`;
+    const paneKey = `${targetId}::${paneSlotId}`;
 
     if (parsed.type === 'SESSION_DETACHED') {
       this.activePanes.delete(paneKey);
+      this.activePanes.delete(`${targetId}::${cascadeId}`);
       return;
     }
 
     const existing = this.activePanes.get(paneKey);
+    const sameConv = existing && existing.conversationId === conversationId ? existing : undefined;
+    const minNextRevision = sameConv
+      ? sameConv.sessionRevision
+      : (existing?.sessionRevision ?? 0) + 1;
     const nextRevision =
       typeof parsed.sessionRevision === 'number' && parsed.sessionRevision > 0
-        ? parsed.sessionRevision
-        : existing && existing.conversationId === conversationId
-        ? existing.sessionRevision
-        : (existing?.sessionRevision ?? 0) + 1;
+        ? Math.max(parsed.sessionRevision, minNextRevision)
+        : minNextRevision;
 
     const isSubagentRunning =
       typeof parsed.isSubagentRunning === 'boolean'
         ? parsed.isSubagentRunning
-        : existing && existing.conversationId === conversationId
-        ? existing.isSubagentRunning
+        : sameConv
+        ? sameConv.isSubagentRunning
         : false;
 
     const runningSubagentCount =
       typeof parsed.runningSubagentCount === 'number' && parsed.runningSubagentCount >= 0
         ? parsed.runningSubagentCount
         : isSubagentRunning
-        ? Math.max(1, existing?.runningSubagentCount ?? 1)
+        ? Math.max(1, sameConv?.runningSubagentCount ?? 1)
         : 0;
 
     const childConversationIds = Array.isArray(parsed.childConversationIds)
       ? parsed.childConversationIds.filter((id): id is string => typeof id === 'string' && id.length > 0)
-      : existing && existing.conversationId === conversationId
-      ? existing.childConversationIds
+      : sameConv
+      ? sameConv.childConversationIds
       : [];
 
-    const resolvedStreaming =
+    const foregroundStreaming =
       typeof parsed.isStreaming === 'boolean'
-        ? parsed.isStreaming || isSubagentRunning
-        : (existing?.isStreaming ?? false) || isSubagentRunning;
+        ? parsed.isStreaming
+        : (sameConv?.foregroundStreaming ?? false);
+    const resolvedStreaming = foregroundStreaming || isSubagentRunning;
     const resolvedPhase: HudActivityPhase = !resolvedStreaming
       ? 'idle'
       : parsed.activityPhase === 'generating' || parsed.activityPhase === 'executing'
       ? parsed.activityPhase
-      : existing?.activityPhase && existing.activityPhase !== 'idle'
-      ? existing.activityPhase
-      : isSubagentRunning && !parsed.isStreaming
+      : parsed.activityPhase === 'idle' && isSubagentRunning
+      ? 'executing'
+      : sameConv?.activityPhase && sameConv.activityPhase !== 'idle'
+      ? sameConv.activityPhase
+      : isSubagentRunning && !foregroundStreaming
       ? 'executing'
       : 'generating';
 
     const session: ActivePaneSession = {
       targetId,
+      paneSlotId,
       cascadeId,
       conversationId,
       sessionRevision: nextRevision,
+      metricsSequence: sameConv?.metricsSequence ?? 0,
       modelId:
         (typeof parsed.modelId === 'string' && parsed.modelId.trim()) ||
-        existing?.modelId ||
-        'gemini-3.8-flash',
+        sameConv?.modelId ||
+        '',
+      foregroundStreaming,
       isStreaming: resolvedStreaming,
       activityPhase: resolvedPhase,
       isSubagentRunning,
       runningSubagentCount,
       childConversationIds,
       lastUpdatedAt: Date.now(),
-      lastMetricsKey:
-        existing && existing.conversationId === conversationId ? existing.lastMetricsKey : '',
+      lastMetricsKey: sameConv ? sameConv.lastMetricsKey : '',
     };
 
     this.activePanes.set(paneKey, session);
-    void this.refreshPaneMetrics(paneKey, true);
+    void this.refreshPaneMetrics(paneKey, true).catch(() => {});
   }
 
   /**
@@ -197,31 +213,41 @@ export class CdpHudBridge implements ICdpHudBridge {
     const session = this.activePanes.get(paneKey);
     if (!session) return;
 
+    const nextSeq = ++this.sequenceCounter;
     const metrics = await this.engine.getConversationMetrics({
       conversationId: session.conversationId,
+      paneSlotId: session.paneSlotId,
       sessionRevision: session.sessionRevision,
+      metricsSequence: nextSeq,
       modelId: session.modelId,
-      isStreaming: session.isStreaming,
+      isStreaming: session.foregroundStreaming,
       activityPhase: session.activityPhase,
       isSubagentRunning: session.isSubagentRunning,
       runningSubagentCount: session.runningSubagentCount,
       childConversationIds: session.childConversationIds,
     });
 
-    // 若异步查询期间会话已被切换或移除，丢弃陈旧结果
+    // 若异步查询期间会话已被切换或移除，或已有更新序号的度量推入，丢弃陈旧结果
     const latestSession = this.activePanes.get(paneKey);
     if (
       !latestSession ||
       latestSession !== session ||
       latestSession.conversationId !== metrics.conversationId ||
-      latestSession.sessionRevision > metrics.sessionRevision
+      latestSession.sessionRevision > metrics.sessionRevision ||
+      latestSession.metricsSequence > nextSeq
     ) {
       return;
     }
 
     const fingerprint = JSON.stringify({
-      session: metrics.session, tokens: metrics.tokens, context: metrics.context,
-      isStreaming: metrics.isStreaming, activityPhase: metrics.activityPhase,
+      session: metrics.session,
+      tokens: metrics.tokens,
+      context: metrics.context,
+      availability: metrics.availability,
+      observedAt: metrics.observedAt,
+      failedChildCount: metrics.failedChildCount,
+      isStreaming: metrics.isStreaming,
+      activityPhase: metrics.activityPhase,
       isSubagentRunning: metrics.isSubagentRunning,
       runningSubagentCount: metrics.runningSubagentCount,
     });
@@ -229,10 +255,13 @@ export class CdpHudBridge implements ICdpHudBridge {
     if (!forcePush && latestSession.lastMetricsKey === fingerprint) {
       return;
     }
-    latestSession.lastMetricsKey = fingerprint;
-    latestSession.lastUpdatedAt = Date.now();
 
-    await this.pushMetricsToTarget(latestSession.targetId, metrics);
+    const pushed = await this.pushMetricsToTarget(latestSession.targetId, metrics);
+    if (pushed) {
+      latestSession.metricsSequence = nextSeq;
+      latestSession.lastMetricsKey = fingerprint;
+      latestSession.lastUpdatedAt = Date.now();
+    }
   }
 
   /**
@@ -248,28 +277,40 @@ export class CdpHudBridge implements ICdpHudBridge {
   private async pushMetricsToTarget(
     targetId: string,
     metrics: ConversationHudMetrics
-  ): Promise<void> {
+  ): Promise<boolean> {
     const target = this.targets.get(targetId);
-    if (!target) return;
+    if (!target) return false;
     const contextId = target.getContextId();
-    if (contextId === undefined) return;
+    if (contextId === undefined) return false;
     const serialized = JSON.stringify(metrics);
     try {
       await target.cdp.evaluate(
         `(globalThis.__gravityboxUpdateHudMetrics ? globalThis.__gravityboxUpdateHudMetrics(${serialized}) : globalThis.__GRAVITYBOX_HUD_V1__?.dispatchMetrics?.(${serialized}))`,
         contextId
       );
+      return true;
     } catch {
       // 忽略窗口关闭或导航瞬间的执行上下文失效
+      return false;
     }
   }
 
   /**
-   * 定时增量轮询所有活跃会话
+   * 定时增量轮询所有活跃会话（活跃流式会话按 500ms 高频轮询，全空闲时自动降频至 2000ms）
    */
-  public async pollActiveSessions(): Promise<void> {
+  public async pollActiveSessions(force = true): Promise<void> {
     if (this.disposed || this.pollInFlight || this.activePanes.size === 0) return;
+    if (!force && this.basePollIntervalMs > 0) {
+      const anyStreaming = [...this.activePanes.values()].some((p) => p.isStreaming);
+      const effectiveInterval = anyStreaming
+        ? this.basePollIntervalMs
+        : Math.max(this.basePollIntervalMs, 2000);
+      if (Date.now() - this.lastPollStartedAt < effectiveInterval - 20) {
+        return;
+      }
+    }
     this.pollInFlight = true;
+    this.lastPollStartedAt = Date.now();
     try {
       await Promise.allSettled(
         [...this.activePanes.keys()].map((paneKey) => this.refreshPaneMetrics(paneKey, false))

@@ -1,4 +1,4 @@
-import type { DatabaseSync as DatabaseSyncType } from 'node:sqlite';
+import { compactNumber, durationText } from '../metric-format.js';
 import { lstat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -6,24 +6,14 @@ import { homedir } from 'node:os';
 import type {
   ConversationHudMetrics,
   HudActivityPhase,
+  HudCapacitySource,
+  HudDataAvailability,
   ParsedConversationStep,
   ParsedGenMetadata,
 } from './types.js';
 import { resolveModelCapacity } from './model-catalog.js';
-import { projectProtobuf, type ProtoSelection } from '../protobuf-projection.js';
-
-// 精确拦截 node:sqlite 首次加载时的 ExperimentalWarning，不移除或破坏宿主进程的其它 warning 监听器
-const originalEmitWarning = process.emitWarning.bind(process);
-process.emitWarning = ((warning: string | Error, ...args: any[]) => {
-  const msg = typeof warning === 'string' ? warning : warning?.message ?? '';
-  const type = typeof warning === 'object' && warning ? warning.name : typeof args[0] === 'string' ? args[0] : (args[0]?.type ?? '');
-  if ((type === 'ExperimentalWarning' || String(msg).includes('SQLite')) && String(msg).includes('SQLite')) {
-    return;
-  }
-  return (originalEmitWarning as (...a: any[]) => void)(warning, ...args);
-}) as typeof process.emitWarning;
-
-const { DatabaseSync } = await import('node:sqlite');
+import { runHudDbScanInWorker } from '../sqlite-read.js';
+import type { HudWorkerRawStepRow } from '../sqlite-worker.js';
 
 const UUID_REGEX_GLOBAL = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
 const ACTIVE_STEP_STATUSES = new Set([1, 2, 8, 9]);
@@ -37,37 +27,6 @@ const SUBAGENT_TOOL_NAMES = new Set([
 const MAX_CACHED_CONVERSATIONS = 24;
 const ACTIVE_DB_RECENCY_MS = 5 * 60 * 1000;
 const INLINE_BLOB_LIMIT_BYTES = 65_536;
-
-const HUD_STEP_METADATA_PROJECTION: ProtoSelection = {
-  1: true,
-  4: { 2: true, 3: true, 8: true },
-  6: true,
-  7: true,
-  8: true,
-  9: true,
-  12: true,
-  22: true,
-  24: { 4: true, 8: true, 12: true, 20: true },
-  32: true,
-};
-
-const HUD_GEN_METADATA_PROJECTION: ProtoSelection = {
-  1: {
-    4: true,
-    9: { 10: { 1: true, 3: true, 4: true } },
-    11: true,
-    12: true,
-    19: true,
-    21: true,
-  },
-  2: true,
-  4: true,
-  3: {
-    14: true,
-    27: { 4: true, 8: true, 12: true, 20: true },
-    28: true,
-  },
-};
 
 /**
  * 64 位 BigInt 无符号 Varint 解码，彻底规避 32 位有符号位移溢出（如 2026+ 时间戳）
@@ -754,22 +713,10 @@ export function computeTps(
 }
 
 /**
- * 格式化紧凑 Token 读数 (如 23196078 -> "23.2M", 226412 -> "226K", 8312 -> "8.3K")
+ * 格式化紧凑 Token 读数 (如 23196078 -> "23.2M", 226412 -> "226K", 8312 -> "8.3K", 999600 -> "1M")
  */
 export function formatCompactTokenNumber(tokens: number, prefixTilde = false): string {
-  const safe = Math.max(0, Math.floor(Number.isFinite(tokens) ? tokens : 0));
-  if (safe === 0) return '0';
-  const tilde = prefixTilde ? '~' : '';
-  if (safe >= 1_000_000) {
-    const val = (safe / 1_000_000).toFixed(1).replace(/\.0$/, '');
-    return `${tilde}${val}M`;
-  }
-  if (safe >= 1_000) {
-    const rawK = safe / 1_000;
-    const val = rawK >= 100 ? Math.round(rawK).toString() : rawK.toFixed(1).replace(/\.0$/, '');
-    return `${tilde}${val}K`;
-  }
-  return `${tilde}${safe}`;
+  return `${prefixTilde && tokens > 0 ? '~' : ''}${compactNumber(tokens)}`;
 }
 
 /**
@@ -783,25 +730,17 @@ export function formatThousandsTokens(tokens: number): string {
 /**
  * 格式化用时 (如 1348 秒 -> "22 分 28 秒", 360 秒 -> "6 分 0 秒", 0 秒 -> "0 秒")
  */
-export function formatDurationSeconds(seconds: number, lang: 'zh' | 'en' = 'zh'): string {
-  const totalSec = Math.max(0, Math.round(Number.isFinite(seconds) ? seconds : 0));
-  if (totalSec === 0) {
-    return lang === 'en' ? '0s' : '0 秒';
-  }
-  const mins = Math.floor(totalSec / 60);
-  const secs = totalSec % 60;
-  if (mins === 0) {
-    return lang === 'en' ? `${secs}s` : `${secs} 秒`;
-  }
-  if (lang === 'en') {
-    return `${mins}m ${secs}s`;
-  }
-  return `${mins} 分 ${secs} 秒`;
-}
+export function formatDurationSeconds(seconds: number, lang: 'zh' | 'en' = 'zh'): string { return durationText(seconds, lang); }
 
 export interface ComputeHudMetricsInput {
   conversationId?: string;
+  paneSlotId?: string;
   sessionRevision?: number;
+  metricsSequence?: number;
+  availability?: HudDataAvailability;
+  observedAt?: number | null;
+  lastSuccessAt?: number | null;
+  failedChildCount?: number;
   isStreaming?: boolean;
   activityPhase?: HudActivityPhase;
   isSubagentRunning?: boolean;
@@ -825,6 +764,8 @@ export interface ComputeHudMetricsInput {
     firstTokenSeconds?: number | null;
     t_end?: number | null;
     endTimeSeconds?: number | null;
+    finishedGeneratingSeconds?: number | null;
+    completedAtSeconds?: number | null;
     rawInput?: number;
     rawInputTokens?: number;
     cachedTokens?: number;
@@ -877,15 +818,20 @@ export function buildConversationHudMetrics(input: ComputeHudMetricsInput): Conv
     const start = step.t_start ?? step.startTimeSeconds;
     const first = step.t_first_token ?? step.firstTokenSeconds;
     const end = step.t_end ?? step.endTimeSeconds;
-    const complete = (step.status ?? 3) === 3;
+    const rawStatus = step.status ?? 3;
+    // F-02: 纳管 status=3 (DONE) 以及上下文压缩归档为 status=5 (CLEARED) 且具备完成证据的历史模型步
+    const complete =
+      rawStatus === 3 ||
+      (rawStatus === 5 &&
+        (step.generation !== undefined ||
+          step.finishedGeneratingSeconds != null ||
+          step.completedAtSeconds != null ||
+          step.t_end != null));
     const hasInterval = validSeconds(start) && validSeconds(end) && end > start;
     const subagent = Boolean(step.isSubagentStep) || stepType === 127 ||
       Boolean(step.toolCallName && SUBAGENT_TOOL_NAMES.has(step.toolCallName));
     if (subagent) {
       detectedSubagents++;
-      if (input.allowDbActiveStepInference !== false && ACTIVE_STEP_STATUSES.has(step.status ?? 3)) {
-        detectedRunningSubagents++;
-      }
     }
     if (stepType === 15) {
       modelSteps++;
@@ -924,7 +870,7 @@ export function buildConversationHudMetrics(input: ComputeHudMetricsInput): Conv
       }
     } else if (!NON_TOOL_STEP_TYPES.has(stepType)) {
       toolSteps++;
-      if (hasInterval && !ACTIVE_STEP_STATUSES.has(step.status ?? 3)) {
+      if (hasInterval && !ACTIVE_STEP_STATUSES.has(rawStatus)) {
         toolDurationSeconds += end! - start!;
       }
     }
@@ -936,8 +882,9 @@ export function buildConversationHudMetrics(input: ComputeHudMetricsInput): Conv
   let compactionCount = 0;
   for (const step of contextSteps) {
     const stepType = step.step_type ?? step.stepType ?? 0;
+    const rawStatus = step.status ?? 3;
     if (stepType === 14) turns++;
-    if (stepType === 23 && (step.status ?? 3) === 3) compactionCount++;
+    if (stepType === 23 && (rawStatus === 3 || rawStatus === 5)) compactionCount++;
     if (stepType !== 15 || step.hasUsage === false) continue;
     const prompt = safeTokens(step.rawInput ?? step.rawInputTokens) +
       safeTokens(step.cachedTokens ?? step.cachedReadTokens) + safeTokens(step.cacheWriteTokens);
@@ -949,6 +896,7 @@ export function buildConversationHudMetrics(input: ComputeHudMetricsInput): Conv
   const genMeta = latestStep?.generation ?? input.genMetadata;
   const historicalModel = genMeta?.modelDisplayName || genMeta?.responseModel ||
     genMeta?.plannerModelName || latestStep?.modelName;
+  const hasExplicitModelEvidence = Boolean(historicalModel || (typeof input.modelId === 'string' && input.modelId.trim()));
   const modelSpec = resolveModelCapacity(historicalModel || input.modelId);
   const explicitCapacity = [
     input.modelCapacity, genMeta?.maxContextTokens, latestStep?.modelMaxTokens,
@@ -957,6 +905,11 @@ export function buildConversationHudMetrics(input: ComputeHudMetricsInput): Conv
   const capacityTokensCompact = explicitCapacity
     ? formatCompactTokenNumber(explicitCapacity)
     : `~${formatCompactTokenNumber(capacityTokens)}`;
+  const capacitySource: HudCapacitySource = explicitCapacity !== undefined
+    ? 'explicit'
+    : modelSpec.isFallback
+    ? 'unknown'
+    : 'reference';
   const stepCached = safeTokens(latestStep?.cachedTokens ?? latestStep?.cachedReadTokens);
   const stepUncached = safeTokens(latestStep?.rawInput ?? latestStep?.rawInputTokens) +
     safeTokens(latestStep?.cacheWriteTokens);
@@ -967,35 +920,46 @@ export function buildConversationHudMetrics(input: ComputeHudMetricsInput): Conv
   const cachedBarRatio = stepCached / denominator * 100;
   const uncachedBarRatio = stepUncached / denominator * 100;
   const latestOutput = safeTokens(latestStep?.outputTokens);
+  let latestActiveForegroundKind: 'model' | 'tool' | null = null;
+  if (input.allowDbActiveStepInference !== false) {
+    let turnFinished = false;
+    for (let index = contextSteps.length - 1; index >= 0; index--) {
+      const candidate = contextSteps[index]!;
+      const candidateType = candidate.step_type ?? candidate.stepType ?? 0;
+      if (candidateType === 14) break;
+      if (candidateType === 2 && (candidate.status ?? 3) === 3) {
+        turnFinished = true;
+        break;
+      }
+      const candidateStatus = candidate.status ?? 3;
+      const candidateEnd = candidate.t_end ?? candidate.endTimeSeconds;
+      if (!ACTIVE_STEP_STATUSES.has(candidateStatus) || candidateEnd != null) continue;
+      const isCandidateSubagent =
+        Boolean(candidate.isSubagentStep) ||
+        candidateType === 127 ||
+        Boolean(candidate.toolCallName && SUBAGENT_TOOL_NAMES.has(candidate.toolCallName));
+      if (isCandidateSubagent && !turnFinished) {
+        detectedRunningSubagents++;
+      }
+      if (input.allowDbActiveStepInference && latestActiveForegroundKind === null) {
+        if (candidateType === 15) {
+          latestActiveForegroundKind = 'model';
+        } else if (!NON_TOOL_STEP_TYPES.has(candidateType)) {
+          latestActiveForegroundKind = 'tool';
+        }
+      }
+    }
+  }
   const runningSubagentCount = Math.max(
     input.runningSubagentCount ?? 0, detectedRunningSubagents, input.isSubagentRunning ? 1 : 0
   );
   const isSubagentRunning = Boolean(input.isSubagentRunning || runningSubagentCount > 0);
   const isStreaming = Boolean(input.isStreaming || isSubagentRunning);
-  let dbActiveModelStep = false;
-  let dbActiveToolStep = false;
-  if (input.allowDbActiveStepInference) {
-    for (let index = contextSteps.length - 1; index >= 0; index--) {
-      const candidate = contextSteps[index]!;
-      const candidateType = candidate.step_type ?? candidate.stepType ?? 0;
-      if (candidateType === 14) break;
-      const candidateStatus = candidate.status ?? 3;
-      const candidateEnd = candidate.t_end ?? candidate.endTimeSeconds;
-      if (!ACTIVE_STEP_STATUSES.has(candidateStatus) || candidateEnd != null) continue;
-      if (candidateType === 15) {
-        dbActiveModelStep = true;
-        break;
-      }
-      if (!NON_TOOL_STEP_TYPES.has(candidateType)) {
-        dbActiveToolStep = true;
-      }
-    }
-  }
   let activityPhase: HudActivityPhase = 'idle';
   if (isStreaming) {
-    if (dbActiveModelStep) {
+    if (latestActiveForegroundKind === 'model') {
       activityPhase = 'generating';
-    } else if (dbActiveToolStep) {
+    } else if (latestActiveForegroundKind === 'tool') {
       activityPhase = 'executing';
     } else if (input.activityPhase === 'executing' || input.activityPhase === 'generating') {
       activityPhase = input.activityPhase;
@@ -1011,11 +975,28 @@ export function buildConversationHudMetrics(input: ComputeHudMetricsInput): Conv
   const totalTokens = uncachedInputTokens + cachedReadTokens + cacheWriteTokens + outputTokens;
   const inputTokens = uncachedInputTokens + cachedReadTokens + cacheWriteTokens;
   const cacheHitRate = inputTokens > 0 ? cachedReadTokens / inputTokens : 0;
+  const availability: HudDataAvailability = input.availability ?? 'ready';
+  const nowMs = Date.now();
+  const observedAt = input.observedAt !== undefined ? input.observedAt : (availability === 'unavailable' ? null : nowMs);
+  const lastSuccessAt = input.lastSuccessAt !== undefined ? input.lastSuccessAt : observedAt;
+  const resolvedModelId = !hasExplicitModelEvidence ? 'unknown' : modelSpec.modelId;
+  const resolvedModelDisplayName =
+    !hasExplicitModelEvidence
+      ? '—'
+      : genMeta?.modelDisplayName || modelSpec.displayName;
 
   return {
     conversationId: input.conversationId || 'default',
+    ...(input.paneSlotId ? { paneSlotId: input.paneSlotId } : {}),
     sessionRevision: input.sessionRevision ?? 1,
-    updatedAt: Date.now(),
+    ...(typeof input.metricsSequence === 'number' ? { metricsSequence: input.metricsSequence } : {}),
+    availability,
+    observedAt,
+    lastSuccessAt,
+    ...(typeof input.failedChildCount === 'number' && input.failedChildCount > 0
+      ? { failedChildCount: input.failedChildCount }
+      : {}),
+    updatedAt: observedAt ?? nowMs,
     isStreaming,
     activityPhase,
     isSubagentRunning,
@@ -1024,6 +1005,8 @@ export function buildConversationHudMetrics(input: ComputeHudMetricsInput): Conv
       turns,
       steps: input.totalStepsOverride ?? steps.length + Math.max(0, input.subagentSteps ?? 0),
       modelSteps,
+      samples: { usage: steps.filter(s => (s.step_type ?? s.stepType) === 15 && s.hasUsage !== false).length,
+        timed: timedOutputCount, ttft: validTtftCount },
       toolSteps,
       compactionCount,
       subagentCount: Math.max(input.subagentCount ?? detectedSubagents, runningSubagentCount),
@@ -1059,8 +1042,8 @@ export function buildConversationHudMetrics(input: ComputeHudMetricsInput): Conv
     },
     context: {
       hasUsageData: Boolean(latestStep),
-      modelId: modelSpec.modelId,
-      modelDisplayName: genMeta?.modelDisplayName || modelSpec.displayName,
+      modelId: resolvedModelId,
+      modelDisplayName: resolvedModelDisplayName,
       usedTokens,
       usedTokensCompact: formatCompactTokenNumber(usedTokens),
       usedTokensFormatted: formatThousandsTokens(usedTokens),
@@ -1071,6 +1054,7 @@ export function buildConversationHudMetrics(input: ComputeHudMetricsInput): Conv
       capacityTokensCompact,
       hasExplicitDbCapacity: explicitCapacity !== undefined,
       isFallbackCapacity: explicitCapacity === undefined,
+      capacitySource,
       usedRatio,
       usedRatioFormatted: `${(usedRatio * 100).toFixed(2)}%`,
       stepCacheRatio,
@@ -1106,6 +1090,12 @@ interface CachedConversationState {
   walSize: number;
   lastStepIdx: number;
   lastGenIdx: number;
+  headerChecksum: string;
+  genChecksum: string;
+  observedAt: number;
+  lastSuccessAt: number;
+  fromErrorFallback?: boolean;
+  parentMetaReadError?: boolean;
   hasDataColumn?: boolean;
   hasRenderInfoColumn?: boolean;
   hasStepPayloadColumn?: boolean;
@@ -1122,7 +1112,7 @@ interface CachedConversationState {
 
 /**
  * 零阻塞、单语句自动提交 (Auto-Commit) 会话指标增量采集引擎
- * 严禁显式 BEGIN 事务，100% 保障宿主 wal_checkpoint(TRUNCATE) 畅通无阻 (busy: 0)
+ * 通过只读 Worker 线程池执行短生命周期查询，严禁显式 BEGIN 事务，每条语句结束释放读取状态，避免长期持有 WAL 快照
  */
 export class ConversationMetricsEngine {
   private readonly conversationsDir: string;
@@ -1152,52 +1142,6 @@ export class ConversationMetricsEngine {
       const oldestKey = this.cache.keys().next().value;
       if (oldestKey === undefined) break;
       this.cache.delete(oldestKey);
-    }
-  }
-
-  private readStepMetadataSafe(
-    db: DatabaseSyncType,
-    idx: number,
-    inlineMetadata: Uint8Array | null | undefined,
-    metadataLen: number
-  ): Uint8Array | null {
-    if (inlineMetadata && inlineMetadata.length > 0) return inlineMetadata;
-    if (!Number.isSafeInteger(metadataLen) || metadataLen <= INLINE_BLOB_LIMIT_BYTES) return null;
-    try {
-      const stmt = db.prepare('SELECT substr(metadata, ?, ?) AS chunk FROM steps WHERE idx = ?');
-      const projected = projectProtobuf(
-        metadataLen,
-        (offset, length) => (stmt.get(offset + 1, length, idx) as { chunk?: Uint8Array } | undefined)?.chunk ?? new Uint8Array(0),
-        HUD_STEP_METADATA_PROJECTION
-      );
-      return projected.data;
-    } catch {
-      return null;
-    }
-  }
-
-  private readGenMetadataSafe(db: DatabaseSyncType, idx: number): ParsedGenMetadata | undefined {
-    const sizeRow = db
-      .prepare('SELECT length(data) AS dataLen FROM gen_metadata WHERE idx = ? AND data IS NOT NULL LIMIT 1')
-      .get(idx) as { dataLen?: number } | undefined;
-    const dataLen = Number(sizeRow?.dataLen ?? 0);
-    if (dataLen <= 0) return undefined;
-    if (dataLen <= INLINE_BLOB_LIMIT_BYTES) {
-      const row = db
-        .prepare('SELECT data FROM gen_metadata WHERE idx = ? AND data IS NOT NULL LIMIT 1')
-        .get(idx) as { data?: Uint8Array | null } | undefined;
-      return row?.data ? parseLatestGenMetadataBlob(row.data) : undefined;
-    }
-    try {
-      const stmt = db.prepare('SELECT substr(data, ?, ?) AS chunk FROM gen_metadata WHERE idx = ?');
-      const projected = projectProtobuf(
-        dataLen,
-        (offset, length) => (stmt.get(offset + 1, length, idx) as { chunk?: Uint8Array } | undefined)?.chunk ?? new Uint8Array(0),
-        HUD_GEN_METADATA_PROJECTION
-      );
-      return parseLatestGenMetadataBlob(projected.data);
-    } catch {
-      return undefined;
     }
   }
 
@@ -1245,6 +1189,7 @@ export class ConversationMetricsEngine {
 
     if (
       existing &&
+      !existing.fromErrorFallback &&
       existing.fileId === dbStat.fileId &&
       existing.mtimeMs === dbStat.mtimeMs &&
       existing.size === dbStat.size &&
@@ -1255,139 +1200,118 @@ export class ConversationMetricsEngine {
       return existing;
     }
 
-    let db: DatabaseSyncType | null = null;
     try {
-      db = new DatabaseSync(dbPath, { readOnly: true });
-      db.exec('PRAGMA query_only = ON; PRAGMA busy_timeout = 2000; PRAGMA read_uncommitted = ON;');
+      const recheckStepSet = new Set<number>();
+      let settledCnt = 0;
+      let settledTypeSum = 0;
+      let settledStatusSum = 0;
+      let settledLenSum = 0;
 
-      let hasDataColumn = existing?.hasDataColumn;
-      let hasRenderInfoColumn = existing?.hasRenderInfoColumn;
-      let hasStepPayloadColumn = existing?.hasStepPayloadColumn;
-      let hasTrajectoryMeta = existing?.hasTrajectoryMeta;
-      let hasParentMetadataBlob = existing?.hasParentMetadataBlob;
-      let trajectoryId = existing?.trajectoryId;
-      const referencedUuidsInMetaBlob = new Set<string>(existing?.referencedUuidsInMetaBlob ?? []);
-
-      if (
-        hasDataColumn === undefined ||
-        hasRenderInfoColumn === undefined ||
-        hasStepPayloadColumn === undefined
-      ) {
-        try {
-          const cols = db.prepare('PRAGMA table_info(steps)').all() as Array<{ name?: string }>;
-          const colSet = new Set(cols.map((c) => String(c.name ?? '')));
-          hasDataColumn = colSet.has('data');
-          hasRenderInfoColumn = colSet.has('render_info');
-          hasStepPayloadColumn = colSet.has('step_payload');
-        } catch {
-          hasDataColumn = false;
-          hasRenderInfoColumn = false;
-          hasStepPayloadColumn = false;
+      if (existing) {
+        const prevLastIdx = existing.lastStepIdx;
+        for (const s of existing.steps) {
+          const isIncompleteModelStep =
+            s.stepType === 15 &&
+            (!s.hasUsage || s.startTimeSeconds === null || s.endTimeSeconds === null);
+          if (
+            s.idx <= prevLastIdx &&
+            (ACTIVE_STEP_STATUSES.has(s.status) || s.idx >= prevLastIdx - 1 || isIncompleteModelStep)
+          ) {
+            recheckStepSet.add(s.idx);
+          } else if (s.idx <= prevLastIdx) {
+            settledCnt++;
+            settledTypeSum += (s.idx + 1) * s.stepType;
+            settledStatusSum += (s.idx + 1) * s.status;
+            const effectiveLen =
+              s.stepType === 14 || s.stepType === 23 || s.stepType === 101
+                ? 0
+                : (s.metadataByteLength ?? 0);
+            settledLenSum += (s.idx + 1) * effectiveLen;
+          }
         }
       }
 
-      {
-        try {
-          referencedUuidsInMetaBlob.clear();
-          hasParentMetadataBlob = false;
-          const tables = db
-            .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('trajectory_meta', 'trajectory_metadata_blob')")
-            .all() as Array<{ name?: string }>;
-          const tableSet = new Set(tables.map((t) => String(t.name ?? '')));
-          hasTrajectoryMeta = tableSet.has('trajectory_meta');
-          if (hasTrajectoryMeta && !trajectoryId) {
-            const tm = db
-              .prepare('SELECT trajectory_id FROM trajectory_meta LIMIT 1')
-              .get() as { trajectory_id?: string } | undefined;
-            if (tm?.trajectory_id) {
-              trajectoryId = String(tm.trajectory_id).toLowerCase();
-            }
+      const recheckGenSet = new Set<number>();
+      if (existing) {
+        for (const [genIdx, gen] of existing.generations.entries()) {
+          if (
+            !gen.usage ||
+            gen.timeToFirstTokenSeconds === undefined ||
+            gen.streamingDurationSeconds === undefined
+          ) {
+            recheckGenSet.add(genIdx);
           }
-          if (tableSet.has('trajectory_metadata_blob')) {
-            const tmbRows = db
-              .prepare('SELECT id, length(data) AS size FROM trajectory_metadata_blob WHERE data IS NOT NULL LIMIT 4')
-              .all() as Array<{ id: string; size: number }>;
-            if (tmbRows.length > 0) {
-              hasParentMetadataBlob = true;
-              for (const r of tmbRows) {
-                const statement = db.prepare('SELECT substr(data, ?, ?) AS chunk FROM trajectory_metadata_blob WHERE id = ?');
-                const projected = projectProtobuf(r.size,
-                  (offset, length) => (statement.get(offset + 1, length, r.id) as { chunk: Uint8Array }).chunk,
-                  { 5: true, 6: true });
-                for (const u of parentReferences(projected.data)) {
-                  referencedUuidsInMetaBlob.add(u);
-                }
+        }
+      }
+
+      const workerRes = await runHudDbScanInWorker({
+        dbPath,
+        inlineBlobLimitBytes: INLINE_BLOB_LIMIT_BYTES,
+        knownColumns:
+          existing &&
+          existing.hasDataColumn !== undefined &&
+          existing.hasRenderInfoColumn !== undefined &&
+          existing.hasStepPayloadColumn !== undefined
+            ? {
+                hasDataColumn: existing.hasDataColumn,
+                hasRenderInfoColumn: existing.hasRenderInfoColumn,
+                hasStepPayloadColumn: existing.hasStepPayloadColumn,
               }
-            } else {
-              hasParentMetadataBlob = false;
+            : undefined,
+        cachedTrajectoryId: existing?.trajectoryId,
+        canIncremental: existing
+          ? {
+              prevLastStepIdx: existing.lastStepIdx,
+              prevStepsCount: existing.steps.length,
+              prevHeaderChecksum: existing.headerChecksum,
+              prevSettledChecksum: `${settledCnt}:${settledTypeSum}:${settledStatusSum}:${settledLenSum}`,
+              prevLastGenIdx: existing.lastGenIdx,
+              prevGenChecksum: existing.genChecksum,
+              recheckStepIndices: [...recheckStepSet],
+              recheckGenIndices: [...recheckGenSet],
             }
-          } else if (hasParentMetadataBlob === undefined) {
-            hasParentMetadataBlob = false;
+          : undefined,
+      });
+
+      const {
+        hasDataColumn,
+        hasRenderInfoColumn,
+        hasStepPayloadColumn,
+        hasTrajectoryMeta,
+        hasParentMetadataBlob,
+        parentMetaReadError,
+        trajectoryId,
+        metaBlobProjectedSlices,
+        maxIdx,
+        headerChecksum,
+        lastGenIdx,
+        genChecksum,
+        fullRescan,
+        fullGenRescan,
+        appendedSteps,
+        recheckedSteps,
+        genBlobs,
+      } = workerRes;
+
+      const referencedUuidsInMetaBlob = new Set<string>(
+        parentMetaReadError ? existing?.referencedUuidsInMetaBlob ?? [] : []
+      );
+      if (!parentMetaReadError) {
+        for (const slice of metaBlobProjectedSlices) {
+          for (const u of parentReferences(slice)) {
+            referencedUuidsInMetaBlob.add(u);
           }
-        } catch {
-          hasTrajectoryMeta = false;
-          hasParentMetadataBlob = false;
         }
       }
 
-      const summaryRow = db
-        .prepare('SELECT COUNT(*) as totalCount, COALESCE(MAX(idx), -1) as maxIdx FROM steps')
-        .get() as { totalCount?: number; maxIdx?: number } | undefined;
-
-      const totalCount = Number(summaryRow?.totalCount ?? 0);
-      const maxIdx = Number(summaryRow?.maxIdx ?? -1);
-
-      let baseSteps: ParsedConversationStep[] = [];
-      let lastIdx = -1;
-      const childConversationIds = new Set<string>(existing?.childConversationIds ?? []);
-
-      const canReuse = existing && existing.fileId === dbStat.fileId &&
-        existing.lastStepIdx <= maxIdx && existing.steps.length <= totalCount;
-      if (canReuse) {
-        baseSteps = [...existing.steps];
-        lastIdx = existing.lastStepIdx;
-      }
-
-      const prevLastIdx = lastIdx;
+      let baseSteps: ParsedConversationStep[] =
+        !fullRescan && existing ? [...existing.steps] : [];
+      let lastIdx = !fullRescan && existing ? existing.lastStepIdx : -1;
+      const childConversationIds = new Set<string>();
       const selfLower = selfConversationId.toLowerCase();
       const selfTrajLower = trajectoryId?.toLowerCase() ?? '';
 
-      const buildStepSelectColumns = (singleRow = false) => {
-        const metaExpr = singleRow
-          ? `CASE WHEN length(metadata) <= ${INLINE_BLOB_LIMIT_BYTES} THEN metadata ELSE NULL END as metadata, COALESCE(length(metadata), 0) as metadata_len`
-          : `CASE WHEN step_type NOT IN (14, 23, 101) AND length(metadata) <= ${INLINE_BLOB_LIMIT_BYTES} THEN metadata ELSE NULL END as metadata, CASE WHEN step_type NOT IN (14, 23, 101) THEN COALESCE(length(metadata), 0) ELSE 0 END as metadata_len`;
-        const extraCols: string[] = [];
-        if (hasDataColumn) {
-          extraCols.push(`CASE WHEN step_type IN (127, 132) AND length(data) <= ${INLINE_BLOB_LIMIT_BYTES} THEN data ELSE NULL END as data`);
-        }
-        if (hasRenderInfoColumn) {
-          extraCols.push(`CASE WHEN step_type IN (127, 132) AND length(render_info) <= ${INLINE_BLOB_LIMIT_BYTES} THEN render_info ELSE NULL END as render_info`);
-        }
-        if (hasStepPayloadColumn) {
-          extraCols.push(`CASE WHEN step_type IN (127, 132) THEN substr(step_payload, 1, ${INLINE_BLOB_LIMIT_BYTES}) ELSE NULL END as step_payload`);
-        }
-        return ['idx', 'step_type', 'status', metaExpr, ...extraCols].join(', ');
-      };
-
-      type RawStepQueryRow = {
-        idx: number;
-        step_type: number;
-        status: number;
-        metadata: Uint8Array | null;
-        metadata_len: number;
-        data?: Uint8Array | null;
-        render_info?: Uint8Array | null;
-        step_payload?: Uint8Array | null;
-      };
-
-      const parseStepRow = (row: RawStepQueryRow): ParsedConversationStep => {
-        const effectiveMeta = this.readStepMetadataSafe(
-          db!,
-          Number(row.idx),
-          row.metadata,
-          Number(row.metadata_len ?? 0)
-        );
-        // 优先从精准的 render_info 提取子智能体会话 ID，缺失时再回退 step_payload
+      const parseStepRow = (row: HudWorkerRawStepRow): ParsedConversationStep => {
         const extraBlobs =
           row.render_info && row.render_info.length > 0
             ? [row.render_info]
@@ -1398,77 +1322,44 @@ export class ConversationMetricsEngine {
           Number(row.idx),
           Number(row.step_type),
           Number(row.status),
-          effectiveMeta,
+          row.metadata,
           row.data,
           extraBlobs
         );
-        if (parsed.childConversationIds) {
-          for (const cid of parsed.childConversationIds) {
-            if (cid !== selfLower && cid !== selfTrajLower) {
-              childConversationIds.add(cid);
-            }
-          }
-        }
+        parsed.metadataByteLength = Number(row.metadata_len ?? 0);
         return parsed;
       };
 
-      if (maxIdx > lastIdx || baseSteps.length !== totalCount) {
-        if (baseSteps.length > totalCount) {
-          baseSteps = [];
-          lastIdx = -1;
-        }
-        const sql = `SELECT ${buildStepSelectColumns(false)} FROM steps WHERE idx > ? ORDER BY idx ASC`;
-        const rows = db.prepare(sql).all(lastIdx) as RawStepQueryRow[];
-
-        for (const row of rows) {
-          const parsed = parseStepRow(row);
-          baseSteps.push(parsed);
-          if (parsed.idx > lastIdx) {
-            lastIdx = parsed.idx;
-          }
+      for (const row of appendedSteps) {
+        const parsed = parseStepRow(row);
+        baseSteps.push(parsed);
+        if (parsed.idx > lastIdx) {
+          lastIdx = parsed.idx;
         }
       }
-
-      // 重查所有此前处于活跃态的步骤以及最近 2 步尾部记录，彻底杜绝并发工具超过 5 个或先落盘 status=3 后补写 model_usage 导致的漏计
-      const recheckSet = new Set<number>();
-      for (const s of baseSteps) {
-        if (s.idx <= prevLastIdx && (ACTIVE_STEP_STATUSES.has(s.status) || s.idx >= prevLastIdx - 1)) {
-          recheckSet.add(s.idx);
-        }
+      if (maxIdx > lastIdx) {
+        lastIdx = maxIdx;
       }
 
-      if (recheckSet.size > 0) {
-        const singleStmt = db.prepare(`SELECT ${buildStepSelectColumns(true)} FROM steps WHERE idx = ? LIMIT 1`);
-        for (const activeIdx of recheckSet) {
-          const row = singleStmt.get(activeIdx) as RawStepQueryRow | undefined;
-          if (row) {
-            const updated = parseStepRow(row);
-            const pos = baseSteps.findIndex((s) => s.idx === activeIdx);
-            if (pos !== -1) baseSteps[pos] = updated;
-          }
-        }
+      for (const row of recheckedSteps) {
+        const updated = parseStepRow(row);
+        const pos = baseSteps.findIndex((s) => s.idx === updated.idx);
+        if (pos !== -1) baseSteps[pos] = updated;
       }
 
-      let lastGenIdx = -1;
       const generations = new Map<number, ParsedGenMetadata>(
-        canReuse ? existing?.generations : []
+        !fullGenRescan && existing ? existing.generations : []
       );
-      try {
-        const maxRow = db.prepare('SELECT MAX(idx) AS maxIdx FROM gen_metadata').get() as { maxIdx?: number };
-        lastGenIdx = Number(maxRow?.maxIdx ?? -1);
-        const sameGenerationSeries = canReuse && lastGenIdx >= (existing?.lastGenIdx ?? -1);
-        if (!sameGenerationSeries) generations.clear();
-        const genRows = db.prepare(
-          'SELECT idx FROM gen_metadata WHERE data IS NOT NULL AND idx >= ? ORDER BY idx'
-        ).all(sameGenerationSeries ? existing?.lastGenIdx ?? -1 : -1) as Array<{ idx: number }>;
-        for (const row of genRows) {
-          const parsed = this.readGenMetadataSafe(db, Number(row.idx));
-          if (parsed) generations.set(Number(row.idx), parsed);
-        }
-        for (const key of generations.keys()) {
-          if (key > lastGenIdx) generations.delete(key);
-        }
-      } catch {}
+      if (fullGenRescan) {
+        generations.clear();
+      }
+      for (const item of genBlobs) {
+        const parsed = parseLatestGenMetadataBlob(item.data);
+        generations.set(item.idx, parsed);
+      }
+      for (const key of generations.keys()) {
+        if (key > lastGenIdx) generations.delete(key);
+      }
 
       baseSteps = baseSteps.map(step => ({ ...step, generation: undefined }));
       const stepByIndex = new Map(baseSteps.map(step => [step.idx, step]));
@@ -1485,16 +1376,14 @@ export class ConversationMetricsEngine {
       }
       const latestModelStep = [...baseSteps].reverse().find(step => step.stepType === 15 && step.hasUsage);
       const genMetadata = latestModelStep?.generation;
-      childConversationIds.clear();
       for (const step of baseSteps) {
         for (const childId of step.childConversationIds ?? []) {
           if (childId !== selfLower && childId !== selfTrajLower) childConversationIds.add(childId);
         }
       }
 
-      db.close();
-      db = null;
-
+      const nowMs = Date.now();
+      const observedAt = Math.max(Math.round(dbStat.mtimeMs), Math.round(walMtimeMs)) || nowMs;
       const nextState: CachedConversationState = {
         fileId: dbStat.fileId,
         mtimeMs: dbStat.mtimeMs,
@@ -1503,6 +1392,12 @@ export class ConversationMetricsEngine {
         walSize,
         lastStepIdx: lastIdx,
         lastGenIdx,
+        headerChecksum,
+        genChecksum,
+        observedAt,
+        lastSuccessAt: nowMs,
+        fromErrorFallback: false,
+        parentMetaReadError,
         hasDataColumn,
         hasRenderInfoColumn,
         hasStepPayloadColumn,
@@ -1518,16 +1413,18 @@ export class ConversationMetricsEngine {
       this.setCachedState(dbPath, nextState);
       return nextState;
     } catch {
-      try {
-        db?.close();
-      } catch {}
-      return existing ?? null;
+      if (existing) {
+        return { ...existing, fromErrorFallback: true };
+      }
+      return null;
     }
   }
 
   public async getConversationMetrics(options: {
     conversationId: string;
+    paneSlotId?: string;
     sessionRevision?: number;
+    metricsSequence?: number;
     modelId?: string;
     isStreaming?: boolean;
     activityPhase?: HudActivityPhase;
@@ -1538,7 +1435,9 @@ export class ConversationMetricsEngine {
   }): Promise<ConversationHudMetrics> {
     const {
       conversationId,
+      paneSlotId,
       sessionRevision = 1,
+      metricsSequence,
       modelId,
       isStreaming = false,
       activityPhase,
@@ -1553,7 +1452,12 @@ export class ConversationMetricsEngine {
     if (!mainState) {
       return buildConversationHudMetrics({
         conversationId,
+        paneSlotId,
         sessionRevision,
+        metricsSequence,
+        availability: 'unavailable',
+        observedAt: null,
+        lastSuccessAt: null,
         isStreaming,
         activityPhase,
         isSubagentRunning,
@@ -1571,6 +1475,7 @@ export class ConversationMetricsEngine {
     let combinedSteps = mainState.steps;
     let totalSubagentSteps = 0;
     let activeChildSubagents = 0;
+    let failedChildCount = 0;
     const verifiedChildIds = new Set<string>();
 
     const candidateChildIds = new Set<string>(mainState.childConversationIds);
@@ -1598,10 +1503,21 @@ export class ConversationMetricsEngine {
             childId === mainIdLower || childId === mainTrajLower) continue;
         processedEdges.add(edgeKey);
         try {
-          const childState = await this.readSingleDbState(this.resolveDbPath(childId), childId);
-          if (!childState) continue;
+          const childDbPath = this.resolveDbPath(childId);
+          const childState = await this.readSingleDbState(childDbPath, childId);
+          if (!childState) {
+            if (edge.explicit) failedChildCount++;
+            continue;
+          }
+          if (childState.fromErrorFallback) {
+            failedChildCount++;
+          }
           const belongsToParent = childState.referencedUuidsInMetaBlob.has(edge.parentId) ||
             (edge.explicit && childState.referencedUuidsInMetaBlob.has(mainIdLower));
+          if (childState.parentMetaReadError) {
+            failedChildCount++;
+            continue;
+          }
           if (childState.hasParentMetadataBlob) {
             if (!belongsToParent) continue;
           } else if (!edge.explicit || childState.hasTrajectoryMeta) {
@@ -1610,36 +1526,77 @@ export class ConversationMetricsEngine {
           verifiedChildIds.add(childId);
           totalSubagentSteps += childState.steps.length;
           const recent = nowMs - Math.max(childState.mtimeMs, childState.walMtimeMs) <= ACTIVE_DB_RECENCY_MS;
-          if (recent && childState.steps.some(step => ACTIVE_STEP_STATUSES.has(step.status) &&
-              step.completedAtSeconds == null && step.finishedGeneratingSeconds == null)) {
-            activeChildSubagents++;
+          if (recent) {
+            let childActive = false;
+            for (let idx = childState.steps.length - 1; idx >= 0; idx--) {
+              const step = childState.steps[idx]!;
+              if (step.stepType === 14) break;
+              if (step.stepType === 2 && step.status === 3) break;
+              if (ACTIVE_STEP_STATUSES.has(step.status) && step.endTimeSeconds == null) {
+                childActive = true;
+                break;
+              }
+            }
+            if (childActive) {
+              activeChildSubagents++;
+            }
           }
           descendants.push(...childState.steps);
           for (const nested of childState.childConversationIds) {
             pendingChildren.push({ childId: nested, parentId: childId, explicit: true });
           }
-        } catch {}
+        } catch {
+          if (edge.explicit) failedChildCount++;
+        }
       }
       combinedSteps = [...mainState.steps, ...descendants];
     }
 
+    const normalizedContextSteps =
+      verifiedChildIds.size > 0 && activeChildSubagents === 0
+        ? mainState.steps.map((step) => {
+            if (
+              step.isSubagentStep &&
+              step.childConversationIds &&
+              step.childConversationIds.length > 0 &&
+              step.childConversationIds.every((cid) => verifiedChildIds.has(cid.toLowerCase())) &&
+              ACTIVE_STEP_STATUSES.has(step.status)
+            ) {
+              return { ...step, status: 3 };
+            }
+            return step;
+          })
+        : mainState.steps;
+
     const effectiveRunningSubagents = Math.max(runningSubagentCount, activeChildSubagents);
     const effectiveSubagentRunning = Boolean(isSubagentRunning || effectiveRunningSubagents > 0);
+    const availability: HudDataAvailability = mainState.fromErrorFallback
+      ? 'cached'
+      : failedChildCount > 0 || mainState.parentMetaReadError || combinedSteps.some(s => s.stepType === 15 && !s.hasUsage)
+      ? 'partial'
+      : 'ready';
 
     const metrics = buildConversationHudMetrics({
       conversationId,
+      paneSlotId,
       sessionRevision,
-      isStreaming: isStreaming || effectiveSubagentRunning,
+      metricsSequence,
+      availability,
+      observedAt: mainState.observedAt,
+      lastSuccessAt: mainState.lastSuccessAt,
+      failedChildCount,
+      // 传入原始前台 isStreaming，使 buildConversationHudMetrics 能准确区分“前台模型生成（常亮蓝）”与“仅后台子智能体运行（呼吸蓝）”
+      isStreaming,
       activityPhase,
       isSubagentRunning: effectiveSubagentRunning,
       runningSubagentCount: effectiveRunningSubagents,
-      subagentCount: verifiedChildIds.size,
+      subagentCount: dbPathOverride ? undefined : verifiedChildIds.size,
       subagentSteps: totalSubagentSteps,
       totalStepsOverride: mainState.steps.length + totalSubagentSteps,
       allowDbActiveStepInference: mainIsRecent,
       modelId,
       genMetadata: mainState.genMetadata,
-      contextSteps: mainState.steps,
+      contextSteps: normalizedContextSteps,
       steps: combinedSteps,
     });
 

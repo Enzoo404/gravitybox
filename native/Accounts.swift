@@ -5,7 +5,7 @@ final class AccountsPage: NSObject {
     unowned let app: Assistant
     let view: NSView
 
-    let autoSwitchToggle = NSSwitch()
+    let autoSwitchToggle = DesignSwitch()
     let autoSwitchBadgeBox = NSBox()
     let autoSwitchBadgeIcon = symbol("arrow.triangle.2.circlepath", size: 13.5, color: Design.blue)
     let autoSwitchStatusBadge = pillBadge("已停用", color: Design.inactivePill)
@@ -51,11 +51,14 @@ final class AccountsPage: NSObject {
         let cardDivider: NSView
         let qRow1: NSView
         let qRow2: NSView
+        let qRow3: NSView
         let bar1: QuotaBarView
         let bar2: QuotaBarView
         let barClaude5h: QuotaBarView
         let barClaudeWeek: QuotaBarView
         let barArgon: QuotaBarView
+        let barCarbon: QuotaBarView
+        let extraStandaloneStack: NSStackView
         let authWarningLabel: NSTextField
         let quotaWarningLabel: NSTextField
         let refreshErrorLabel: NSTextField
@@ -79,11 +82,14 @@ final class AccountsPage: NSObject {
             cardDivider: NSView,
             qRow1: NSView,
             qRow2: NSView,
+            qRow3: NSView,
             bar1: QuotaBarView,
             bar2: QuotaBarView,
             barClaude5h: QuotaBarView,
             barClaudeWeek: QuotaBarView,
             barArgon: QuotaBarView,
+            barCarbon: QuotaBarView,
+            extraStandaloneStack: NSStackView,
             authWarningLabel: NSTextField,
             quotaWarningLabel: NSTextField,
             refreshErrorLabel: NSTextField,
@@ -106,11 +112,14 @@ final class AccountsPage: NSObject {
             self.cardDivider = cardDivider
             self.qRow1 = qRow1
             self.qRow2 = qRow2
+            self.qRow3 = qRow3
             self.bar1 = bar1
             self.bar2 = bar2
             self.barClaude5h = barClaude5h
             self.barClaudeWeek = barClaudeWeek
             self.barArgon = barArgon
+            self.barCarbon = barCarbon
+            self.extraStandaloneStack = extraStandaloneStack
             self.authWarningLabel = authWarningLabel
             self.quotaWarningLabel = quotaWarningLabel
             self.refreshErrorLabel = refreshErrorLabel
@@ -141,6 +150,7 @@ final class AccountsPage: NSObject {
         saveCurrentBtn.bezelColor = .controlAccentColor
         let refreshQuotaBtn = QuotaRefreshButton(target: nil, action: #selector(refreshAllQuotas))
 
+        (toggleCollapseAllButton as? DesignButton)?.isQuietAccessory = true
         toggleCollapseAllButton.image = NSImage(
             systemSymbolName: isAllCollapsedMode ? "chevron.down" : "chevron.up",
             accessibilityDescription: nil
@@ -148,7 +158,7 @@ final class AccountsPage: NSObject {
         toggleCollapseAllButton.image?.isTemplate = true
         toggleCollapseAllButton.imagePosition = .imageLeading
         toggleCollapseAllButton.title = isAllCollapsedMode ? "展开配额" : "收起配额"
-        toggleCollapseAllButton.toolTip = isAllCollapsedMode ? "展开所有账号的详细配额进度条" : "收起所有账号的配额进度条，仅展示紧凑摘要"
+        toggleCollapseAllButton.toolTip = nil
         toggleCollapseAllButton.setAccessibilityLabel(toggleCollapseAllButton.title)
 
         let headerActions = horizontal([toggleCollapseAllButton, refreshQuotaBtn, saveCurrentBtn], spacing: 8)
@@ -201,7 +211,6 @@ final class AccountsPage: NSObject {
         let policySub = text("当前账号配额耗尽或偏低时，智能评估并推荐充裕备用账号，确认后安全切换", size: 11, color: Design.secondary)
         policySub.lineBreakMode = .byTruncatingTail
         policySub.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        policySub.toolTip = policySub.stringValue
 
         let typographyColumn = vertical([titleRow, policySub], spacing: 2)
         typographyColumn.alignment = .leading
@@ -280,7 +289,7 @@ final class AccountsPage: NSObject {
         fetchPolicy()
     }
 
-    private static func formatCollapsedQuotaSummary(g5h: Int?, gWeek: Int?, c5h: Int?, cWeek: Int?, argonPct: Int?) -> String {
+    private static func formatCollapsedQuotaSummary(g5h: Int?, gWeek: Int?, c5h: Int?, cWeek: Int?, argonPct: Int?, carbonPct: Int?) -> String {
         var parts: [String] = []
         if let gPct = g5h ?? gWeek {
             parts.append("Gemini \(gPct)%")
@@ -290,6 +299,9 @@ final class AccountsPage: NSObject {
         }
         if let aPct = argonPct {
             parts.append("Argon \(aPct)%")
+        }
+        if let cbPct = carbonPct {
+            parts.append("Carbon \(cbPct)%")
         }
         guard !parts.isEmpty else { return "· 配额待刷新" }
         return "· " + parts.joined(separator: " · ")
@@ -314,7 +326,7 @@ final class AccountsPage: NSObject {
             accessibilityDescription: nil
         )?.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 10.5, weight: .semibold))
         toggleCollapseAllButton.image?.isTemplate = true
-        toggleCollapseAllButton.toolTip = allCollapsed ? "展开所有账号的详细配额进度条" : "收起所有账号的配额进度条，仅展示紧凑摘要"
+        toggleCollapseAllButton.toolTip = nil
         toggleCollapseAllButton.setAccessibilityLabel(title)
         toggleCollapseAllButton.invalidateIntrinsicContentSize()
     }
@@ -390,9 +402,10 @@ final class AccountsPage: NSObject {
         titleRow.detachesHiddenViews = true
 
         let emailLbl = text(email, size: 11, color: .secondaryLabelColor)
+        enableTextCopy(emailLbl, title: "复制完整邮箱")
         emailLbl.font = .systemFont(ofSize: 11.5, weight: .regular)
         emailLbl.lineBreakMode = .byTruncatingMiddle
-        emailLbl.setContentCompressionResistancePriority(NSLayoutConstraint.Priority(215), for: .horizontal)
+        emailLbl.setContentCompressionResistancePriority(NSLayoutConstraint.Priority(242), for: .horizontal)
         emailLbl.setContentHuggingPriority(.defaultHigh, for: .horizontal)
 
         let collapsedSummaryLabel = text("", size: 11, weight: .medium, color: Design.inactivePill)
@@ -418,7 +431,7 @@ final class AccountsPage: NSObject {
         swBtn.identifier = NSUserInterfaceItemIdentifier(id)
         swBtn.controlSize = .small
         swBtn.bezelColor = nil
-        swBtn.toolTip = "切换至账号 \(accountTitle)"
+        swBtn.toolTip = nil
         swBtn.setAccessibilityLabel("切换至账号 \(accountTitle)")
         swBtn.setContentHuggingPriority(.required, for: .horizontal)
         swBtn.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
@@ -426,23 +439,29 @@ final class AccountsPage: NSObject {
         let singleRefreshBtn = QuotaRefreshButton(target: self, action: #selector(refreshSingleAccountById(_:)))
         singleRefreshBtn.identifier = NSUserInterfaceItemIdentifier(id)
         singleRefreshBtn.controlSize = .small
-        singleRefreshBtn.toolTip = "仅刷新此账号配额"
+        singleRefreshBtn.toolTip = nil
+        singleRefreshBtn.isHidden = true
         singleRefreshBtn.setAccessibilityLabel("刷新账号 \(accountTitle) 配额")
         singleRefreshBtn.setContentHuggingPriority(.required, for: .horizontal)
         singleRefreshBtn.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
 
-        let actionsButton = button("…", target: self, action: #selector(showAccountActions(_:)))
-        actionsButton.identifier = NSUserInterfaceItemIdentifier(id); actionsButton.setAccessibilityLabel("账号操作 · " + accountTitle)
+        let actionsButton = button("", target: self, action: #selector(showAccountActions(_:)))
+        (actionsButton as? DesignButton)?.isQuietAccessory = true
+        actionsButton.image = NSImage(systemSymbolName: "ellipsis", accessibilityDescription: nil)?.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 12, weight: .semibold))
+        actionsButton.image?.isTemplate = true
+        actionsButton.identifier = NSUserInterfaceItemIdentifier(id)
+        actionsButton.setAccessibilityLabel("账号操作 · " + accountTitle)
 
         let collapseButton = button("", target: self, action: #selector(toggleSingleAccountCollapse(_:)))
+        (collapseButton as? DesignButton)?.isQuietAccessory = true
         collapseButton.identifier = NSUserInterfaceItemIdentifier(id)
         collapseButton.image = NSImage(systemSymbolName: "chevron.up", accessibilityDescription: nil)?.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 11, weight: .semibold))
         collapseButton.image?.isTemplate = true
-        collapseButton.toolTip = "收起此账号配额详情"
+        collapseButton.toolTip = nil
         collapseButton.setAccessibilityLabel("收起账号 \(accountTitle) 配额详情")
 
         let actionViews: [NSView] = [swBtn, singleRefreshBtn, actionsButton, collapseButton]
-        let actionStack = horizontal(actionViews, spacing: 6)
+        let actionStack = horizontal(actionViews, spacing: 4)
         actionStack.alignment = .centerY
         actionStack.detachesHiddenViews = true
 
@@ -462,6 +481,17 @@ final class AccountsPage: NSObject {
         qRow2.alignment = .top
 
         let barArgon = quotaBar(title: "Gemini 4 Argon", percentage: nil, resetText: "", icon: "sparkles", unknownPlaceholder: "未知")
+        let barCarbon = quotaBar(title: "Gemini 4 Carbon", percentage: nil, resetText: "", icon: "sparkles", unknownPlaceholder: "未知")
+        let qRow3 = horizontal([barArgon, barCarbon], spacing: 14)
+        qRow3.distribution = .fillEqually
+        qRow3.alignment = .top
+
+        let extraStandaloneStack = NSStackView()
+        extraStandaloneStack.orientation = .vertical
+        extraStandaloneStack.alignment = .leading
+        extraStandaloneStack.spacing = 8
+        extraStandaloneStack.isHidden = true
+        extraStandaloneStack.detachesHiddenViews = true
 
         let authWarningLabel = text("登录授权已失效，请重新授权", size: 11, color: accessibleWarningColor())
         authWarningLabel.isHidden = true
@@ -476,7 +506,7 @@ final class AccountsPage: NSObject {
 
         let cardDivider = divider()
         let cardRows: [NSView] = [
-            headerRow, cardDivider, qRow1, qRow2, barArgon,
+            headerRow, cardDivider, qRow1, qRow2, qRow3, extraStandaloneStack,
             authWarningLabel, quotaWarningLabel, refreshErrorLabel, staleLabel, updateLabel
         ]
         let cardBox = group(cardRows, inset: 16, spacing: 12)
@@ -487,8 +517,10 @@ final class AccountsPage: NSObject {
         cardInnerStack?.spacing = 12
         cardInnerStack?.detachesHiddenViews = true
         for bar in [bar1, bar2, barClaude5h, barClaudeWeek] { bar.useComfortableLayout() }
-        barArgon.useCompactLayout()
-        barArgon.heightAnchor.constraint(greaterThanOrEqualToConstant: 34).isActive = true
+        for bar in [barArgon, barCarbon] {
+            bar.useCompactLayout()
+            bar.heightAnchor.constraint(greaterThanOrEqualToConstant: 34).isActive = true
+        }
         cardBox.cornerRadius = 14
 
         return AccountCardViews(
@@ -508,11 +540,14 @@ final class AccountsPage: NSObject {
             cardDivider: cardDivider,
             qRow1: qRow1,
             qRow2: qRow2,
+            qRow3: qRow3,
             bar1: bar1,
             bar2: bar2,
             barClaude5h: barClaude5h,
             barClaudeWeek: barClaudeWeek,
             barArgon: barArgon,
+            barCarbon: barCarbon,
+            extraStandaloneStack: extraStandaloneStack,
             authWarningLabel: authWarningLabel,
             quotaWarningLabel: quotaWarningLabel,
             refreshErrorLabel: refreshErrorLabel,
@@ -556,16 +591,20 @@ final class AccountsPage: NSObject {
         let accountTitle = name.isEmpty ? email : "\(name) · \(email)"
         let canSwitch = !isActive && item["disabled"] as? Bool != true && item["validation_blocked"] as? Bool != true
         card.switchButton.identifier = NSUserInterfaceItemIdentifier(id)
-        card.switchButton.toolTip = "切换至账号 \(accountTitle)"
+        card.switchButton.toolTip = nil
         card.switchButton.setAccessibilityLabel("切换至账号 \(accountTitle)")
         card.collapseButton.identifier = NSUserInterfaceItemIdentifier(id)
         let chevronSymbol = isCollapsed ? "chevron.down" : "chevron.up"
         card.collapseButton.image = NSImage(systemSymbolName: chevronSymbol, accessibilityDescription: nil)?.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 11, weight: .semibold))
         card.collapseButton.image?.isTemplate = true
-        card.collapseButton.toolTip = isCollapsed ? "展开此账号配额详情" : "收起此账号配额详情"
+        card.collapseButton.toolTip = nil
         card.collapseButton.setAccessibilityLabel((isCollapsed ? "展开账号 " : "收起账号 ") + accountTitle + " 配额详情")
         if card.switchButton.isHidden != !canSwitch {
             card.switchButton.isHidden = !canSwitch
+        }
+        let isSingleRefreshing = app.refreshingAccountIds.contains(id)
+        if card.singleRefreshBtn.isHidden != !isSingleRefreshing {
+            card.singleRefreshBtn.isHidden = !isSingleRefreshing
         }
         let visibleActions = card.actionStack.arrangedSubviews.filter { !$0.isHidden }
         let width = visibleActions.reduce(CGFloat(0)) { $0 + max(0, $1.intrinsicContentSize.width) } + CGFloat(max(0, visibleActions.count - 1)) * card.actionStack.spacing
@@ -585,10 +624,10 @@ final class AccountsPage: NSObject {
         let gWCd = quotaContract.geminiWeekly?.resetText ?? ""
         let cWCd = quotaContract.claudeWeekly?.resetText ?? ""
 
-        let summaryText = Self.formatCollapsedQuotaSummary(g5h: g5h, gWeek: gWeek, c5h: c5h, cWeek: cWeek, argonPct: quotaContract.argon?.percentage)
+        let summaryText = Self.formatCollapsedQuotaSummary(g5h: g5h, gWeek: gWeek, c5h: c5h, cWeek: cWeek, argonPct: quotaContract.argon?.percentage, carbonPct: quotaContract.carbon?.percentage)
         if card.collapsedSummaryLabel.stringValue != summaryText {
             card.collapsedSummaryLabel.stringValue = summaryText
-            card.collapsedSummaryLabel.toolTip = summaryText
+            card.collapsedSummaryLabel.toolTip = nil
         }
         card.collapsedSummaryLabel.isHidden = !isCollapsed
 
@@ -638,13 +677,30 @@ final class AccountsPage: NSObject {
             stale: argon?.stale == true
         )
 
+        let carbon = quotaContract.carbon
+        let carbonPlaceholder = carbon?.availability == "disabled" ? "不可用" : (carbon?.placeholder ?? "未知")
+        card.barCarbon.update(
+            title: carbon?.title ?? "Gemini 4 Carbon",
+            percentage: carbon?.percentage,
+            resetText: carbon?.percentage == nil ? "" : (carbon?.resetText ?? ""),
+            icon: "sparkles",
+            unknownPlaceholder: carbonPlaceholder,
+            stale: carbon?.stale == true
+        )
+
+        let extraStandalone = quotaContract.extraStandaloneModels
+        DashboardPage.syncExtraStandaloneBars(extraStandalone, into: card.extraStandaloneStack, compact: true)
+        card.extraStandaloneStack.isHidden = isCollapsed || extraStandalone.isEmpty
+
         card.cardDivider.isHidden = isCollapsed
         card.qRow1.isHidden = isCollapsed
         card.qRow2.isHidden = isCollapsed
+        card.qRow3.isHidden = isCollapsed
         card.barArgon.isHidden = isCollapsed
+        card.barCarbon.isHidden = isCollapsed
 
         if let readiness = item["credentialReadiness"] as? [String: Any], readiness["state"] as? String == "needs_authorization" {
-            card.authWarningLabel.toolTip = readiness["message"] as? String ?? ""
+            card.authWarningLabel.toolTip = nil
             card.authWarningLabel.isHidden = false
         } else {
             card.authWarningLabel.toolTip = nil
@@ -657,7 +713,8 @@ final class AccountsPage: NSObject {
         }
         let quotaWarning = QuotaPresentation.warningSummary(quotaContract, excluding: [refreshError].compactMap { $0 })
         if !quotaWarning.isEmpty && !isCollapsed {
-            card.quotaWarningLabel.toolTip = quotaContract.quotaWarnings.joined(separator: "；")
+            card.quotaWarningLabel.stringValue = quotaWarning
+            card.quotaWarningLabel.toolTip = nil
             card.quotaWarningLabel.isHidden = false
         } else {
             card.quotaWarningLabel.toolTip = nil
@@ -666,7 +723,7 @@ final class AccountsPage: NSObject {
 
         if let error = refreshError {
             card.refreshErrorLabel.stringValue = InterfaceText.quotaMessage(error)
-            card.refreshErrorLabel.toolTip = error
+            card.refreshErrorLabel.toolTip = nil
             card.refreshErrorLabel.isHidden = false
         } else {
             card.refreshErrorLabel.stringValue = ""
@@ -688,7 +745,7 @@ final class AccountsPage: NSObject {
             let groupText = names.isEmpty ? "部分分组" : names.joined(separator: "、")
             let staleText = "部分分组沿用上次记录：\(groupText)" + (latest.map { " · 最后采样 \($0)" } ?? "")
             card.staleLabel.stringValue = staleText
-            card.staleLabel.toolTip = "这些分组本轮未返回，沿用上次真实采样；点击右上或卡片内“刷新配额”重试。"
+            card.staleLabel.toolTip = nil
             card.staleLabel.isHidden = false
         } else {
             card.staleLabel.stringValue = ""
@@ -698,13 +755,12 @@ final class AccountsPage: NSObject {
 
         if !isCollapsed,
            let quota = item["quota"] as? [String: Any], let stamp = quota["last_updated"] as? Double, stamp > 0 {
-            let source = quota["source"] as? String == "external" ? "Switch 记录" : quota["source"] as? String == "live" ? "本机实时读取" : "Google 配额记录"
             let dateStr = Self.dateFormatter.string(from: Date(timeIntervalSince1970: stamp))
             let isStale = (Date().timeIntervalSince1970 - stamp) > 15 * 60
             let updateText = isStale ? "更新于 \(dateStr) · 待刷新" : "更新于 \(dateStr)"
             card.updateLabel.stringValue = updateText
             card.updateLabel.textColor = isStale ? accessibleWarningColor() : .secondaryLabelColor
-            card.updateLabel.toolTip = "数据来源：\(source)"
+            card.updateLabel.toolTip = nil
             card.updateLabel.isHidden = false
         } else {
             card.updateLabel.stringValue = ""
@@ -813,8 +869,17 @@ final class AccountsPage: NSObject {
         for (id, control) in refreshControlsById {
             let error = accountRefreshErrors[id]
             let available = app.reachable && (app.pendingAccountTaskId == nil || app.quotaRefreshing)
-            control.setRefreshState(busy: app.quotaRefreshing || app.refreshingAccountIds.contains(id), available: available, error: error)
-            control.toolTip = error.map { "刷新未完成：\($0)" } ?? "仅刷新此账号配额"
+            let isSingleRefreshing = app.refreshingAccountIds.contains(id)
+            if control.isHidden != !isSingleRefreshing {
+                control.isHidden = !isSingleRefreshing
+                if let card = cardViewsById[id] {
+                    let visibleActions = card.actionStack.arrangedSubviews.filter { !$0.isHidden }
+                    let width = visibleActions.reduce(CGFloat(0)) { $0 + max(0, $1.intrinsicContentSize.width) } + CGFloat(max(0, visibleActions.count - 1)) * card.actionStack.spacing
+                    card.actionStackWidthConstraint?.constant = width
+                }
+            }
+            control.setRefreshState(busy: app.quotaRefreshing || isSingleRefreshing, available: available, error: error)
+            control.toolTip = nil
         }
     }
 
@@ -830,7 +895,7 @@ final class AccountsPage: NSObject {
             return
         }
         staleGroupsSummary.stringValue = "\(staleAccounts) 个账号的部分配额分组沿用上次记录；刷新配额后会更新。"
-        staleGroupsSummary.toolTip = "本轮刷新未返回这些分组，界面展示的是上次真实采样；可点击卡片内的刷新配额重试。"
+        staleGroupsSummary.toolTip = nil
         staleGroupsSummary.isHidden = false
     }
 
@@ -1023,7 +1088,7 @@ final class AccountsPage: NSObject {
             let name = candidate["name"] as? String ?? ""
             let displayName = name.isEmpty ? email : "\(name) · \(email)"
             recommendationLabel.stringValue = "当前配额偏低 · 推荐 \(displayName)"
-            recommendationLabel.toolTip = reason
+            recommendationLabel.toolTip = nil
             switchRecommendedBtn.identifier = NSUserInterfaceItemIdentifier(cId)
             switchRecommendedBtn.isHidden = false
             recommendationRow.isHidden = false
@@ -1165,15 +1230,27 @@ final class AccountsPage: NSObject {
         }
     }
 
+    @objc func refreshAccountFromMenu(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String, !id.isEmpty else { return }
+        let btn = NSButton()
+        btn.identifier = NSUserInterfaceItemIdentifier(id)
+        refreshSingleAccountById(btn)
+    }
+
     @objc func showAccountActions(_ sender: NSButton) {
         guard let id = sender.identifier?.rawValue, let row = accounts.firstIndex(where: { $0["id"] as? String == id }) else { return }
         let menu = NSMenu(); menu.autoenablesItems = false
         func add(_ title: String, _ action: Selector, enabled: Bool = true, tag: Int = 0) { let item = NSMenuItem(title: title, action: action, keyEquivalent: ""); item.target = self; item.representedObject = id; item.isEnabled = enabled; item.tag = tag; menu.addItem(item) }
+        let isRefreshing = app.quotaRefreshing || app.refreshingAccountIds.contains(id)
+        let canRefresh = app.reachable && !isRefreshing && app.pendingAccountTaskId == nil
+        add(isRefreshing ? "正在刷新配额…" : "刷新配额", #selector(refreshAccountFromMenu(_:)), enabled: canRefresh)
+        menu.addItem(.separator())
         add("重命名…", #selector(renameAccount(_:)))
         add("上移", #selector(moveAccount(_:)), enabled: id != activeId && row > (accounts.contains { $0["id"] as? String == activeId } ? 1 : 0), tag: -1)
         add("下移", #selector(moveAccount(_:)), enabled: id != activeId && row + 1 < accounts.count, tag: 1)
         menu.addItem(.separator()); add("移除账号…", #selector(deleteCardAccountByIdItem(_:)), enabled: id != activeId)
-        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.maxY), in: sender)
+        let yOffset = sender.isFlipped ? (sender.bounds.maxY + 4) : -4
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: yOffset), in: sender)
     }
     @objc func moveAccount(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? String, let old = accounts.firstIndex(where: { $0["id"] as? String == id }) else { return }
@@ -1217,7 +1294,7 @@ final class AccountsPage: NSObject {
             }
             @objc func savePressed() {
                 let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !name.isEmpty && name.count <= 80 && name != oldName else { return }
+                guard name.count <= 80 && name != oldName else { return }
                 parent.endSheet(sheet, returnCode: .OK)
             }
             @objc func cancelPressed() {
@@ -1235,7 +1312,7 @@ final class AccountsPage: NSObject {
 
         handler.observer = NotificationCenter.default.addObserver(forName: NSControl.textDidChangeNotification, object: field, queue: .main) { _ in
             let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            saveBtn.isEnabled = !name.isEmpty && name.count <= 80 && name != oldName
+            saveBtn.isEnabled = name.count <= 80 && name != oldName
         }
 
         let actionsRow = horizontal([flexibleSpace(), cancelBtn, saveBtn], spacing: 8)

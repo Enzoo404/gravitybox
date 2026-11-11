@@ -87,7 +87,6 @@ final class UsageEventCard: NSView {
     func configure(_ event: [String:Any], highlight: String = "") {
         let rawModel = event["model"] as? String ?? "未知模型"
         let model = ModelDisplayName.name(rawModel)
-        modelLabel.toolTip = rawModel
         if !highlight.isEmpty, let range = model.range(of: highlight, options: .caseInsensitive) {
             let attr = NSMutableAttributedString(string: model, attributes: [
                 .font: NSFont.systemFont(ofSize: 12, weight: .semibold),
@@ -100,9 +99,10 @@ final class UsageEventCard: NSView {
             ], range: nsRange)
             modelLabel.attributedStringValue = attr
         } else {
-            modelLabel.stringValue = model
+            modelLabel.attributedStringValue = NSAttributedString(string: model, attributes: [.font: NSFont.systemFont(ofSize: 12, weight: .semibold), .foregroundColor: NSColor.labelColor])
         }
         modelLabel.setAccessibilityLabel(model)
+        enableTextCopy(modelLabel, value: rawModel, title: "复制模型 ID")
         let stamp = doubleVal(event,"timestamp_seconds")
         timeLabel.stringValue = stamp > 0 ? Self.dateFormat.string(from:Date(timeIntervalSince1970:stamp)) : "时间未知"
         inputLabel.stringValue = intVal(event,"input_tokens").formatted(); outputLabel.stringValue = intVal(event,"output_tokens").formatted(); cacheLabel.stringValue = intVal(event,"cached_tokens").formatted();cacheWriteLabel.stringValue = intVal(event,"cache_write_tokens").formatted()

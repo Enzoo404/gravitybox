@@ -31,6 +31,6 @@ test('N12: 总览页数据时效闭环（修订契约、停留时效刷新、数
   assert.match(pagesSrc, /let timeExpired\s*=\s*interval\s*>=\s*15\.0/, '总览页必须具备停留超过 15 秒自动拉取更新的机制');
 
   // 5. Pages.swift 必须呈现数据时间，且在拉取失败时保留旧数据并明确标记历史快照
-  assert.match(pagesSrc, /dataTimestampLabel\.toolTip\s*=\s*"数据时间：/, '总览页必须明确展示数据时间');
+  assert.match(pagesSrc, /dataTimestampLabel\.setAccessibilityHelp\("数据时间：/, '总览页必须明确维护无障碍数据时间且不弹出悬停标签');
   assert.match(pagesSrc, /数据未更新/, '数据获取失败时必须保留旧快照并清楚提示');
 });

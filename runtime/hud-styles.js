@@ -208,7 +208,8 @@ export const HUD_STYLES_CSS = `
 .capsule.is-skeleton .capsule-text,
 .capsule.is-skeleton .capsule-icon,
 .capsule.is-skeleton .capsule-donut,
-.capsule.is-skeleton .hud-status-dot {
+.capsule.is-skeleton .hud-status-dot,
+.capsule.is-skeleton .hud-compaction-badge {
   opacity: 0.35;
 }
 
@@ -247,11 +248,47 @@ export const HUD_STYLES_CSS = `
   opacity: 0.85;
 }
 
+/* 上下文常驻胶囊左侧压缩次数徽章 (0 次隐藏，>=1 次显示，不改变状态栏尺寸) */
+.hud-compaction-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 12px;
+  height: 12px;
+  padding: 0 3px;
+  margin-right: 8px;
+  border-radius: 9999px;
+  background: linear-gradient(180deg, #4794FF 0%, var(--hud-accent-blue) 100%);
+  color: #FFFFFF;
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  box-shadow: 0 1px 2px rgba(49, 134, 255, 0.24), inset 0 0.5px 0 rgba(255, 255, 255, 0.28);
+}
+
+.hud-compaction-badge[hidden] {
+  display: none !important;
+}
+
 /* Antigravity 原生横向微缩计量条 (替代 DeepSeek 圆环图) */
 .capsule-donut {
   width: 56px;
   height: 8px;
   flex-shrink: 0;
+  margin-right: 6px;
+  transition: width 150ms ease, margin-right 150ms ease;
+}
+
+.capsule-context.has-compaction {
+  padding-inline: 9px;
+}
+
+.capsule-context.has-compaction .capsule-donut {
+  width: 46px;
   margin-right: 6px;
 }
 
@@ -268,7 +305,7 @@ export const HUD_STYLES_CSS = `
   flex-shrink: 0;
   min-width: 124px;
   justify-content: center;
-  padding-inline: 12px;
+  padding-inline: 11px;
 }
 
 .capsule-session {
@@ -288,14 +325,32 @@ export const HUD_STYLES_CSS = `
   max-width: 260px;
 }
 
-/* 状态 1：标准紧凑 (360px ~ 440px) - 隐藏 "命中" 冗余词汇 */
+/* 状态 1：标准紧凑 (360px ~ 440px) - 隐藏 "命中" 冗余词汇，按比例收窄上下文胶囊 */
 .hud-container.is-compact .hud-cache-label {
   display: none;
 }
 
 .hud-container.is-compact .capsule-context {
-  min-width: 102px;
-  padding-inline: 9px;
+  min-width: 0;
+  padding-inline: 8px;
+}
+
+.hud-container.is-compact .capsule-donut {
+  width: 42px;
+  margin-right: 5px;
+}
+
+.hud-container.is-compact .capsule-context.has-compaction {
+  padding-inline: 7px;
+}
+
+.hud-container.is-compact .capsule-context.has-compaction .capsule-donut {
+  width: 34px;
+  margin-right: 5px;
+}
+
+.hud-container.is-compact .hud-compaction-badge {
+  margin-right: 6px;
 }
 
 @container hud (max-width: 440px) {
@@ -303,15 +358,51 @@ export const HUD_STYLES_CSS = `
     display: none;
   }
   .capsule-context {
-    min-width: 102px;
-    padding-inline: 9px;
+    min-width: 0;
+    padding-inline: 8px;
+  }
+  .capsule-donut {
+    width: 42px;
+    margin-right: 5px;
+  }
+  .capsule-context.has-compaction {
+    padding-inline: 7px;
+  }
+  .capsule-context.has-compaction .capsule-donut {
+    width: 34px;
+    margin-right: 5px;
+  }
+  .hud-compaction-badge {
+    margin-right: 6px;
   }
 }
 
-/* 状态 2：极限紧凑 (< 360px) - 仅保留核心步数、总量与上下文读数 */
+/* 状态 2：极限紧凑 (< 360px) - 仅保留核心步数、总量与上下文读数，收窄上下文胶囊与进度条 */
 .hud-container.is-ultra-compact .capsule-context {
-  min-width: fit-content;
-  padding-inline: 7px;
+  min-width: 0;
+  padding-inline: 6.5px;
+}
+
+.hud-container.is-ultra-compact .capsule-donut {
+  width: 32px;
+  margin-right: 4.5px;
+}
+
+.hud-container.is-ultra-compact .capsule-context.has-compaction {
+  padding-inline: 6px;
+}
+
+.hud-container.is-ultra-compact .hud-compaction-badge {
+  min-width: 11.5px;
+  height: 11.5px;
+  padding: 0 2.5px;
+  font-size: 8.5px;
+  margin-right: 5px;
+}
+
+.hud-container.is-ultra-compact .capsule-context.has-compaction .capsule-donut {
+  width: 26px;
+  margin-right: 4px;
 }
 
 .hud-container.is-ultra-compact .hud-turns,
@@ -324,8 +415,26 @@ export const HUD_STYLES_CSS = `
 
 @container hud (max-width: 360px) {
   .capsule-context {
-    min-width: fit-content;
-    padding-inline: 7px;
+    min-width: 0;
+    padding-inline: 6.5px;
+  }
+  .capsule-donut {
+    width: 32px;
+    margin-right: 4.5px;
+  }
+  .capsule-context.has-compaction {
+    padding-inline: 6px;
+  }
+  .hud-compaction-badge {
+    min-width: 11.5px;
+    height: 11.5px;
+    padding: 0 2.5px;
+    font-size: 8.5px;
+    margin-right: 5px;
+  }
+  .capsule-context.has-compaction .capsule-donut {
+    width: 26px;
+    margin-right: 4px;
   }
   .hud-turns,
   .hud-speed,
@@ -410,6 +519,17 @@ export const HUD_STYLES_CSS = `
   transform: translateX(-50%);
   pointer-events: none;
   z-index: 2;
+}
+
+.hud-popover.is-downward .hud-popover-arrow {
+  bottom: auto;
+  top: -5.5px;
+  transform: translateX(-50%) rotate(180deg);
+}
+
+.hud-popover.is-downward::after {
+  bottom: auto;
+  top: -10px;
 }
 
 .hud-popover-arrow svg {
@@ -585,6 +705,8 @@ export const HUD_STYLES_CSS = `
   border-radius: 9999px;
   flex-shrink: 0;
 }
+.hud-data-state { font-size:10px; color:var(--hud-text-secondary); margin:4px 0; }
+.hud-copy-stats { font:inherit; font-size:10px; color:var(--hud-text-primary); background:var(--hud-bg); border:1px solid var(--hud-border); border-radius:4px; cursor:pointer; padding:3px 6px; margin-bottom:6px; }
 `;
 
 globalThis.__GRAVITYBOX_HUD_STYLES_CSS__ = HUD_STYLES_CSS;

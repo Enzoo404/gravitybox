@@ -55,6 +55,19 @@
   }
 
   const KEY = '__AGZH_ENGINE_V1__';
+  if (options.translationEnabled === false) {
+    // HUD-only connection: expose the lifecycle contract without installing
+    // translators, project markers, mutation observers or scan collectors.
+    let dictionary = options.dictionary;
+    const state = () => ({ active: true, version: dictionary.version, runtimeId: options.runtimeId,
+      languageMode: 'en', pending: 0, scanCount: 0, translatedNodes: 0 });
+    globalThis[KEY] = {
+      state, getLanguageMode: () => 'en', refresh() {},
+      update(next) { dictionary = next; }, setShortcutEnabled() {},
+      dispose() { delete globalThis[KEY]; delete globalThis.__AGZH_BOOT__; },
+    };
+    return;
+  }
   if (globalThis[KEY]) { globalThis[KEY].setShortcutEnabled?.(options.shortcutEnabled !== false); globalThis[KEY].update(options.dictionary); return; }
   let shortcutEnabled = options.path === '/fixture' && options.shortcutEnabled !== false;
   const ownedProjectMarkers = new Set();
@@ -201,7 +214,7 @@
 
   let dictionary = options.dictionary;
   let foldedMap = new Map();
-  let languageMode = 'zh'; // 'zh' | 'en'
+  let languageMode = options.translationEnabled === false ? 'en' : 'zh'; // 'zh' | 'en'
   let active = true;
   let observer;
   let timer = null;
@@ -410,9 +423,9 @@
   const blockedCache = new WeakMap();
   const eligibleCache = new WeakMap();
 
-  const MODEL_LABELS = new Set(['Model', 'Usage', 'View Usage', 'Weekly limit', 'Daily limit', 'Weekly Limit Remaining', 'Five Hour Limit Remaining', 'Gemini Models', 'Claude and GPT models', 'Gemini 4 Argon', 'Gemini 4 Argon Weekly Limit', 'New', 'Notice', 'Unavailable', 'Refreshing...', 'No quota information available.', '% left']);
+  const MODEL_LABELS = new Set(['Model', 'Usage', 'View Usage', 'Weekly limit', 'Daily limit', 'Weekly Limit Remaining', 'Five Hour Limit Remaining', 'Gemini Models', 'Claude and GPT models', 'Gemini 4 Argon', 'Gemini 4 Argon Weekly Limit', 'Gemini 4 Carbon', 'Gemini 4 Carbon Weekly Limit', 'New', 'Notice', 'Unavailable', 'Refreshing...', 'No quota information available.', '% left']);
   const MODEL_GROUP_LABEL = /^Models within this group:\s*((?:(?:Gemini|Claude|GPT)[\w .,+()/-]{0,399})?)$/i;
-  const MODEL_LIMIT_LABEL = /^\d+[smhd]\s+limit$/i;
+  const MODEL_LIMIT_LABEL = /^(?:\d+[smhd]\s+limit|Gemini \d+(?:\.\d+)? [A-Za-z][\w-]{0,48} (?:Weekly|Daily|Five Hour) Limit)$/i;
   const MODEL_PERCENT_LEFT = /^(?:\d+%\s+)?left$/i;
   const MODEL_RESET_LABEL = /^(?:(?:Weekly|Daily|\d+[smhd])\s+limit,\s*)?resets in (?:<1m|\d+[dhms](?:\s+\d+[dhms])*)$/i;
   function modelUiLabel(element) {
@@ -513,6 +526,7 @@
   }
 
   const TEMPLATE_RULES = [
+    { key: "{model} Weekly Limit", pattern: /^(Gemini \d+(?:\.\d+)? [A-Za-z][\w-]{0,48}) Weekly Limit$/i, replace: (_, model) => `${model} 每周限额` },
     { key: "Models within this group: {models}", pattern: MODEL_GROUP_LABEL, replace: (_, models) => `此组包含的模型：${models}` },
     { key: "Load older messages, showing {shown} of {total}", pattern: /^Load older messages, showing (\d+) of (\d+)$/i, replace: (_,shown,total) => `加载更早消息（已显示 ${shown} / ${total} 条）` },
     {
@@ -1539,6 +1553,10 @@
       return ancestors(element).every(el=>!matches(el,PROTECTED)||el===row);
     }
     if (userNamed(element)) return false;
+    if (attribute === 'aria-label' && element.matches('button[data-testid="model-selector-trigger"],[role="button"][data-testid="model-selector-trigger"]')
+        && /^Select model,\s*current:\s*.+$/i.test(original)) {
+      return ancestors(element).every(el => !matches(el, PROTECTED) || el === element);
+    }
     const protectedParents = ancestors(element).filter(el => matches(el, PROTECTED));
     if (protectedParents.some(el => el !== element || !['INPUT', 'TEXTAREA'].includes(el.tagName))) return false;
     // These first-party controls have no UI ancestor. Keep the exception exact so arbitrary

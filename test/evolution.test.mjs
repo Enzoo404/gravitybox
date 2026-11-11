@@ -84,21 +84,28 @@ test('缓存支持分项勾选清理、状态型缓存按需选择、受保护�
  }finally{await rm(temp,{recursive:true,force:true});}
 });
 
-test('Phase 1 安全性: clear 遇到 Cookies 及事务日志整体移动，绝无物理硬删除', async () => {
+test('Phase 1 安全性: 状态型存储（Cookies / Local Storage）严格受保护拒绝清理，无状态缓存伴随 WAL/journal 整体移动绝无硬删除', async () => {
   const temp = await realpath(await mkdtemp(join(tmpdir(), 'gravity-maint-safe-')));
   const profile = join(temp, 'profile'), trash = join(temp, 'trash');
   await mkdir(profile); await mkdir(trash);
   try {
     await writeFile(join(profile, 'Cookies'), 'main-cookie');
     await writeFile(join(profile, 'Cookies-wal'), 'wal-log');
-    await writeFile(join(profile, 'Cookies-shm'), 'shm-log');
+    await writeFile(join(profile, 'CachedData'), 'main-cache-db');
+    await writeFile(join(profile, 'CachedData-wal'), 'cache-wal-log');
+    await writeFile(join(profile, 'CachedData-shm'), 'cache-shm-log');
     const m = new CacheMaintenance(profile, trash, async () => false);
     const scan = await m.scan();
-    const result = await m.clear(scan.token, ['Cookies']);
+    assert.ok(!scan.entries.some(e => e.name === 'Cookies'));
+    assert.ok(scan.protectedBytes >= 11);
+    await assert.rejects(m.clear(scan.token, ['Cookies']), /所选缓存项无效/);
+    const scan2 = await m.scan();
+    const result = await m.clear(scan2.token, ['CachedData']);
     assert.equal(result.moved, 1);
-    assert.equal(await readFile(join(result.restorePath, 'Cookies'), 'utf8'), 'main-cookie');
-    assert.equal(await readFile(join(result.restorePath, 'Cookies-wal'), 'utf8'), 'wal-log');
-    assert.equal(await readFile(join(result.restorePath, 'Cookies-shm'), 'utf8'), 'shm-log');
+    assert.equal(await readFile(join(profile, 'Cookies'), 'utf8'), 'main-cookie');
+    assert.equal(await readFile(join(result.restorePath, 'CachedData'), 'utf8'), 'main-cache-db');
+    assert.equal(await readFile(join(result.restorePath, 'CachedData-wal'), 'utf8'), 'cache-wal-log');
+    assert.equal(await readFile(join(result.restorePath, 'CachedData-shm'), 'utf8'), 'cache-shm-log');
   } finally {
     await rm(temp, { recursive: true, force: true });
   }
@@ -149,37 +156,48 @@ test('Phase 1 安全性: restore 四阶段原子恢复引擎、冲突移位至 d
   }
 });
 
-test('Phase 1 安全性: clear 清理过程中断时，Cookies 主文件与 WAL/journal 事务文件完整双向回滚，绝无 WAL 孤儿遗留', async () => {
+test('Phase 1 安全性: clear 清理过程中断时，主缓存文件与 WAL/journal 事务文件完整双向回滚，绝无 WAL 孤儿遗留', async () => {
   const temp = await realpath(await mkdtemp(join(tmpdir(), 'gravity-maint-cookies-rollback-')));
   const profile = join(temp, 'profile'), trash = join(temp, 'trash');
   await mkdir(profile); await mkdir(trash);
   try {
-    await writeFile(join(profile, 'Cookies'), 'main-cookie-content');
-    await writeFile(join(profile, 'Cookies-wal'), 'wal-journal-content');
-    await writeFile(join(profile, 'Cookies-shm'), 'shm-index-content');
+    await writeFile(join(profile, 'CachedData'), 'main-cache-content');
+    await writeFile(join(profile, 'CachedData-wal'), 'wal-journal-content');
+    await writeFile(join(profile, 'CachedData-shm'), 'shm-index-content');
     await mkdir(join(profile, 'GPUCache'));
     await writeFile(join(profile, 'GPUCache', 'data.bin'), 'gpu-data');
 
     let runCheckCount = 0;
-    // 模拟移动 Cookies 成功后，移动下一项前应用被用户启动
+    // 模拟移动第一项成功后，移动下一项前应用被用户启动
     const m = new CacheMaintenance(profile, trash, async () => {
       runCheckCount++;
       return runCheckCount >= 3;
     });
     const scan = await m.scan();
-    await assert.rejects(m.clear(scan.token, ['Cookies', 'GPUCache']), /应用已重新打开，停止清理/);
+    await assert.rejects(m.clear(scan.token, ['GPUCache', 'CachedData']), /应用已重新打开，停止清理/);
 
-    // 验证 Cookies 及其附属 WAL/SHM 文件均已原子移回 profile，绝无遗留在废纸篓中的 WAL 孤儿
-    assert.equal(await readFile(join(profile, 'Cookies'), 'utf8'), 'main-cookie-content');
-    assert.equal(await readFile(join(profile, 'Cookies-wal'), 'utf8'), 'wal-journal-content');
-    assert.equal(await readFile(join(profile, 'Cookies-shm'), 'utf8'), 'shm-index-content');
+    const m2 = new CacheMaintenance(profile, trash, async () => false);
+    await rm(trash, { recursive: true, force: true });
+    await mkdir(trash);
+    let runCheckCount2 = 0;
+    const m3 = new CacheMaintenance(profile, trash, async () => {
+      runCheckCount2++;
+      return runCheckCount2 >= 4;
+    });
+    const scan3 = await m3.scan();
+    await assert.rejects(m3.clear(scan3.token, ['CachedData', 'GPUCache']), /应用已重新打开，停止清理/);
+
+    // 验证 CachedData 及其附属 WAL/SHM 文件均已原子移回 profile，绝无遗留在废纸篓中的 WAL 孤儿
+    assert.equal(await readFile(join(profile, 'CachedData'), 'utf8'), 'main-cache-content');
+    assert.equal(await readFile(join(profile, 'CachedData-wal'), 'utf8'), 'wal-journal-content');
+    assert.equal(await readFile(join(profile, 'CachedData-shm'), 'utf8'), 'shm-index-content');
 
     // 废纸篓中的中断快照记录中无残留的孤儿 WAL
     const trashDirs = await (await import('node:fs/promises')).readdir(trash);
     assert.equal(trashDirs.length, 1);
     const trashFiles = await (await import('node:fs/promises')).readdir(join(trash, trashDirs[0]));
-    assert.ok(!trashFiles.includes('Cookies-wal'));
-    assert.ok(!trashFiles.includes('Cookies-shm'));
+    assert.ok(!trashFiles.includes('CachedData-wal'));
+    assert.ok(!trashFiles.includes('CachedData-shm'));
   } finally {
     await rm(temp, { recursive: true, force: true });
   }
@@ -190,21 +208,21 @@ test('Phase 1 安全性: restore 预检阶段拦截目标路径符号链接及�
   const profile = join(temp, 'profile'), trash = join(temp, 'trash');
   await mkdir(profile); await mkdir(trash);
   try {
-    await writeFile(join(profile, 'Cookies'), 'cookie-original');
-    await writeFile(join(profile, 'Cookies-wal'), 'wal-original');
+    await writeFile(join(profile, 'CachedData'), 'cache-original');
+    await writeFile(join(profile, 'CachedData-wal'), 'wal-original');
     const m = new CacheMaintenance(profile, trash, async () => false);
     const scan = await m.scan();
-    const cleared = await m.clear(scan.token, ['Cookies']);
+    const cleared = await m.clear(scan.token, ['CachedData']);
 
-    // 场景 A: 目标路径下 Cookies-wal 被植入了符号链接
+    // 场景 A: 目标路径下 CachedData-wal 被植入了符号链接
     const outsideTarget = join(temp, 'outside');
     await writeFile(outsideTarget, 'malicious-file');
-    await (await import('node:fs/promises')).symlink(outsideTarget, join(profile, 'Cookies-wal'));
+    await (await import('node:fs/promises')).symlink(outsideTarget, join(profile, 'CachedData-wal'));
 
-    await assert.rejects(m.restore(basename(cleared.restorePath)), /Cookies-wal 存在符号链接/);
+    await assert.rejects(m.restore(basename(cleared.restorePath)), /CachedData-wal 存在符号链接/);
 
     // 移除符号链接后，测试场景 B: 快照清单包含重复条目
-    await (await import('node:fs/promises')).unlink(join(profile, 'Cookies-wal'));
+    await (await import('node:fs/promises')).unlink(join(profile, 'CachedData-wal'));
     const manifestPath = join(cleared.restorePath, '恢复清单.json');
     const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
     manifest.moved.push({ ...manifest.moved[0] });

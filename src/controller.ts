@@ -57,6 +57,7 @@ export class Controller {
   private targetTimer?: NodeJS.Timeout;
   private stopped = false;
   private paused = false;
+  private get dormant() { return this.paused && !this.hudEnabled; }
   private hudEnabled = true;
   private reconnectionDelay = 1000;
   private syncing = false;
@@ -130,7 +131,7 @@ export class Controller {
     for (const profileDir of profiles) {
       try {
         const watcher = watch(profileDir, (_event, name) => {
-          if (String(name) === 'DevToolsActivePort' && !this.stopped && !this.paused) {
+          if (String(name) === 'DevToolsActivePort' && !this.stopped && !this.dormant) {
             clearTimeout(this.reconnection);
             void this.tryConnect().catch(() => this.retry());
           }
@@ -143,7 +144,7 @@ export class Controller {
   async start() {
     this.engine = await readFile(new URL('./engine.js', import.meta.url), 'utf8');this.runtimeId=createHash('sha256').update(this.engine).digest('hex');
     this.watchProfiles();
-    if(this.paused) {
+    if(this.dormant) {
       if(!this.options.fixture) { this.endpoint=await discover(this.options.appPath,this.options.profile);this.status.appVersion=this.endpoint?.appVersion; }
       this.publish('paused','已按上次选择保持暂停；开启后连接目标窗口');return;
     }
@@ -216,10 +217,10 @@ export class Controller {
   }
   private boot(url: string) {
     const page = new URL(url);
-    const key = `${page.origin}${page.pathname}:${this.options.dictionary.version}:${this.verifiedBundle()}:${this.hudEnabled}`;
+    const key = `${page.origin}${page.pathname}:${this.options.dictionary.version}:${this.verifiedBundle()}:${this.hudEnabled}:${this.paused}`;
     const cached = this.bootCache.get(key);
     if (cached) return cached;
-    const source = `delete globalThis.__AGZH_ATTACH_DEEP_SCAN__;delete globalThis.__GRAVITYBOX_ATTACH_HUD__;globalThis.__AGZH_BOOT__=${JSON.stringify({ origin: page.origin, path: page.pathname, dictionary: this.options.dictionary, conservative:!this.verifiedBundle(),runtimeId:this.runtimeId,shortcutEnabled:this.options.shortcutEnabled!==false,hudEnabled:this.hudEnabled,shellValidated:true })};\n${this.engine}`;
+    const source = `delete globalThis.__AGZH_ATTACH_DEEP_SCAN__;delete globalThis.__GRAVITYBOX_ATTACH_HUD__;globalThis.__AGZH_BOOT__=${JSON.stringify({ origin: page.origin, path: page.pathname, dictionary: this.options.dictionary, conservative:!this.verifiedBundle(),runtimeId:this.runtimeId,shortcutEnabled:this.options.shortcutEnabled!==false,hudEnabled:this.hudEnabled,translationEnabled:!this.paused,languageMode:this.paused?'en':'zh',shellValidated:true })};\n${this.engine}`;
     if (this.bootCache.size < 4) this.bootCache.set(key, source);
     return source;
   }
@@ -233,7 +234,7 @@ export class Controller {
       const permitted = targets.filter(target => allowedTarget(target, this.options.fixture?.origin));
       for (const [id, session] of this.pages) {
         const target = permitted.find(target => target.id === id);
-        if (!target || this.paused) { await this.detach(session); this.pages.delete(id); }
+        if (!target || this.dormant) { await this.detach(session); this.pages.delete(id); }
         else if (target.url !== session.url) {
           session.url = target.url;
           await this.refreshRegistration(session);
@@ -241,20 +242,20 @@ export class Controller {
         }
       }
       this.status.errors = [];
-      if (!this.paused) for (const target of permitted) if (!this.pages.has(target.id)) {
-        if (this.paused || this.stopped) break;
+      if (!this.dormant) for (const target of permitted) if (!this.pages.has(target.id)) {
+        if (this.dormant || this.stopped) break;
         try {
           if (!this.options.fixture && !await verifyPageService(target.url, this.activeAppPath())) {
             this.status.errors.push('一个窗口的本地服务身份未确认，已跳过');
             continue;
           }
-          if (this.paused || this.stopped) break;
+          if (this.dormant || this.stopped) break;
           const socketURL = assertLoopback(target.webSocketDebuggerUrl);
           if (Number(socketURL.port) !== this.endpoint.port) throw new Error('窗口调试端口不匹配');
           const cdp = new CDP(socketURL.href);
           const session: PageSession = { cdp, targetId: target.id, url: target.url, updateChain: Promise.resolve() };
           await cdp.connect();
-          if (this.paused || this.stopped) { cdp.close(); break; }
+          if (this.dormant || this.stopped) { cdp.close(); break; }
           this.pages.set(target.id, session);
           cdp.on('disconnected', () => {this.hudBridge.detachTarget(target.id);if(!session.detaching&&this.pages.get(target.id)===session){this.pages.delete(target.id);this.scheduleSync();}});
           cdp.on('Page.frameNavigated', (event) => { if (!event.frame?.parentId) { this.hudBridge.detachTargetPanes(target.id); session.contextId = undefined; void this.queueBootstrap(session); } });
@@ -271,7 +272,7 @@ export class Controller {
           this.status.errors.push((error as Error).message==='新版页面结构尚未识别，已跳过该窗口'?(error as Error).message:'一个窗口注入失败');
         }
       }
-      if (!this.paused && !this.stopped && permitted.length > 0 && this.pages.size < permitted.length) {
+      if (!this.dormant && !this.stopped && permitted.length > 0 && this.pages.size < permitted.length) {
         if (this.unverifiedWindowRetries < 6) {
           this.unverifiedWindowRetries++;
           this.scheduleSync(1500);
@@ -315,7 +316,7 @@ export class Controller {
   private queueBootstrap(session: PageSession, reportUnhandledError = true): Promise<void> {
     if(session.detaching)return Promise.resolve();
     session.updateChain = session.updateChain.catch(() => {}).then(async () => {
-      if (this.paused || this.stopped || session.detaching || this.pages.get(session.targetId)!==session) return;
+      if (this.dormant || this.stopped || session.detaching || this.pages.get(session.targetId)!==session) return;
       const tree = await session.cdp.send('Page.getFrameTree');
       const frame = tree.frameTree.frame;
       if (!allowedTarget({ type: 'page', url: frame.url }, this.options.fixture?.origin)) return;
@@ -345,9 +346,9 @@ export class Controller {
         const contract=await session.cdp.evaluate(`(async()=>{for(let i=0;i<30;i++){if(!!document.body&&((!!document.querySelector('[aria-label*="Sidebar" i],[aria-label*="侧边栏"],[data-testid*="sidebar" i],[data-testid="agent-input-box"]')&&!!document.querySelector('[data-testid="model-selector-trigger"],a[href="/history"],a[href="/customizations"],[data-testid="agent-input-box"],textarea,input'))||(/^\\/(?:settings(?:\\/[^?#]*)?|settings-standalone)$/.test(location.pathname)&&!!document.querySelector('[role="dialog"][aria-label="Settings"],[role="dialog"][aria-label="设置"],[data-testid*="settings"]')&&!!document.querySelector('[role="tablist"],nav,[role="navigation"]'))||(location.pathname==='/terminal-standalone'&&!!document.querySelector('.xterm,.monaco-editor,[data-testid*="terminal"]'))))return true;await new Promise(r=>setTimeout(r,100));}return false;})()`,session.contextId);
         if(!contract)throw new Error('新版页面结构尚未识别，已跳过该窗口');
       }
-      if(this.paused||this.stopped||session.detaching)return;
+      if(this.dormant||this.stopped||session.detaching)return;
       if (!previous?.active) previous = await session.cdp.evaluate('globalThis.__AGZH_ENGINE_V1__?.state()', session.contextId);
-      if(this.paused||this.stopped||session.detaching)return;
+      if(this.dormant||this.stopped||session.detaching)return;
       if (previous?.active&&previous.runtimeId===this.runtimeId) {
         if (previous.version === this.options.dictionary.version) await session.cdp.evaluate('globalThis.__AGZH_ENGINE_V1__.refresh()', session.contextId);
         else await session.cdp.evaluate(`globalThis.__AGZH_ENGINE_V1__.update(${JSON.stringify(this.options.dictionary)})`, session.contextId);
@@ -378,11 +379,11 @@ export class Controller {
   private refreshRegistration(session: PageSession):Promise<void> {
     if(session.detaching)return Promise.resolve();
     session.updateChain=session.updateChain.catch(()=>{}).then(async()=>{
-      if(session.detaching||this.paused||this.stopped)return;
+      if(session.detaching||this.dormant||this.stopped)return;
       if(session.registration){await session.cdp.send('Page.removeScriptToEvaluateOnNewDocument',{identifier:session.registration});session.registration=undefined;}
-      if(session.detaching||this.paused||this.stopped)return;
+      if(session.detaching||this.dormant||this.stopped)return;
       const registered=await session.cdp.send('Page.addScriptToEvaluateOnNewDocument',{source:this.boot(session.url),worldName:WORLD});
-      if(session.detaching||this.paused||this.stopped){await session.cdp.send('Page.removeScriptToEvaluateOnNewDocument',{identifier:registered.identifier});return;}
+      if(session.detaching||this.dormant||this.stopped){await session.cdp.send('Page.removeScriptToEvaluateOnNewDocument',{identifier:registered.identifier});return;}
       session.registration=registered.identifier;
     });return session.updateChain;
   }
@@ -482,14 +483,22 @@ export class Controller {
   private async disconnectPages() { for (const session of this.pages.values()) await this.detach(session); this.pages.clear(); }
   async pause() {
     this.paused = true;
+    this.bootCache.clear();
     await this.connecting?.catch(()=>{});
     if(this.syncing)await new Promise<void>(resolve=>this.syncWaiters.push(resolve));
     await this.dictionaryChain.catch(() => {});
     await this.disconnectPages();
+    if (this.hudEnabled) await this.resumeHudOnly();
     this.publish('paused', this.status.errors.length ? '已暂停，部分窗口恢复情况待确认' : '已暂停，界面恢复英文');
   }
+  private async resumeHudOnly() {
+    if (this.browser) await this.sync(); else await this.tryConnect();
+  }
   async resume() {
+    // Recreate the isolated runtime so translation starts from the chosen mode.
+    if (this.paused && this.pages.size) await this.disconnectPages();
     this.paused = false;
+    this.bootCache.clear();
     try {
       if (this.browser) await this.sync();
       else { clearTimeout(this.reconnection); await this.tryConnect(); }
@@ -512,6 +521,11 @@ export class Controller {
     this.hudEnabled = enabled;
     this.options.hudEnabled = enabled;
     this.bootCache.clear();
+    if (this.paused) {
+      await this.disconnectPages();
+      if (enabled) await this.resumeHudOnly();
+      this.publish(); return;
+    }
     if (!enabled) {
       this.hudBridge.clearActivePanes();
     }
@@ -780,7 +794,7 @@ export class Controller {
     this.status.errors = [];
     this.reconnectionDelay = 1000;
     this.watchProfiles();
-    if (this.paused) {
+    if (this.dormant) {
       if (!this.options.fixture) {
         this.endpoint = await discover(this.options.appPath, this.options.profile);
         this.status.appVersion = this.endpoint?.appVersion;

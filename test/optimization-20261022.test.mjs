@@ -113,7 +113,7 @@ test('恢复材料有7天期限，待完成事务不可清理，完成记录经�
 
 
 test('已暂停的汉化在重新启动时保持暂停，不为更新自动注入目标应用',()=>fixture(async dir=>{
- await writeFile(join(dir,'runtime-preferences.json'),JSON.stringify({translationEnabled:false}));
+ await writeFile(join(dir,'runtime-preferences.json'),JSON.stringify({translationEnabled:false,hudEnabled:false}));
  const child=spawn(process.execPath,['dist/main.js','--state-dir',dir,'--app','/nonexistent','--profile',dir,'--home-dir',dir,'--app-support-dir',dir,'--gemini-dir',dir],{stdio:'ignore',env:{...process.env,GRAVITYBOX_PROBE_LS:'false'}});
  try{await ready(dir);let status;for(let i=0;i<100;i++){status=await rpc(dir,{command:'status',includeTasks:false});if(status.status.mode==='paused')break;await pause(20);}assert.equal(status.status.mode,'paused');assert.equal(status.status.windows,0);assert.equal(JSON.parse(await readFile(join(dir,'runtime-preferences.json'),'utf8')).translationEnabled,false);}finally{await stop(child);}
 }));

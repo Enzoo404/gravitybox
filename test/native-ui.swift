@@ -104,15 +104,14 @@ import Cocoa
                         ["name": "Cache", "title": "网络与静态资源缓存", "subtitle": "界面静态资源、前端脚本与临时网络响应数据", "icon": "internaldrive", "category": "safe", "defaultSelected": true, "bytes": 864_026_624, "fileCount": 2640, "exists": true, "clearable": true],
                         ["name": "Code Cache", "title": "V8 字节码编译缓存", "subtitle": "JavaScript 与 WebAssembly 预编译加速字节码", "icon": "cpu", "category": "safe", "defaultSelected": true, "bytes": 412_090_368, "fileCount": 1120, "exists": true, "clearable": true],
                         ["name": "GPUCache", "title": "图形与着色器管线缓存", "subtitle": "Metal / WebGL 渲染管线与着色器编译产物", "icon": "sparkles.rectangle.stack", "category": "safe", "defaultSelected": true, "bytes": 184_549_376, "fileCount": 318, "exists": true, "clearable": true],
-                        ["name": "CachedData", "title": "工作区运行编译缓存", "subtitle": "主进程与渲染进程预编译脚本缓存", "icon": "memorychip", "category": "safe", "defaultSelected": true, "bytes": 38_797_312, "fileCount": 134, "exists": true, "clearable": true],
-                        ["name": "Cookies", "title": "网络会话与站点授权凭据", "subtitle": "站点级 Cookie 与网络登录会话，清理后部分服务需重新授权", "icon": "key.horizontal", "category": "stateful", "defaultSelected": false, "impactWarning": "清理后需重新登录授权", "bytes": 18_874_368, "fileCount": 12, "exists": true, "clearable": true]
+                        ["name": "CachedData", "title": "工作区运行编译缓存", "subtitle": "主进程与渲染进程预编译脚本缓存", "icon": "memorychip", "category": "safe", "defaultSelected": true, "bytes": 38_797_312, "fileCount": 134, "exists": true, "clearable": true]
                     ],
                     "safeBytes": 1_499_463_680,
-                    "statefulBytes": 18_874_368,
-                    "totalBytes": 1_518_338_048,
-                    "totalFiles": 4224,
+                    "statefulBytes": 0,
+                    "totalBytes": 1_499_463_680,
+                    "totalFiles": 4212,
                     "protectedEntries": [
-                        ["id": "workspace", "title": "工作区与核心账号凭据", "subtitle": "User/globalStorage（OAuth 令牌库 state.vscdb）与工作区配置", "icon": "folder.badge.gearshape", "bytes": 68_157_440, "fileCount": 312, "exists": true],
+                        ["id": "workspace", "title": "工作区与核心账号凭据", "subtitle": "User/globalStorage（OAuth 令牌库 state.vscdb）、Cookies、Local Storage 与工作区配置", "icon": "folder.badge.gearshape", "bytes": 87_031_808, "fileCount": 324, "exists": true],
                         ["id": "conversations", "title": "Agent 历史对话与上下文库", "subtitle": "本地会话历史记录与模型调用统计数据库", "icon": "bubble.left.and.bubble.right", "bytes": 2_841_640_960, "fileCount": 343, "exists": true]
                     ],
                     "protectedBytes": 2_909_798_400,
@@ -182,7 +181,18 @@ import Cocoa
             let policy = AccountPolicySheet(app:assistant,config:["strategy":"priority","monitored_model":"gemini","reserve_percentage":10,"candidate_min_percentage":30],saved:{})
             policy.show(in:window,onDismiss:{})
             policy.window.appearance = NSAppearance(named:appearance); pump()
-            check(policy.modelPopup.itemTitles == ["Gemini","Claude/GPT","Gemini 4 Argon"], "Model popup must expose exactly the requested three choices")
+            check(policy.modelPopup.itemTitles == ["全部主力模型（Gemini + Claude/GPT）","Gemini","Claude/GPT","Gemini 4 Argon","Gemini 4 Carbon"], "Model popup must expose Gemini, Claude/GPT, Gemini 4 Argon, and Gemini 4 Carbon")
+            var dynamicAccount = accounts[0]
+            dynamicAccount["standaloneModels"] = [
+                ["key":"argon","displayName":"Gemini 4 Argon","availability":"available","quotaState":"known","period":"weekly","remaining":0.008],
+                ["key":"carbon","displayName":"Gemini 4 Carbon","availability":"disabled","quotaState":"not_reported","period":"weekly"],
+                ["key":"xenon","displayName":"Gemini 4 Xenon","availability":"available","quotaState":"known","period":"weekly","remaining":0.85]
+            ]
+            assistant.cachedAccounts = [dynamicAccount]
+            let dynamicPolicy = AccountPolicySheet(app:assistant,config:["strategy":"priority","monitored_model":"xenon","reserve_percentage":10,"candidate_min_percentage":30],saved:{})
+            check(dynamicPolicy.modelPopup.itemTitles == ["全部主力模型（Gemini + Claude/GPT）","Gemini","Claude/GPT","Gemini 4 Argon","Gemini 4 Carbon","Gemini 4 Xenon"], "Model popup must auto-detect new standalone models")
+            check(dynamicPolicy.modelPopup.selectedItem?.title == "Gemini 4 Xenon", "Model popup must select configured dynamic model")
+            assistant.cachedAccounts = accounts
             for popup in [policy.strategyPopup, policy.modelPopup] {
                 check(popup.focusRingType == .none && popup.cell?.focusRingType == NSFocusRingType.none, "Installed popup cell must not restore the square focus bezel")
             }
@@ -358,12 +368,14 @@ import Cocoa
             try capture(panelHost.contentView!, output.appendingPathComponent("light-menu-panel-usage-single-model.png"))
         }
         menuPanel.selectTab(1, persist: false); pump()
-        check(menuPanel.selectedTab == 1 && menuPanel.headerRefreshButton.title == "刷新" && (menuPanel.headerRefreshButton.toolTip ?? "").contains("当前"), "Quota tab must keep fixed button title and scope tooltip to current account")
+        check(menuPanel.selectedTab == 1 && menuPanel.headerRefreshButton.title == "刷新" && menuPanel.headerRefreshButton.toolTip == nil, "Quota tab must keep fixed button title and zero hover tooltip")
         check(menuPanel.quotaAccountNameLabel.stringValue == "Alex" && menuPanel.quotaGemini5h.valueLabel.stringValue == "91%", "Quota tab must display active account identity and contract quota")
+        check(menuPanel.quotaCarbon.valueLabel.stringValue == "未知", "Missing Carbon response must be unknown even for PRO")
+        check(menuPanel.quotaCarbon.valueLabel.stringValue != "不可用", "Missing model cannot imply disabled")
         check(menuPanel.quotaFooterLabel.stringValue.hasPrefix("更新于 ") && !menuPanel.quotaFooterLabel.stringValue.contains("采样于"), "Quota tab footer must use concise 更新于 timestamp")
         check(menuPanel.quotaFooterLabel.superview === menuPanel.quotaRoot, "Quota tab footer must reside directly in quotaRoot")
         menuPanel.selectTab(2, persist: false); pump()
-        check(menuPanel.selectedTab == 2 && menuPanel.headerRefreshButton.title == "刷新" && (menuPanel.headerRefreshButton.toolTip ?? "").contains("所有"), "Accounts tab must keep fixed button title and scope tooltip to all accounts")
+        check(menuPanel.selectedTab == 2 && menuPanel.headerRefreshButton.title == "刷新" && menuPanel.headerRefreshButton.toolTip == nil, "Accounts tab must keep fixed button title and zero hover tooltip")
         check(menuPanel.accountsCountLabel.stringValue == "3 个账号" && menuPanel.expandedAccountIds.contains("a"), "Accounts tab must list all accounts with active account expanded")
         menuPanel.toggleAccountExpanded("b")
         check(menuPanel.expandedAccountIds.contains("b"), "Clicking backup account row must expand its 5-window quota details without switching")
@@ -754,14 +766,37 @@ import Cocoa
 
         // Verify translationSwitch target-based state toggling and error-recovery behavior
         check(stableSettings.translationSwitch.isEnabled == true, "translationSwitch must be enabled when reachable")
+        check((stableSettings.translationSwitch as AnyObject) is DesignSwitch && (stableSettings.hudSwitch as AnyObject) is DesignSwitch && (stableAccounts.autoSwitchToggle as AnyObject) is DesignSwitch, "Switches must use DesignSwitch to stay blue when window is unfocused")
         check(stableSettings.translationSwitch.state == .on, "translationSwitch must be on when status mode is adaptive")
-        check(stableSettings.translationSwitch.toolTip == "点击关闭界面汉化", "translationSwitch tooltip must prompt to disable when on")
+        check(stableSettings.translationSwitch.toolTip == nil, "translationSwitch must not display hover tooltip")
+
+        // Verify More Menu (…) includes 对话状态栏 right below 界面汉化
+        let moreMenu = assistant.buildMoreMenu()
+        let moreTitles = moreMenu.items.map(\.title)
+        if let transIdx = moreTitles.firstIndex(of: "界面汉化"), let hudIdx = moreTitles.firstIndex(of: "对话状态栏") {
+            check(hudIdx == transIdx + 1, "对话状态栏 must sit directly below 界面汉化 in More menu")
+        } else {
+            check(false, "More menu must contain both 界面汉化 and 对话状态栏")
+        }
+
+        // Verify global zero-tooltip requirement across all pages and menu panel
+        func hasNonEmptyTooltip(_ v: NSView) -> String? {
+            if let tip = v.toolTip, !tip.isEmpty { return "\(type(of: v)): \(tip)" }
+            for sub in v.subviews {
+                if let found = hasNonEmptyTooltip(sub) { return found }
+            }
+            return nil
+        }
+        for pageView: NSView in [assistant.overview!.view, assistant.accountsPage!.view, assistant.usagePage!.view, stableSettings.view!, menuPanel.view] {
+            let found = hasNonEmptyTooltip(pageView)
+            check(found == nil, "Global tooltip cleanup violated on view: \(found ?? "")")
+        }
 
         // 0. Verify unreachable backend (e.g. Node process blocked by Gatekeeper quarantine): switch stays greyed out
         assistant.reachable = false
         stableSettings.update()
         check(stableSettings.translationSwitch.isEnabled == false, "translationSwitch must remain greyed out / disabled when backend is unreachable due to Gatekeeper quarantine interception")
-        check(stableSettings.translationSwitch.toolTip == "正在连接后台服务…", "translationSwitch tooltip must show connecting message when backend is unreachable")
+        check(stableSettings.translationSwitch.toolTip == nil, "translationSwitch must not show hover tooltip when backend is unreachable")
         let menuDisabled = NSMenu()
         assistant.menuNeedsUpdate(menuDisabled)
         let toggleDisabled = menuDisabled.items.first { $0.title == "界面汉化" }
@@ -791,7 +826,7 @@ import Cocoa
         assistant.statusValue = LiveStatus(["mode": "error", "message": "连接中断", "appVersion": "2.29.1"])
         stableSettings.update()
         check(stableSettings.translationSwitch.state == .off, "translationSwitch must be off when status mode is error")
-        check(stableSettings.translationSwitch.toolTip == "连接异常，点击重试", "translationSwitch tooltip must offer retry in error mode")
+        check(stableSettings.translationSwitch.toolTip == nil, "translationSwitch must not display hover tooltip in error mode")
         // User flips switch ON to recover/retry
         stableSettings.translationSwitch.state = .on
         stableSettings.toggleTranslation()

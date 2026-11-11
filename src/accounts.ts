@@ -16,6 +16,8 @@ import { decodeTopicRow } from './account-state.js';
 import {
   applyFamilyWindows,
   buildArgonStatus,
+  buildCarbonStatus,
+  buildStandaloneModels,
   classifyFamily,
   familyWindowsFromGroups,
   familyModelQuotaFromModels,
@@ -34,6 +36,7 @@ import {
   normalizeStoredGroups,
   normalizeFraction,
   type ArgonStatus,
+  type StandaloneModelStatus,
   type Family,
   type FamilyWindows,
   type NormalizedGroup,
@@ -174,8 +177,10 @@ export function pickNextReset(
   nowMs: number,
 ): { family: Family; resetTime: string; resetCountdown: string } | null {
   let best: { family: Family; resetTime: string; resetCountdown: string } | null = null;
-  for (const family of ['gemini', 'claude', 'argon'] as const) {
-    const status = window === '5h' ? familyWindows[family].fiveHour : familyWindows[family].weekly;
+  for (const family of ['gemini', 'claude', 'argon', 'carbon'] as const) {
+    const pair = familyWindows[family];
+    if (!pair) continue;
+    const status = window === '5h' ? pair.fiveHour : pair.weekly;
     if (!status?.known || status.stale || !status.resetTime) continue;
     const parsed = Date.parse(status.resetTime);
     if (Number.isNaN(parsed)) continue;
@@ -187,7 +192,7 @@ export function pickNextReset(
 }
 
 export function familyLabel(family: Family): string {
-  return family === 'gemini' ? 'Gemini' : family === 'claude' ? 'Claude/GPT' : family === 'argon' ? 'Argon' : '其他';
+  return family === 'gemini' ? 'Gemini' : family === 'claude' ? 'Claude/GPT' : family === 'argon' ? 'Argon' : family === 'carbon' ? 'Carbon' : '其他';
 }
 
 /**
@@ -432,6 +437,7 @@ export interface ModelQuota {
   model_or_alias?: string | null;
   family?: Family;
   is_argon?: boolean;
+  is_carbon?: boolean;
   disabled?: boolean | null;
   quota_source?: QuotaSource;
   stale?: boolean;
@@ -744,7 +750,7 @@ export function normalizedModelFromStored(model: ModelQuota, fallbackSource: Quo
     model_id: model.model_id ?? model.name,
     display_name: displayName,
     family,
-    is_argon: model.is_argon ?? family === 'argon',
+    is_carbon: model.is_carbon, is_argon: model.is_argon ?? family === 'argon',
     disabled: typeof model.disabled === 'boolean' ? model.disabled
       : /(?:^|[-_])disabled(?:$|[-_])/i.test(model.model_id ?? model.name) ? true : null,
     model_or_alias: model.model_or_alias ?? null,
@@ -794,6 +800,9 @@ export interface QuotaOverview {
   argonWeeklyRemaining: number | null;
   argonWeeklyResetCountdown: string;
   argonResetCountdown: string;
+  carbonWeeklyRemaining: number | null;
+  carbonWeeklyResetCountdown: string;
+  carbonResetCountdown: string;
   /** 5h 优先（任一家族最早）；无 5h 才 weekly；绝不跨周期混取最小。 */
   resetTime: number | null;
   resetCountdown: string;
@@ -807,10 +816,13 @@ export interface QuotaOverview {
   staleHours: number;
   // task-38 新增（稳定合同）
   argonStatus: ArgonStatus;
+  carbonStatus: ArgonStatus;
+  standaloneModels: StandaloneModelStatus[];
   familyWindows: {
     gemini: { fiveHour: QuotaOverviewWindowStatus | null; weekly: QuotaOverviewWindowStatus | null };
     claude: { fiveHour: QuotaOverviewWindowStatus | null; weekly: QuotaOverviewWindowStatus | null };
     argon: { fiveHour: QuotaOverviewWindowStatus | null; weekly: QuotaOverviewWindowStatus | null };
+    carbon: { fiveHour: QuotaOverviewWindowStatus | null; weekly: QuotaOverviewWindowStatus | null };
   };
   familyModelQuota: Record<'gemini' | 'claude', QuotaOverviewWindowStatus | null>;
   nextResets: {
@@ -1354,8 +1366,8 @@ export class AccountsManager {
   }
 
   async renameAccount(id: string, name: string): Promise<Account> {
-    if (typeof name !== "string" || !name.trim() || name.trim().length > 80) throw new Error("账号名称须为 1–80 个字符");
-    return (await this.updateAccount(id, current => { current.name = name.trim(); })).account;
+    if (typeof name !== "string" || name.trim().length > 80) throw new Error("账号名称最多 80 个字符");
+    return (await this.updateAccount(id, current => { current.name = name.trim() || current.email.split('@')[0] || current.email; })).account;
   }
 
   async upsertAccount(data: any): Promise<Account> {
@@ -1771,13 +1783,22 @@ export class AccountsManager {
     const familyHasKnownModel = (family: 'gemini' | 'claude') => modelsOfFamily(family).some(model => model.effective_known === true && model.stale !== true);
 
     const trimmed = monitoredModel.trim().toLowerCase();
-    const isArgonTarget = trimmed === 'argon';
-    const isClaudeTarget = trimmed === 'claude' || trimmed === '3p';
+    const isArgonTarget = trimmed === 'argon' || trimmed === 'gemini 4 argon';
+    const isCarbonTarget = trimmed === 'carbon' || trimmed === 'gemini 4 carbon';
+    const isClaudeTarget = trimmed === 'claude' || trimmed === '3p' || trimmed === 'claude/gpt';
     const isGeminiTarget = trimmed === 'gemini';
     const isAllTarget = !trimmed || trimmed === 'all';
 
-    // 具体模型：使用规范化后的 effective（= min(own, 相关 family 新鲜窗口)），不跨周期混取 reset。
-    if (!isArgonTarget && !isClaudeTarget && !isGeminiTarget && !isAllTarget) {
+    // 具体模型或动态新增独立模型：优先匹配 standaloneModels，其次使用规范化后的 effective（= min(own, 相关 family 新鲜窗口)）
+    if (!isArgonTarget && !isCarbonTarget && !isClaudeTarget && !isGeminiTarget && !isAllTarget) {
+      const standalone = (overview.standaloneModels ?? []).find(item =>
+        item.key.toLowerCase() === trimmed || item.displayName.toLowerCase() === trimmed);
+      if (standalone) {
+        if (standalone.availability !== 'available') return null;
+        if (standalone.quotaState !== 'known' || standalone.remaining === null) return null;
+        if (typeof standalone.observedAt === 'number' && nowSec - standalone.observedAt > FRESH_SECONDS) return null;
+        return bounded(standalone.remaining);
+      }
       const model = overview.models.find(item =>
         (item.model_id ?? item.name).toLowerCase() === trimmed
         || (item.display_name ?? '').toLowerCase() === trimmed);
@@ -1797,6 +1818,14 @@ export class AccountsManager {
       return bounded(status.remaining);
     }
 
+    if (isCarbonTarget) {
+      const status = overview.carbonStatus;
+      if (status.availability !== 'available') return null;
+      if (status.quotaState !== 'known' || status.remaining === null) return null;
+      if (typeof status.observedAt === 'number' && nowSec - status.observedAt > FRESH_SECONDS) return null;
+      return bounded(status.remaining);
+    }
+
     if (isGeminiTarget) {
       if (!familyHasKnownModel('gemini')) return null;
       const values = familyValues('gemini');
@@ -1808,8 +1837,8 @@ export class AccountsManager {
       return values.length > 0 ? bounded(Math.min(...values)) : null;
     }
 
-    // all：优先统计核心主力模型家族（Gemini + Claude/GPT），避免实验性 Argon 单项偏低把主力充裕账号误判为耗尽；
-    // 仅当账号没有任何已知 Gemini/Claude 模型记录时才回退参考 Argon。
+    // all：优先统计核心主力模型家族（Gemini + Claude/GPT），避免实验性 Argon / Carbon 单项偏低把主力充裕账号误判为耗尽；
+    // 仅当账号没有任何已知 Gemini/Claude 模型记录时才回退参考 Argon / Carbon。
     const gemini = familyHasKnownModel('gemini') ? familyValues('gemini') : [];
     const claude = familyHasKnownModel('claude') ? familyValues('claude') : [];
     const argonStatus = overview.argonStatus;
@@ -1819,8 +1848,15 @@ export class AccountsManager {
       && (typeof argonStatus.observedAt !== 'number' || nowSec - argonStatus.observedAt <= FRESH_SECONDS)
       ? [argonStatus.remaining]
       : [];
+    const carbonStatus = overview.carbonStatus;
+    const carbonFresh = carbonStatus.availability === 'available'
+      && carbonStatus.quotaState === 'known'
+      && carbonStatus.remaining !== null
+      && (typeof carbonStatus.observedAt !== 'number' || nowSec - carbonStatus.observedAt <= FRESH_SECONDS)
+      ? [carbonStatus.remaining]
+      : [];
     const core = [...gemini, ...claude];
-    const all = core.length > 0 ? core : argonFresh;
+    const all = core.length > 0 ? core : [...argonFresh, ...carbonFresh];
     if (all.length === 0) return null;
     if (all.some(value => value <= 0)) return 0;
     return bounded(Math.min(...all));
@@ -2084,9 +2120,10 @@ export class AccountsManager {
           const groups = mergeGroupSets([normalizeLiveGroups(quotaSummaryData, observedAt)]);
           const windows = familyWindowsFromGroups(groups, Date.now());
           const applied = applyFamilyWindows(models, windows);
-          const missingFamilies = (['gemini', 'claude', 'argon'] as const).filter(family =>
+          const missingFamilies = (['gemini', 'claude', 'argon', 'carbon'] as const).filter(family =>
             models.some(model => model.family === family && model.disabled !== true)
-            && !groups.some(group => group.family === family && group.buckets.some(bucket => bucket.remaining_fraction_known)));
+            && !groups.some(group => group.family === family && group.buckets.some(bucket => bucket.remaining_fraction_known))
+            && !((family === 'argon' || family === 'carbon') && models.some(m => m.family === family && m.own_percentage_known && !m.own_stale)));
           const quotaData: QuotaData = {
             models: applied.map(modelQuotaFromNormalized),
             quota_groups: groups.map(groupToQuotaGroup),
@@ -2361,12 +2398,18 @@ export class AccountsManager {
         claudeFiveHourRemaining: null, claudeWeeklyRemaining: null,
         claudeFiveHourResetCountdown: '', claudeWeeklyResetCountdown: '', claudeResetCountdown: '',
         argonWeeklyRemaining: null, argonWeeklyResetCountdown: '', argonResetCountdown: '',
+        carbonWeeklyRemaining: null, carbonWeeklyResetCountdown: '', carbonResetCountdown: '',
         resetTime: null, resetCountdown: '',
         subscriptionTier: '待确认', quotaGroups: [], staleGroups: [], unknownBuckets: [], models: [],
         lastUpdated: null, isStale: false, staleHours: 0,
         argonStatus: emptyArgon,
+        carbonStatus: emptyArgon,
+        standaloneModels: [
+          { key: 'argon', displayName: 'Gemini 4 Argon', ...emptyArgon },
+          { key: 'carbon', displayName: 'Gemini 4 Carbon', ...emptyArgon },
+        ],
         familyWindows: {
-          gemini: { fiveHour: null, weekly: null }, claude: { fiveHour: null, weekly: null }, argon: { fiveHour: null, weekly: null },
+          gemini: { fiveHour: null, weekly: null }, claude: { fiveHour: null, weekly: null }, argon: { fiveHour: null, weekly: null }, carbon: { fiveHour: null, weekly: null },
         },
         familyModelQuota: { gemini: null, claude: null },
         nextResets: { fiveHour: null, weekly: null },
@@ -2419,7 +2462,7 @@ export class AccountsManager {
     }
 
     const familyWindows = familyWindowsFromGroups(groups, nowMs);
-    for (const family of ['gemini', 'claude', 'argon'] as const) {
+    for (const family of ['gemini', 'claude', 'argon', 'carbon'] as const) {
       const familyModels = models.filter(model => model.family === family);
       if (!familyWindows[family].fiveHour) {
         const merged = mergeWindowStatuses(...familyModels.map(model => model.family_5h ?? null));
@@ -2435,6 +2478,8 @@ export class AccountsManager {
     const applied = applyFamilyWindows(models, familyWindows);
     const legacy = legacyFromFamilyWindows(familyWindows, nowMs);
     const argonStatus = buildArgonStatus(applied, groups, familyWindows, nowMs);
+    const carbonStatus = buildCarbonStatus(applied, groups, familyWindows, nowMs, argonStatus, quota.subscription_tier);
+    const standaloneModels = buildStandaloneModels(applied, groups, familyWindows, nowMs, argonStatus, carbonStatus, quota.subscription_tier);
     const nextFiveHour = pickNextReset(familyWindows, '5h', nowMs);
     const nextWeekly = pickNextReset(familyWindows, 'weekly', nowMs);
     const resetPick = nextFiveHour ?? nextWeekly;
@@ -2554,6 +2599,9 @@ export class AccountsManager {
       argonWeeklyRemaining: legacySnapshot.argonWeeklyRemaining,
       argonWeeklyResetCountdown: legacySnapshot.argonWeeklyResetCountdown,
       argonResetCountdown: legacySnapshot.argonWeeklyResetCountdown,
+      carbonWeeklyRemaining: legacySnapshot.carbonWeeklyRemaining,
+      carbonWeeklyResetCountdown: legacySnapshot.carbonWeeklyResetCountdown,
+      carbonResetCountdown: legacySnapshot.carbonWeeklyResetCountdown,
       resetTime,
       resetCountdown,
       subscriptionTier: quota.subscription_tier && /starter/i.test(quota.subscription_tier) ? '' : quota.subscription_tier || '待确认',
@@ -2565,10 +2613,13 @@ export class AccountsManager {
       isStale,
       staleHours,
       argonStatus,
+      carbonStatus,
+      standaloneModels,
       familyWindows: {
         gemini: { fiveHour: windowOut(familyWindows.gemini.fiveHour), weekly: windowOut(familyWindows.gemini.weekly) },
         claude: { fiveHour: windowOut(familyWindows.claude.fiveHour), weekly: windowOut(familyWindows.claude.weekly) },
         argon: { fiveHour: windowOut(familyWindows.argon.fiveHour), weekly: windowOut(familyWindows.argon.weekly) },
+        carbon: { fiveHour: windowOut(familyWindows.carbon.fiveHour), weekly: windowOut(familyWindows.carbon.weekly) },
       },
       familyModelQuota: { gemini: windowOut(modelQuota.gemini), claude: windowOut(modelQuota.claude) },
       nextResets: {
@@ -2886,7 +2937,10 @@ export class AccountsManager {
       }
       throwIfUserAborted();
       const freshGroups = mergeGroupSets(groupSets);
-      if(providerContext&&!freshGroups.some(group=>group.buckets.some(bucket=>bucket.remaining_fraction_known))) {
+      const hasStandaloneOwnQuota = freshModels.some(model =>
+        (model.family === 'argon' || model.family === 'carbon') && model.disabled !== true
+        && model.own_percentage_known && !model.own_stale);
+      if(providerContext&&!freshGroups.some(group=>group.buckets.some(bucket=>bucket.remaining_fraction_known)) && !hasStandaloneOwnQuota) {
         const reason=summaryResults.map(row=>row.error||(!row.ok?'读取失败':'未返回额度窗口')).join('；');
         throw new CloudQuotaAuthorityError('当前官方配额服务未返回可验证额度：'+reason+'。未采用其他环境的 100% 默认值');
       }
@@ -2895,9 +2949,9 @@ export class AccountsManager {
         throw new Error('未能取得此账号的配额，已保留上次记录');
       }
 
-      if(providerContext && !freshModels.some(model=>model.is_argon&&model.own_percentage_known) && !freshGroups.some(group=>group.family==='argon')) {
+      if(providerContext && ['argon','carbon'].some(family => (family === 'argon' || freshModels.some(m=>m.family===family) || freshGroups.some(g=>g.family===family)) && !freshModels.some(model=>model.family===family&&model.own_percentage_known) && !freshGroups.some(group=>group.family===family))) {
         const independent=await queryAll<any>([providerContext.origin+'/v1internal:retrieveUserQuota'],()=>projectContextRecovered&&projectObserved&&projectId?{project:projectId}:{});
-        for(const result of independent) {note('independent-quota',result.endpoint,result.ok);if(result.ok)freshModels=mergeModelCatalogues([normalizeIndependentArgonQuota(result.data,nowSec),freshModels]);}
+        for(const result of independent) {note('independent-quota',result.endpoint,result.ok);if(result.ok)freshModels=mergeModelCatalogues([freshModels,normalizeIndependentArgonQuota(result.data,nowSec)]);}
       }
 
       // 5) 与上一次快照做语义 carryover：fresh 覆盖同 family+window，旧桶/旧模型单独标 stale。
@@ -2915,6 +2969,7 @@ export class AccountsManager {
       for (const group of previousGroups) if (group.family !== 'other') expectedFamilies.add(group.family);
       for (const model of freshModels) if (model.family !== 'other' && model.disabled !== true) expectedFamilies.add(model.family);
       const presentFamilies = new Set(mergedGroups.filter(group => group.buckets.some(bucket => bucket.remaining_fraction_known && !bucket.stale)).map(group => group.family));
+      for (const model of applied) if ((model.family === 'argon' || model.family === 'carbon') && model.disabled !== true && model.own_percentage_known && !model.own_stale) presentFamilies.add(model.family);
       const missingFamilies = [...expectedFamilies].filter(family => !presentFamilies.has(family));
       const missingWindows: { family: Family; window: WindowKind }[] = [];
       for (const previous of previousGroups) {
@@ -2927,11 +2982,11 @@ export class AccountsManager {
       }
       const production = (endpoint: string) => providerContext ? new URL(endpoint).origin===providerContext.origin : endpointPriority(endpoint) === 0;
       const productionSucceeded = summaryResults.some(result => result.ok && production(result.endpoint)
-        && normalizeCloudGroups(result.data ?? {}, nowSec).length > 0)
+        && (normalizeCloudGroups(result.data ?? {}, nowSec).length > 0 || hasStandaloneOwnQuota))
         && modelResults.some(result => result.ok && production(result.endpoint)
           && normalizeCloudModels(result.data ?? {}, nowSec).length > 0);
       const usedFallbackEndpoint = !productionSucceeded;
-      const hasFreshKnownBucket = mergedGroups.some(group => group.buckets.some(bucket => bucket.remaining_fraction_known && !bucket.stale));
+      const hasFreshKnownBucket = hasStandaloneOwnQuota || mergedGroups.some(group => group.buckets.some(bucket => bucket.remaining_fraction_known && !bucket.stale));
       const complete = !deadlineFired && !userAborted() && missingFamilies.length === 0 && missingWindows.length === 0
         && freshModels.length > 0 && hasFreshKnownBucket && !usedFallbackEndpoint;
 

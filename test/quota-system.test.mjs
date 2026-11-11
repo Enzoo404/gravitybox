@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AccountsManager, normalizedModelFromStored } from '../dist/accounts.js';
 import { normalizeFraction, normalizeCloudModels, normalizeLiveModels, normalizeCloudGroups,
-  familyWindowsFromGroups, buildArgonStatus, applyFamilyWindows, mergeGroupSets,
+  familyWindowsFromGroups, buildArgonStatus, buildCarbonStatus, buildStandaloneModels, applyFamilyWindows, mergeGroupSets,
   mergeGroupsWithPrevious, mergeModelsWithPrevious, mergeModelCatalogues, familyModelQuotaFromModels } from '../dist/quota.js';
 import { projectQuotaContract, buildDashboardAggregate } from '../dist/main.js';
 
@@ -189,4 +189,29 @@ test('只有目录的生产端点成功而配额来自备用端点时，必须�
   assert.equal(refreshed.quota.refresh_state.usedFallbackEndpoint,true);
   assert.equal(refreshed.quota.refresh_state.complete,false);
   assert.equal(manager.getAccountQuotaOverview(refreshed).geminiWeeklyRemaining,40);
+});
+
+test('Gemini 4 Carbon 与未来新模型自动检测：无模型证据时保持未知，Ultra 与动态新模型自动同步', () => {
+  const proArgonDisabled = normalizeLiveModels([{modelId:'gemini-4-argon-disabled', disabled:true}], stamp);
+  const windows = familyWindowsFromGroups([], now);
+  const argonState = buildArgonStatus(proArgonDisabled, [], windows, now);
+  assert.equal(argonState.availability, 'disabled');
+  const carbonForPro = buildCarbonStatus(proArgonDisabled, [], windows, now, argonState, 'PRO');
+  assert.equal(carbonForPro.availability, 'unknown');
+  assert.equal(carbonForPro.remaining, null);
+
+  const ultraModels = normalizeCloudModels({models:{
+    'gemini-4-argon':{quotaInfo:{remainingFraction:.75}},
+    'gemini-4-carbon':{quotaInfo:{remainingFraction:.9, resetTime:future}},
+    'gemini-4-neon':{quotaInfo:{remainingFraction:.64, resetTime:future}},
+  }}, stamp);
+  const ultraWindows = familyWindowsFromGroups([], now);
+  const applied = applyFamilyWindows(ultraModels, ultraWindows);
+  const ultraArgon = buildArgonStatus(applied, [], ultraWindows, now);
+  const ultraCarbon = buildCarbonStatus(applied, [], ultraWindows, now, ultraArgon, 'ULTRA');
+  assert.equal(ultraCarbon.availability, 'available');
+  assert.equal(ultraCarbon.remaining, .9);
+  const standalones = buildStandaloneModels(applied, [], ultraWindows, now, ultraArgon, ultraCarbon);
+  assert.deepEqual(standalones.map(item => item.key), ['argon', 'carbon', 'gemini-4-neon']);
+  assert.equal(standalones[2].remaining, .64);
 });

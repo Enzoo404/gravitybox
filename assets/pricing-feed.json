@@ -23,8 +23,8 @@
       {
         "validFrom": "2027-01-01T00:00:00Z",
         "validUntil": null,
-        "input": 1.50,
-        "output": 7.50,
+        "input": 1.5,
+        "output": 7.5,
         "cached": 0.15,
         "provenance": {
           "sourceUrl": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
@@ -64,6 +64,38 @@
           "checkedAt": "2026-11-02",
           "verification": "confirmed"
         }
+      }
+    ],
+    "gemini-4-carbon": [
+      {
+        "input": 2,
+        "output": 10,
+        "cached": 0.1,
+        "provenance": {
+          "sourceUrl": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
+          "platform": "Google Cloud 标准 Global API",
+          "conditions": "参考 Gemini 4 系列标准文本基准",
+          "checkedAt": "2026-11-02",
+          "verification": "historical",
+          "validUntil": "2026-12-01T00:00:00Z"
+        },
+        "validFrom": null,
+        "validUntil": "2026-12-01T00:00:00Z"
+      },
+      {
+        "input": 4,
+        "output": 20,
+        "cached": 0.2,
+        "provenance": {
+          "sourceUrl": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
+          "platform": "Google Cloud 标准 Global API",
+          "conditions": "参考 Gemini 4 系列标准文本基准",
+          "checkedAt": "2026-11-02",
+          "verification": "historical",
+          "validUntil": null
+        },
+        "validFrom": "2026-12-01T00:00:00Z",
+        "validUntil": null
       }
     ],
     "claude-opus-5-5": [

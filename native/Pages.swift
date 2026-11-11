@@ -20,6 +20,8 @@ final class DashboardPage: NSObject {
     // B03/B04: unknown Argon quota means "no data yet", never "not entitled"; the wording must not
     // imply eligibility. The percentage placeholder and explanation are supplied below.
     let argonWeeklyBar = quotaBar(title: "Gemini 4 Argon", percentage: nil, resetText: "", icon: "sparkles", unknownPlaceholder: "未取得配额数据")
+    let carbonWeeklyBar = quotaBar(title: "Gemini 4 Carbon", percentage: nil, resetText: "", icon: "sparkles", unknownPlaceholder: "未取得配额数据")
+    let extraStandaloneStack = NSStackView()
     let argonStatusLabel = text("Argon 配额未知", size:11, color:.secondaryLabelColor, wrap:true)
     let autoSwitchButton: NSButton
     let refreshQuotaButton: QuotaRefreshButton
@@ -65,6 +67,7 @@ final class DashboardPage: NSObject {
         accountStatusLabel.lineBreakMode = .byTruncatingTail
         accountStatusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         accountStatusLabel.isHidden = true
+        enableTextCopy(activeEmailLabel, title: "复制完整邮箱")
         activeEmailLabel.font = .systemFont(ofSize: 11.5, weight: .regular)
         activeEmailLabel.maximumNumberOfLines = 1
         activeEmailLabel.lineBreakMode = .byTruncatingMiddle
@@ -86,11 +89,20 @@ final class DashboardPage: NSObject {
         second.distribution = .fillEqually
         second.alignment = .top
         argonStatusLabel.isHidden = true
-        let third = vertical([argonWeeklyBar, argonStatusLabel], spacing: 4)
-        fillWidth(argonWeeklyBar, in: third)
+        let thirdRow = horizontal([argonWeeklyBar, carbonWeeklyBar], spacing: 14)
+        thirdRow.distribution = .fillEqually
+        thirdRow.alignment = .top
+        extraStandaloneStack.orientation = .vertical
+        extraStandaloneStack.alignment = .leading
+        extraStandaloneStack.spacing = 6
+        extraStandaloneStack.isHidden = true
+        extraStandaloneStack.detachesHiddenViews = true
+        let third = vertical([thirdRow, extraStandaloneStack, argonStatusLabel], spacing: 6)
+        third.detachesHiddenViews = true
+        fillWidth(thirdRow, in: third)
+        fillWidth(extraStandaloneStack, in: third)
         fillWidth(argonStatusLabel, in: third)
-        for bar in [gemini5hBar, geminiWeeklyBar, claude5hBar, claudeWeeklyBar] { bar.useCompactLayout() }
-        argonWeeklyBar.useCompactLayout()
+        for bar in [gemini5hBar, geminiWeeklyBar, claude5hBar, claudeWeeklyBar, argonWeeklyBar, carbonWeeklyBar] { bar.useCompactLayout() }
         dataTimestampLabel.isHidden = true
         let heroDivider = divider()
         let argonDivider = divider()
@@ -194,7 +206,6 @@ final class DashboardPage: NSObject {
         nameLabel.lineBreakMode = .byTruncatingTail
         nameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         nameLabel.setContentHuggingPriority(.defaultHigh, for: .horizontal)
-        nameLabel.toolTip = title
 
         let pill = pillBadge(badgeText, color: badgeTint)
         pill.isHidden = badgeText.isEmpty
@@ -475,6 +486,58 @@ final class DashboardPage: NSObject {
         return String(trimmed.prefix(limit)) + "…"
     }
 
+    static func syncExtraStandaloneBars(_ models: [QuotaPresentation.Argon], into stack: NSStackView, compact: Bool = true) {
+        stack.arrangedSubviews.forEach {
+            stack.removeArrangedSubview($0)
+            $0.removeFromSuperview()
+        }
+        guard !models.isEmpty else {
+            stack.isHidden = true
+            return
+        }
+        stack.isHidden = false
+        var idx = 0
+        while idx < models.count {
+            let leftModel = models[idx]
+            let leftPlaceholder = leftModel.availability == "disabled" ? "不可用" : leftModel.placeholder
+            let leftBar = quotaBar(
+                title: leftModel.title,
+                percentage: leftModel.percentage,
+                resetText: leftModel.percentage == nil ? "" : leftModel.resetText,
+                icon: "sparkles",
+                unknownPlaceholder: leftPlaceholder,
+                stale: leftModel.stale
+            )
+            if compact { leftBar.useCompactLayout() } else { leftBar.useComfortableLayout() }
+            if idx + 1 < models.count {
+                let rightModel = models[idx + 1]
+                let rightPlaceholder = rightModel.availability == "disabled" ? "不可用" : rightModel.placeholder
+                let rightBar = quotaBar(
+                    title: rightModel.title,
+                    percentage: rightModel.percentage,
+                    resetText: rightModel.percentage == nil ? "" : rightModel.resetText,
+                    icon: "sparkles",
+                    unknownPlaceholder: rightPlaceholder,
+                    stale: rightModel.stale
+                )
+                if compact { rightBar.useCompactLayout() } else { rightBar.useComfortableLayout() }
+                let row = horizontal([leftBar, rightBar], spacing: 14)
+                row.distribution = .fillEqually
+                row.alignment = .top
+                stack.addArrangedSubview(row)
+                fillWidth(row, in: stack)
+                idx += 2
+            } else {
+                let row = horizontal([leftBar, NSView()], spacing: 14)
+                row.distribution = .fillEqually
+                row.alignment = .top
+                stack.addArrangedSubview(row)
+                fillWidth(row, in: stack)
+                idx += 1
+            }
+        }
+    }
+
     // B12: account half failed. Keep the retry hint local and never invent a 0% quota or an empty
     // account identity; the usage KPI area is rendered independently below.
     private func renderAccountsError(_ error: String, bothFailed: Bool) {
@@ -484,15 +547,16 @@ final class DashboardPage: NSObject {
         self.accountStatusLabel.isHidden = false
         self.accountStatusLabel.stringValue = "\(detail) · 可稍后自动重试"
         self.accountStatusLabel.textColor = accessibleWarningColor()
-        self.accountStatusLabel.toolTip = error
+        self.accountStatusLabel.toolTip = nil
         self.activeEmailLabel.stringValue = "点击右上角「刷新配额」或稍后自动重试"
-        self.activeEmailLabel.toolTip = error
+        self.activeEmailLabel.toolTip = nil
         self.gemini5hBar.update(title: "Gemini · 5 小时", percentage: nil, resetText: "", icon: "bolt.fill", unknownPlaceholder: "读取失败")
         self.geminiWeeklyBar.update(title: "Gemini · 每周", percentage: nil, resetText: "", icon: "calendar", unknownPlaceholder: "读取失败")
         self.claude5hBar.update(title: "Claude/GPT · 5 小时", percentage: nil, resetText: "", icon: "cpu", unknownPlaceholder: "读取失败")
         self.claudeWeeklyBar.update(title: "Claude/GPT · 每周", percentage: nil, resetText: "", icon: "calendar", unknownPlaceholder: "读取失败")
-        argonWeeklyBar.isHidden = false; argonStatusLabel.isHidden = true
+        argonWeeklyBar.isHidden = false; carbonWeeklyBar.isHidden = false; extraStandaloneStack.isHidden = true; argonStatusLabel.isHidden = true
         self.argonWeeklyBar.update(title: "Gemini 4 Argon", percentage: nil, resetText: "", icon: "sparkles", unknownPlaceholder: "读取失败")
+        self.carbonWeeklyBar.update(title: "Gemini 4 Carbon", percentage: nil, resetText: "", icon: "sparkles", unknownPlaceholder: "读取失败")
     }
     // B12: usage half failed. Show an explicit error instead of 0 / $0.00 / 0 次.
     private func renderUsageError(_ error: String) {
@@ -501,15 +565,15 @@ final class DashboardPage: NSObject {
         self.todayTokensMetric.stringValue = "—"
         self.todayTokensDetail.stringValue = "\(detail) · 可稍后自动重试"
         self.todayTokensDetail.textColor = accessibleWarningColor()
-        self.todayTokensDetail.toolTip = error
+        self.todayTokensDetail.toolTip = nil
         self.usageMetric.stringValue = "—"
         self.usageDetail.stringValue = "\(detail) · 可稍后自动重试"
         self.usageDetail.textColor = accessibleWarningColor()
-        self.usageDetail.toolTip = error
+        self.usageDetail.toolTip = nil
         self.todayRequestsMetric.stringValue = "—"
         self.todayRequestsDetail.stringValue = "\(detail) · 可稍后自动重试"
         self.todayRequestsDetail.textColor = accessibleWarningColor()
-        self.todayRequestsDetail.toolTip = error
+        self.todayRequestsDetail.toolTip = nil
         self.tokenMetricCard?.refreshAccessibility()
         self.costMetricCard?.refreshAccessibility()
         self.requestsMetricCard?.refreshAccessibility()
@@ -547,7 +611,8 @@ final class DashboardPage: NSObject {
             quotaTime = "配额采样：\(formatter.string(from: qDate)) · "
             quotaUpdateDisplay = "更新于 \(Self.quotaObservedFormatter.string(from: qDate))"
         }
-        dataTimestampLabel.toolTip = "数据时间：\(quotaTime)\(fetchKey)"
+        dataTimestampLabel.toolTip = nil
+        dataTimestampLabel.setAccessibilityHelp("数据时间：\(quotaTime)\(fetchKey)")
         let hasErrorBanner = isStaleFallback || accountsFailed || usageFailed
         if hasErrorBanner {
             dataTimestampLabel.isHidden = false
@@ -581,7 +646,7 @@ final class DashboardPage: NSObject {
                 self.accountStatusLabel.stringValue = ""
                 self.accountStatusLabel.toolTip = nil
                 self.activeEmailLabel.stringValue = "点击「账号」页即可一键保存当前登录的 Google 账号"
-                self.activeEmailLabel.toolTip = self.activeEmailLabel.stringValue
+                self.activeEmailLabel.toolTip = nil
                 self.currentAccountPill.isHidden = true
             } else {
                 self.activeAccountLabel.stringValue = name.isEmpty ? email : name
@@ -637,10 +702,11 @@ final class DashboardPage: NSObject {
                 self.accountStatusLabel.textColor = !stale.hint.isEmpty
                     ? accessibleWarningColor()
                     : (finalBadgeTint == .secondaryLabelColor ? Design.secondary : finalBadgeTint)
-                self.accountStatusLabel.toolTip = stale.detail.isEmpty ? finalStatus : "\(finalStatus)\n\(stale.detail)"
+                self.accountStatusLabel.toolTip = nil
                 self.activeEmailLabel.stringValue = email
-                self.activeEmailLabel.toolTip = finalStatus.isEmpty ? email : "\(email) · \(finalStatus)"
+                self.activeEmailLabel.toolTip = nil
             }
+            self.tierBadge.isHidden = email.isEmpty
             self.tierBadge.title = tier
             self.tierBadge.tint = tier == "ULTRA" ? .systemPurple : tier == "PRO" ? .systemBlue : Design.inactivePill
             self.tierBadge.isHidden = tier.isEmpty
@@ -651,18 +717,24 @@ final class DashboardPage: NSObject {
             self.claude5hBar.update(title: "Claude/GPT · \(quotaContract.claudePrimary.label)", percentage: c5h, resetText: c5Cd, icon: "cpu", unknownPlaceholder: quotaContract.claudePrimary.window?.placeholder ?? QuotaPresentation.missingWindowPlaceholder(otherPercentage:cWeek), stale: quotaContract.claudePrimary.window?.stale == true)
             self.claudeWeeklyBar.update(title: "Claude/GPT · 每周", percentage: cWeek, resetText: cWCd, icon: "calendar", unknownPlaceholder: quotaContract.claudeWeekly?.placeholder ?? QuotaPresentation.missingWindowPlaceholder(otherPercentage:c5h), stale: quotaContract.claudeWeekly?.stale == true)
             let argon = quotaContract.argon
-            argonWeeklyBar.isHidden = false; argonStatusLabel.isHidden = true
+            argonWeeklyBar.isHidden = false; carbonWeeklyBar.isHidden = false; argonStatusLabel.isHidden = true
             argonStatusLabel.stringValue = argon?.compactText ?? "Argon 配额未知"
             let argonPlaceholder = argon?.availability == "disabled" ? "不可用" : (argon?.placeholder ?? "未知")
             self.argonWeeklyBar.update(title: argon?.title ?? "Gemini 4 Argon", percentage: argon?.percentage,
                 resetText: argon?.percentage == nil ? "" : (argon?.resetText ?? ""), icon: "sparkles",
                 unknownPlaceholder: argonPlaceholder, stale: argon?.stale == true)
+            let carbon = quotaContract.carbon
+            let carbonPlaceholder = carbon?.availability == "disabled" ? "不可用" : (carbon?.placeholder ?? "未知")
+            self.carbonWeeklyBar.update(title: carbon?.title ?? "Gemini 4 Carbon", percentage: carbon?.percentage,
+                resetText: carbon?.percentage == nil ? "" : (carbon?.resetText ?? ""), icon: "sparkles",
+                unknownPlaceholder: carbonPlaceholder, stale: carbon?.stale == true)
+            Self.syncExtraStandaloneBars(quotaContract.extraStandaloneModels, into: extraStandaloneStack, compact: true)
             let quotaWarning = QuotaPresentation.warningSummary(quotaContract)
             if !quotaWarning.isEmpty {
                 self.accountStatusLabel.isHidden = false
-                self.accountStatusLabel.stringValue = "配额未更新"
+                self.accountStatusLabel.stringValue = [self.accountStatusLabel.stringValue, quotaWarning].filter { !$0.isEmpty }.joined(separator: " · ")
                 self.accountStatusLabel.textColor = accessibleWarningColor()
-                self.accountStatusLabel.toolTip = (self.accountStatusLabel.toolTip ?? "") + "\n" + quotaContract.quotaWarnings.joined(separator: "\n")
+                self.accountStatusLabel.toolTip = nil
             }
         } else {
             self.renderAccountsError(accountsError, bothFailed: usageFailed)
@@ -705,9 +777,9 @@ final class DashboardPage: NSObject {
 
             let todayUnpriced = intVal(usg, "todayUnpricedModels")
             let todayPriced = intVal(usg, "todayPricedModels")
-            self.usageMetric.stringValue = todayUnpriced > 0 && todayPriced == 0 ? "未计价" : InterfaceText.formatUsd(todayUsd)
+            self.usageMetric.stringValue = todayUnpriced > 0 && todayPriced == 0 && todayUsd == 0 ? "未计价" : (todayUnpriced > 0 ? "已计价部分 " : "") + InterfaceText.formatUsd(todayUsd)
             self.usageDetail.stringValue = unpriced > 0 && intVal(usg, "pricedModels") == 0 ? "累计未计价" : "累计 \(InterfaceText.formatUsd(allUsd))"
-            self.usageDetail.toolTip = self.usageDetail.stringValue
+            self.usageDetail.toolTip = nil
             self.costMetricCard?.titleField?.stringValue = "今日费用估算"
 
             self.todayRequestsMetric.stringValue = todayRequests.formatted()

@@ -35,6 +35,7 @@ final class AppUpdateManager {
     var onStateChanged: (() -> Void)?
     private var checkInFlight = false
     private var downloadInFlight = false
+    private var downloadTask: Task<Void, Never>?
     private var installationInFlight = false
     private var pendingInstallAfterDownload = false
     private var cleanupInFlight = false
@@ -357,13 +358,16 @@ final class AppUpdateManager {
         downloadInFlight = true
         downloadedDMGURL = nil
         transition(.downloading(release))
-        DispatchQueue.global(qos: .utility).async { [weak self] in
+        let targetFile = cachedDMGPath(for: release.version)
+        downloadTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            let result = Result<URL, Error> {
+            let preparation = Task.detached(priority: .utility) { () -> Result<URL, Error> in
+            let result: Result<URL, Error>
+            do {
+            let file = try await { () async throws -> URL in
                 guard release.version.range(of: #"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$"#, options: .regularExpression) != nil else {
                     throw UpdatePackageIntegrity.failure("更新版本号无效，已停止更新。")
                 }
-                let targetFile = self.cachedDMGPath(for: release.version)
                 let fm = FileManager.default
                 // Rehash on every reuse, including installation. Old unverified caches never qualify.
                 if fm.fileExists(atPath: targetFile.path), (try? Self.verifyCachedDownload(targetFile)) != nil {
@@ -373,14 +377,17 @@ final class AppUpdateManager {
                     throw UpdatePackageIntegrity.failure("该版本缺少安装包或 SHA-256 校验文件，已停止更新；当前版本仍可继续使用。")
                 }
                 let shaText: String
-                do { shaText = try String(contentsOf: shaURL, encoding: .utf8) }
+                do { let (data, response) = try await URLSession.shared.data(from: shaURL); guard (response as? HTTPURLResponse)?.statusCode == 200, data.count < 65536, let decoded = String(data: data, encoding: .utf8) else { throw URLError(.badServerResponse) }; shaText = decoded }
                 catch { throw UpdatePackageIntegrity.failure("无法读取 SHA-256 校验文件，已停止更新，请稍后重试。") }
                 let expected = try UpdatePackageIntegrity.expectedHash(shaText, fileName: targetFile.lastPathComponent)
                 let dir = targetFile.deletingLastPathComponent()
                 try fm.createDirectory(at: dir, withIntermediateDirectories: true)
                 let tempDMG = dir.appendingPathComponent("download-\(UUID().uuidString).dmg.part")
                 defer { try? fm.removeItem(at: tempDMG) }
-                try Data(contentsOf: dmgURL).write(to: tempDMG, options: .atomic)
+                let (download, response) = try await URLSession.shared.download(from: dmgURL)
+                guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
+                try Task.checkCancellation()
+                try fm.moveItem(at: download, to: tempDMG)
                 try UpdatePackageIntegrity.verify(tempDMG, expected: expected)
                 let verify = Process()
                 verify.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
@@ -388,13 +395,18 @@ final class AppUpdateManager {
                 Self.configureSilentProcess(verify)
                 try verify.run(); verify.waitUntilExit()
                 guard verify.terminationStatus == 0 else { throw UpdatePackageIntegrity.failure("DMG 磁盘映像完整性校验未通过。") }
+                try Task.checkCancellation()
                 guard rename(tempDMG.path, targetFile.path) == 0 else { throw UpdatePackageIntegrity.failure("无法保存已校验安装包，请稍后重试。") }
                 // A crash between these writes leaves an unusable cache, never an unchecked ready state.
                 try Data("\(expected)  \(targetFile.lastPathComponent)\n".utf8).write(to: targetFile.appendingPathExtension("sha256"), options: .atomic)
                 try Self.verifyCachedDownload(targetFile)
                 return targetFile
+            }()
+            result = .success(file)
+            } catch { result = .failure(error) }
+            return result
             }
-            DispatchQueue.main.async {
+            let result = await withTaskCancellationHandler { await preparation.value } onCancel: { preparation.cancel() }
                 self.downloadInFlight = false
                 let shouldAutoInstall = self.pendingInstallAfterDownload
                 self.pendingInstallAfterDownload = false
@@ -407,12 +419,14 @@ final class AppUpdateManager {
                         self.executeInstall(release: release, dmgFile: file)
                     }
                 case .failure(let error):
-                    self.transition((silent && !shouldAutoInstall) ? .updateAvailable(release) : .failed(error.localizedDescription))
+                    if error is CancellationError || (error as? URLError)?.code == .cancelled { self.transition(.updateAvailable(release)) }
+                    else { self.transition((silent && !shouldAutoInstall) ? .updateAvailable(release) : .failed(error.localizedDescription)) }
                 }
                 completion?(result)
-            }
         }
     }
+
+    func cancelDownload() { pendingInstallAfterDownload = false; downloadTask?.cancel() }
 
     func installRelease(_ release: AppReleaseInfo) {
         guard !installationInFlight else { return }
@@ -806,7 +820,7 @@ final class UpdateSheetController: NSObject, NSWindowDelegate {
     let statusIconView = symbol("checkmark.seal.fill", size: 13, color: Design.blue)
     let changelogHeading = text("版本说明", size: 12, weight: .semibold, color: .labelColor)
     let changelogTextView = NSTextView()
-    let autoUpdateSwitch = NSSwitch()
+    let autoUpdateSwitch = DesignSwitch()
     let closeBtn = button("完成", target: nil, action: #selector(closeSheet))
     let primaryBtn = DesignButton(title: "重新检查", target: nil, action: #selector(primaryAction))
     var spinner: NSProgressIndicator { primaryBtn.activitySpinner }
@@ -1014,9 +1028,9 @@ final class UpdateSheetController: NSObject, NSWindowDelegate {
             setNotesContent(AppUpdateManager.formatReleaseNotes(release.changelog))
             closeBtn.title = "后台下载"
             closeBtn.isEnabled = true
-            primaryBtn.title = "下载中…"
+            primaryBtn.title = "取消下载"
             primaryBtn.showsSpinner = true
-            primaryBtn.isEnabled = false
+            primaryBtn.isEnabled = true
         case .readyToInstall(let release, _):
             setStatusIcon("checkmark.shield.fill", tint: .systemGreen)
             changelogHeading.stringValue = "\(release.tagName) 更新日志"
@@ -1078,7 +1092,9 @@ final class UpdateSheetController: NSObject, NSWindowDelegate {
             app.updateManager.installRelease(release)
         case .upToDate, .failed, .idle:
             app.updateManager.checkForUpdates(silent: false)
-        case .checking, .downloading, .installing:
+        case .downloading:
+            app.updateManager.cancelDownload()
+        case .checking, .installing:
             break
         }
     }
@@ -1107,11 +1123,12 @@ final class PreferencesController: NSObject {
 
     unowned let app: Assistant
     var view: NSView!
-    let translationSwitch = NSSwitch()
-    let hudSwitch = NSSwitch()
+    let translationSwitch = DesignSwitch()
+    let hudSwitch = DesignSwitch()
+    let pricingSyncSwitch = DesignSwitch()
     let refresh = NSPopUpButton(frame: .zero, pullsDown: false)
-    let login = NSSwitch()
-    let syncLifecycleSwitch = NSSwitch()
+    let login = DesignSwitch()
+    let syncLifecycleSwitch = DesignSwitch()
     let aboutSubtitleLabel = text("", size: 11, color: Design.blue, wrap: true)
     var checkUpdateBtn: NSButton!
     let feedback = text("", size: 11, color: Design.secondary, wrap: true)
@@ -1123,22 +1140,12 @@ final class PreferencesController: NSObject {
         translationSwitch.controlSize = .small
         translationSwitch.state = app.statusValue.enabled ? .on : .off
         translationSwitch.isEnabled = app.reachable && app.statusValue.mode != "unsupported"
-        if !app.reachable {
-            translationSwitch.toolTip = "正在连接后台服务…"
-        } else if app.statusValue.mode == "unsupported" {
-            translationSwitch.toolTip = "当前应用版本不受支持"
-        } else if app.statusValue.mode == "error" {
-            translationSwitch.toolTip = "连接异常，点击重试"
-        } else {
-            translationSwitch.toolTip = app.statusValue.enabled ? "点击关闭界面汉化" : "点击开启界面汉化"
-        }
         translationSwitch.target = self; translationSwitch.action = #selector(toggleTranslation); translationSwitch.setAccessibilityLabel("界面汉化")
 
         hudSwitch.controlSize = .small
         hudSwitch.state = app.effectiveHudEnabled() ? .on : .off
-        hudSwitch.isEnabled = app.reachable && app.statusValue.mode != "unsupported" && app.statusValue.enabled
+        hudSwitch.isEnabled = app.reachable && app.statusValue.mode != "unsupported"
         hudSwitch.target = self; hudSwitch.action = #selector(toggleHud); hudSwitch.setAccessibilityLabel("对话状态栏")
-        syncHudTooltip()
 
         login.controlSize = .small
         login.state = SMAppService.mainApp.status == .enabled ? .on : .off
@@ -1155,16 +1162,23 @@ final class PreferencesController: NSObject {
         refresh.translatesAutoresizingMaskIntoConstraints = false
         refresh.widthAnchor.constraint(equalToConstant: 118).isActive = true
 
+        pricingSyncSwitch.state = app.configuration.value.autoPricingSyncEnabled ? .on : .off
+        pricingSyncSwitch.target = self; pricingSyncSwitch.action = #selector(togglePricingSync)
+        pricingSyncSwitch.setAccessibilityLabel("自动更新价格基准")
         let general = vertical([
             settingRow(icon: "power", tint: .systemGray, title: "登录时启动", subtitle: "登录 macOS 时自动在菜单栏启动 GravityBox", control: login),
             divider(),
             settingRow(icon: "character.book.closed", tint: .systemGreen, title: "界面汉化", subtitle: "基于外置词典实时汉化 Antigravity 界面，不改动官方应用包", control: translationSwitch),
             divider(),
-            settingRow(icon: "chart.bar.xaxis", tint: .systemIndigo, title: "对话状态栏", subtitle: "在对话输入框下方实时展示轮次步数、Token 缓存与上下文水位", control: hudSwitch),
+            settingRow(icon: "chart.bar.xaxis", tint: .systemIndigo, title: "对话状态栏", subtitle: "可独立开启；关闭汉化时以英文显示轮次、Token 与上下文", control: hudSwitch),
             divider(),
             settingRow(icon: "link", tint: .systemTeal, title: "跟随 Antigravity 启停", subtitle: "打开 Antigravity 时自动在菜单栏启动，关闭时一并退出", control: syncLifecycleSwitch),
             divider(),
-            settingRow(icon: "arrow.clockwise", tint: Design.blue, title: "配额刷新间隔", subtitle: "定时在后台同步已保存账号的最新剩余配额", control: refresh)
+            settingRow(icon: "arrow.clockwise", tint: Design.blue, title: "配额刷新间隔", subtitle: "定时在后台同步已保存账号的最新剩余配额", control: refresh),
+            divider(),
+            settingRow(icon: "dollarsign.circle", tint: Design.blue, title: "自动更新价格基准", subtitle: "允许从 GitHub 更新参考单价；历史已锁定费用保持不变", control: pricingSyncSwitch),
+            divider(),
+            settingRow(icon: "clock.arrow.circlepath", tint: .systemGray, title: "历史费用估算", subtitle: "按当前参考价重新估算，并保留原费率和前后对照", control: button("重新估算历史…", target: self, action: #selector(revalueHistory)))
         ], spacing: 12)
         for child in general.arrangedSubviews { fillWidth(child, in: general) }
 
@@ -1173,7 +1187,7 @@ final class PreferencesController: NSObject {
             icon: "internaldrive",
             tint: .systemOrange,
             title: "存储与维护",
-            subtitle: "管理运行加速缓存与会话状态，安全清理冗余文件并支持原位恢复",
+            subtitle: "仅清理可重建的运行加速缓存，账号与会话状态受保护",
             control: manageCacheBtn
         )
         let maintenance = vertical([
@@ -1252,11 +1266,9 @@ final class PreferencesController: NSObject {
         if let release = app.updateManager.availableRelease {
             let subtitleText = "发现新版本 v\(release.version)，可立即升级"
             aboutSubtitleLabel.stringValue = subtitleText
-            aboutSubtitleLabel.toolTip = subtitleText
             aboutSubtitleLabel.isHidden = false
         } else {
             aboutSubtitleLabel.stringValue = ""
-            aboutSubtitleLabel.toolTip = nil
             aboutSubtitleLabel.isHidden = true
         }
     }
@@ -1264,18 +1276,8 @@ final class PreferencesController: NSObject {
     func update() {
         translationSwitch.state = app.statusValue.enabled ? .on : .off
         translationSwitch.isEnabled = app.reachable && app.statusValue.mode != "unsupported"
-        if !app.reachable {
-            translationSwitch.toolTip = "正在连接后台服务…"
-        } else if app.statusValue.mode == "unsupported" {
-            translationSwitch.toolTip = "当前应用版本不受支持"
-        } else if app.statusValue.mode == "error" {
-            translationSwitch.toolTip = "连接异常，点击重试"
-        } else {
-            translationSwitch.toolTip = app.statusValue.enabled ? "点击关闭界面汉化" : "点击开启界面汉化"
-        }
         hudSwitch.state = app.effectiveHudEnabled() ? .on : .off
-        hudSwitch.isEnabled = app.reachable && app.statusValue.mode != "unsupported" && app.statusValue.enabled
-        syncHudTooltip()
+        hudSwitch.isEnabled = app.reachable && app.statusValue.mode != "unsupported"
         login.state = SMAppService.mainApp.status == .enabled ? .on : .off
         syncLifecycleSwitch.state = app.configuration.value.syncAntigravityLifecycle ? .on : .off
         refresh.selectItem(at: Self.refreshIntervals.firstIndex(of: app.configuration.value.quotaRefreshMinutes) ?? 0)
@@ -1288,15 +1290,31 @@ final class PreferencesController: NSObject {
         app.setTranslationEnabled(target)
     }
 
-    private func syncHudTooltip() {
-        if !app.reachable {
-            hudSwitch.toolTip = "正在连接后台服务…"
-        } else if app.statusValue.mode == "unsupported" {
-            hudSwitch.toolTip = "当前应用版本不受支持"
-        } else if !app.statusValue.enabled {
-            hudSwitch.toolTip = "开启界面汉化后生效"
-        } else {
-            hudSwitch.toolTip = app.effectiveHudEnabled() ? "点击隐藏对话状态栏" : "点击显示对话状态栏"
+    @objc func revalueHistory() {
+        guard let window = app.window else { return }
+        let alert = NSAlert()
+        alert.messageText = "按当前参考价重新估算历史费用？"
+        alert.informativeText = "历史费用估算将更新，原费率和前后金额对照会保留在本机。实际服务账单不受影响。"
+        alert.addButton(withTitle: "取消")
+        alert.addButton(withTitle: "重新估算")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertSecondButtonReturn, let self else { return }
+            self.app.perform(["command": "api_pricing_revalue", "confirm": true]) { [weak self] _ in
+                self?.app.overview?.fetch(); self?.app.usagePage?.fetch(force: true)
+            }
+        }
+    }
+
+    @objc func togglePricingSync() {
+        let enabled = pricingSyncSwitch.state == .on
+        pricingSyncSwitch.isEnabled = false
+        app.bridge.send(["command": "pricing_sync_set", "enabled": enabled]) { [weak self] result in
+            guard let self else { return }
+            self.pricingSyncSwitch.isEnabled = true
+            if case .success = result {
+                self.app.configuration.value.autoPricingSyncEnabled = enabled
+                try? self.app.configuration.save()
+            } else { self.pricingSyncSwitch.state = self.app.configuration.value.autoPricingSyncEnabled ? .on : .off }
         }
     }
 

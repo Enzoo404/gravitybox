@@ -52,10 +52,25 @@ import Cocoa
         check(QuotaPresentation.warningSummary(warning, excluding:["HTTP 403"]) == "Other information", "Refresh error not repeated; independent warnings retained")
         let same = QuotaPresentation.contract(["quotaWarnings":["UNVERIFIED_CLOUD_SCOPE: HTTP 403"], "refreshState":["complete":false]])
         check(QuotaPresentation.warningSummary(same, excluding:["HTTP 403"]).isEmpty, "Single failure renders only once")
-        check(ModelDisplayName.name("gemini-3.8-flash-n") == "gemini-3.8-flash-n", "Opaque N ID must not collapse to base model")
+        check(ModelDisplayName.name("gemini-3.8-flash-n") == "Gemini 3.8 Flash", "Internal ID uses readable title; raw ID remains in underlying record")
         check(ModelDisplayName.name("claude-opus-5-5-high") == "Claude Opus 5.5 High", "Preserve exact effort variant")
         check(ModelDisplayName.name("gemini-4-argon-trial") == "Gemini 4 Argon Trial", "Preserve trial variant")
-        check(ModelDisplayName.name("gemini-3.8-flash-exp-a") == "gemini-3.8-flash-exp-a", "Unknown variants stay exact")
+        check(ModelDisplayName.name("gemini-4-carbon") == "Gemini 4 Carbon", "Format Gemini 4 Carbon")
+        check(ModelDisplayName.name("gemini-4-neon") == "Gemini 4 Neon", "Auto-format future Gemini 4+ codename models")
+        check(ModelDisplayName.name("gemini-3.8-flash-exp-a") == "Gemini 3.8 Flash", "Known internal variant has readable name")
+        let proNoCarbon = QuotaPresentation.contract(["subscription_tier":"PRO", "argonStatus":["availability":"disabled", "quotaState":"not_reported"]])
+        check(proNoCarbon.carbon?.availability == "unknown", "Missing Carbon evidence stays unknown irrespective of tier")
+        let ultraWithNewModel = QuotaPresentation.contract([
+            "subscription_tier":"ULTRA",
+            "carbonStatus":["availability":"available", "quotaState":"known", "remaining":0.85, "period":"weekly", "modelName":"gemini-4-carbon"],
+            "standaloneModels":[
+                ["key":"argon", "modelName":"gemini-4-argon", "availability":"available", "quotaState":"known", "remaining":0.5, "period":"weekly"],
+                ["key":"carbon", "modelName":"gemini-4-carbon", "availability":"available", "quotaState":"known", "remaining":0.85, "period":"weekly"],
+                ["key":"gemini-4-neon", "modelName":"gemini-4-neon", "availability":"available", "quotaState":"known", "remaining":0.92, "period":"weekly"]
+            ]
+        ])
+        check(ultraWithNewModel.carbon?.percentage == 85 && ultraWithNewModel.carbon?.title == "Gemini 4 Carbon · 每周", "Ultra Carbon quota parsed")
+        check(ultraWithNewModel.extraStandaloneModels.count == 1 && ultraWithNewModel.extraStandaloneModels.first?.title == "Gemini 4 Neon · 每周" && ultraWithNewModel.extraStandaloneModels.first?.percentage == 92, "Auto-detected standalone model parsed")
         check(InterfaceText.quotaMessage("HTTP 403 (#3501)") == "许可校验失败 · 3501", "Concise service state")
         print("30 native quota assertions passed")
     }

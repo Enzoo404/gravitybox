@@ -86,6 +86,7 @@ const homeDir = option('--home-dir', process.env.GRAVITYBOX_HOME_DIR || homedir(
 const appSupportDir = option('--app-support-dir', process.env.GRAVITYBOX_APP_SUPPORT_DIR || join(homedir(), 'Library', 'Application Support'))!;
 const switchService = new AccountSwitchService(accountsManager, { stateDir, profile, channel, externalDir: join(homeDir, '.antigravity_tools') });
 const usageManager = new UsageStatsManager({ stateDir, geminiDir });
+  try { const pricePrefs=JSON.parse(await readFile(join(stateDir,'pricing-preferences.json'),'utf8'));usageManager.setAutoRemotePricingSync(pricePrefs.enabled===true); } catch {}
 const idempotencyStore = new IdempotencyStore();
 let backendLease: ProcessLease | undefined;
 
@@ -156,6 +157,8 @@ export function projectQuotaContract(overview: any): Record<string, any> {
     familyWindows: overview.familyWindows,
     familyModelQuota: overview.familyModelQuota,
     argonStatus: overview.argonStatus,
+    carbonStatus: overview.carbonStatus ?? null,
+    standaloneModels: overview.standaloneModels ?? [],
     refreshState: overview.refreshState,
     quotaWarnings: overview.quotaWarnings,
     quotaWarningCodes: overview.quotaWarningCodes,
@@ -264,6 +267,9 @@ export async function buildDashboardAggregate(deps: DashboardAggregateDeps): Pro
           argonWeeklyRemaining: quotaOverview?.argonWeeklyRemaining ?? null,
           argonWeeklyResetCountdown: quotaOverview?.argonWeeklyResetCountdown ?? '',
           argonResetCountdown: quotaOverview?.argonResetCountdown ?? '',
+          carbonWeeklyRemaining: quotaOverview?.carbonWeeklyRemaining ?? null,
+          carbonWeeklyResetCountdown: quotaOverview?.carbonWeeklyResetCountdown ?? '',
+          carbonResetCountdown: quotaOverview?.carbonResetCountdown ?? '',
           resetTime: resetTimeStr,
           resetCountdown: quotaOverview?.resetCountdown ?? '',
           quotaGroups: quotaOverview?.quotaGroups ?? [],
@@ -274,7 +280,7 @@ export async function buildDashboardAggregate(deps: DashboardAggregateDeps): Pro
           isStale: quotaOverview?.isStale ?? false,
           staleHours: quotaOverview?.staleHours ?? 0,
           quotaRefreshError,
-          ...projectQuotaContract(quotaOverview ?? { familyWindows: null, argonStatus: null,
+          ...projectQuotaContract(quotaOverview ?? { familyWindows: null, argonStatus: null, carbonStatus: null, standaloneModels: [],
             refreshState: { complete: false }, quotaWarnings: [], quotaWarningCodes: [] }),
         };
       } catch (error) { accountsError = sanitizeErrorMessage(error); }
@@ -640,6 +646,9 @@ async function run() {
                 argonWeeklyRemaining: q.argonWeeklyRemaining,
                 argonWeeklyResetCountdown: q.argonWeeklyResetCountdown ?? '',
                 argonResetCountdown: q.argonResetCountdown,
+                carbonWeeklyRemaining: q.carbonWeeklyRemaining,
+                carbonWeeklyResetCountdown: q.carbonWeeklyResetCountdown ?? '',
+                carbonResetCountdown: q.carbonResetCountdown,
                 staleGroups: q.staleGroups,
                 stale_groups: q.staleGroups,
                 subscription_tier: normalizeSubscriptionTier(q.subscriptionTier),
@@ -692,12 +701,15 @@ async function run() {
       if (command === 'account_switch_preflight') {
         (async () => {
           let appRunning = false;
+          let stableRunning = false;
+          let insidersRunning = false;
           let hasRunningTask = false;
           let taskReason = '';
+          const insidersAppPath = '/Applications/Antigravity - Insiders.app';
           const candidateTargets = [
             target,
             ...allApplicationTargets().filter(t => t.appPath !== target.appPath),
-            { appPath: '/Applications/Antigravity - Insiders.app', executable: 'Electron' },
+            { appPath: insidersAppPath, executable: 'Electron' },
           ];
           try {
             const { stdout: psOut } = await execFileAsync('/bin/ps', ['-ax', '-ww', '-o', 'pid=,pcpu=,args='], { timeout: 3000 });
@@ -706,6 +718,11 @@ async function run() {
               if (matched) {
                 if (line.includes(`${matched.appPath}/Contents/MacOS/${matched.executable}`) && !line.includes('Helper')) {
                   appRunning = true;
+                  if (matched.appPath === insidersAppPath) {
+                    insidersRunning = true;
+                  } else {
+                    stableRunning = true;
+                  }
                 }
                 const m = line.trim().match(/^(\d+)\s+([\d.]+)\s+/);
                 const cpu = m ? parseFloat(m[2] || '0') : 0;
@@ -753,6 +770,8 @@ async function run() {
           reply({
             ok: true,
             appRunning,
+            stableRunning,
+            insidersRunning,
             safe: !hasRunningTask,
             state: hasRunningTask ? 'busy' : 'safe',
             hasRunningTask,
@@ -802,6 +821,7 @@ async function run() {
               requestCount: m.request_count,
               estimatedUsd: m.estimated_usd,
               priced: m.priced === true,
+              partiallyPriced: m.partiallyPriced === true, unpricedTokens: m.unpriced_tokens ?? 0,
               pricingKey: m.pricingKey, pricingStatus: m.pricingStatus, pricingProvenance: m.pricingProvenance,
               input_tokens: m.input_tokens,
               output_tokens: m.output_tokens,
@@ -862,8 +882,10 @@ async function run() {
       commandChain = commandChain.catch(() => {}).then(async () => {
         try {
           if(command==='shortcut_set'){if(!fixture)throw new Error('中英对照已移除');await controller.configureShortcut(parsed.enabled===true);reply({ok:true});return;}
+          if(command==='api_pricing_revalue'){reply({ok:true,...await usageManager.revalueHistory(parsed.confirm===true)});return;}
+          if(command==='pricing_sync_set'){await atomicJson(join(stateDir, 'pricing-preferences.json'), {enabled:parsed.enabled===true});usageManager.setAutoRemotePricingSync(parsed.enabled===true);reply({ok:true});return;}
           if(command==='hud_set'){const nextHud=parsed.enabled!==false;await saveRuntimePreferences({hudEnabled:nextHud});await controller.configureHud(nextHud);await writeChain;reply({ok:true,status:controller.snapshot()});return;}
-          if(command==='maintenance_clear'){reply(await cacheMaintenance.clear(parsed.token, parsed.selectedNames, { force: parsed.force === true }));return;}
+          if(command==='maintenance_clear'){reply(await cacheMaintenance.clear(parsed.token, parsed.selectedNames));return;}
           if(command==='maintenance_restore'){reply(await cacheMaintenance.restore(parsed.snapshotId ?? parsed.id));return;}
           if(command==='maintenance_preflight'){if(tasks.list().some(t=>t.state==='running'))throw new Error('请先等待当前任务完成，再执行维护');reply(await controller.maintenancePreflight());return;}
           if(command==='metadata_scan_start'){const taskId=tasks.begin('deep-scan','读取插件与菜单',async(signal,_progress,commit)=>controller.metadataScan(signal,parsed.nativeMenus,commit));reply({ok:true,taskId});return;}
