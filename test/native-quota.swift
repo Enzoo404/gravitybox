@@ -53,7 +53,7 @@ import Cocoa
         let same = QuotaPresentation.contract(["quotaWarnings":["UNVERIFIED_CLOUD_SCOPE: HTTP 403"], "refreshState":["complete":false]])
         check(QuotaPresentation.warningSummary(same, excluding:["HTTP 403"]).isEmpty, "Single failure renders only once")
         check(ModelDisplayName.name("gemini-3.8-flash-n") == "gemini-3.8-flash-n", "Response model with -n suffix stays exact")
-        check(ModelDisplayName.name("claude-opus-5-5-high") == "Claude Opus 5.5", "Reasoning effort suffix -high is stripped")
+        check(ModelDisplayName.name("claude-opus-5-5-high") == "claude-opus-5-5-high", "Raw response model with -high suffix is preserved verbatim")
         check(ModelDisplayName.name("gemini-4-argon-trial") == "Gemini 4 Argon Trial", "Preserve trial variant")
         check(ModelDisplayName.name("gemini-4-carbon") == "Gemini 4 Carbon", "Format Gemini 4 Carbon")
         check(ModelDisplayName.name("gemini-4-neon") == "Gemini 4 Neon", "Auto-format future Gemini 4+ codename models")

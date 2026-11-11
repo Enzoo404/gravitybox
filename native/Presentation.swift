@@ -44,16 +44,12 @@ enum ModelDisplayName {
             }
         }
 
-        // Strip reasoning effort suffixes from raw model IDs, while keeping opaque response_model variant suffixes (such as -n, -exp-a, -tiered, -safety-le) verbatim
+        // Strip preview/trial/thinking suffixes from known models, while keeping opaque response_model variant suffixes (such as -n, -exp-a, -tiered, -safety-le, -high, -medium, -low) verbatim
         let suffixTable: [(String, String?)] = [
             ("-extra-low-thinking", "Thinking"),
             ("-high-thinking", "Thinking"),
             ("-medium-thinking", "Thinking"),
             ("-low-thinking", "Thinking"),
-            ("-extra-low", nil),
-            ("-high", nil),
-            ("-medium", nil),
-            ("-low", nil),
             ("-thinking", "Thinking"),
             ("-trial", "Trial"),
             ("-preview", "Preview")
@@ -70,7 +66,7 @@ enum ModelDisplayName {
         }
 
         // Auto-format standalone Gemini 4+ codename models (e.g. gemini-4-carbon, gemini-4-neon)
-        if let regex = try? NSRegularExpression(pattern: "^gemini-([4-9](?:\\.[0-9]+)?)-([a-z][a-z0-9]*?)(?:-(extra-low|high|medium|low|trial))?$", options: [.caseInsensitive]),
+        if let regex = try? NSRegularExpression(pattern: "^gemini-([4-9](?:\\.[0-9]+)?)-([a-z][a-z0-9]*?)(?:-(trial))?$", options: [.caseInsensitive]),
            let match = regex.firstMatch(in: strippedValue, range: NSRange(location: 0, length: (strippedValue as NSString).length)) {
             let ns = strippedValue as NSString
             let ver = ns.substring(with: match.range(at: 1))
