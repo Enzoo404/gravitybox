@@ -443,10 +443,10 @@ test('UsageStatsManager: Protobuf 解码、SQLite 扫描与 API 价格估算', a
     const expectedUsd = calculateEstimatedUsd(1500, 1000, 4000, DEFAULT_API_PRICES['gemini-3.8-flash']);
     assert.equal(summary.today.estimated_usd, expectedUsd);
 
-    // 验证当数据库 gen_metadata 包含 field 21 (model_display_name) 如 "Gemini 3.8 Flash (High)" 时，提取带后缀的真实全称且价格正常匹配
+    // 验证当数据库 gen_metadata 同时包含 field 19 (response_model: "gemini-3.8-flash-n") 与 field 21 ("Gemini 3.8 Flash (High)") 时，提取真实 response_model 名称且不包含推理程度 High
     const dbFull = join(convDir, 'test-full-model.db');
     const wrappedFull = Buffer.concat([
-      ProtobufWriter.encodeString(19, 'gemini-3.8-flash'),
+      ProtobufWriter.encodeString(19, 'gemini-3.8-flash-n'),
       ProtobufWriter.encodeString(21, 'Gemini 3.8 Flash (High)'),
       field4,
       field9,
@@ -459,7 +459,7 @@ test('UsageStatsManager: Protobuf 解码、SQLite 扫描与 API 价格估算', a
        INSERT INTO gen_metadata (idx, data) VALUES (1, X'${hexFull}');`,
     ]);
     const summaryFull = await usageMgr.getUsageSummary(true);
-    assert.ok(summaryFull.today.by_model.some(m => m.model === 'Gemini 3.8 Flash (High)' && m.priced === true));
+    assert.ok(summaryFull.today.by_model.some(m => m.model === 'gemini-3.8-flash-n' && m.priced === true));
   } finally {
     await rm(sandbox, { recursive: true, force: true });
   }

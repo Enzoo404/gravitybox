@@ -28,62 +28,58 @@ enum ModelDisplayName {
         if let name = names[value] { return name }
         if value.hasPrefix("google/"), let name = names[String(value.dropFirst(7))] { return name }
 
-        // Normalize bracketed qualifiers from Antigravity database model_display_name (e.g. "Gemini 3.8 Flash (High)", "Claude Sonnet 4.6 (Thinking)", "GPT-OSS 120B (Medium)")
+        // Strip reasoning effort qualifiers in brackets (e.g. "(High)", "(Medium)", "(Low)", "(Extra Low)") while keeping non-effort qualifiers like "(Thinking)"
+        let effortSet: Set<String> = ["high", "medium", "low", "extra low", "extra-low"]
         for brackets in [(" (", ")"), ("（", "）"), ("(", ")")] {
             if trimmed.hasSuffix(brackets.1), let openRange = trimmed.range(of: brackets.0, options: .backwards) {
                 let baseRaw = String(trimmed[..<openRange.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
                 let innerRaw = String(trimmed[openRange.upperBound..<trimmed.index(before: trimmed.endIndex)]).trimmingCharacters(in: .whitespacesAndNewlines)
                 if !baseRaw.isEmpty && !innerRaw.isEmpty {
                     let baseDisplay = names[baseRaw.lowercased()] ?? baseRaw
+                    if effortSet.contains(innerRaw.lowercased()) {
+                        return baseDisplay
+                    }
                     return "\(baseDisplay) \(innerRaw)"
                 }
             }
         }
 
-        // Preserve and format hyphenated variant / tier / experimental suffixes on raw model IDs
-        let suffixTable: [(String, String)] = [
-            ("-extra-low-thinking", "Extra Low Thinking"),
-            ("-high-thinking", "High Thinking"),
-            ("-medium-thinking", "Medium Thinking"),
-            ("-low-thinking", "Low Thinking"),
-            ("-extra-low", "Extra Low"),
-            ("-high", "High"),
-            ("-medium", "Medium"),
-            ("-low", "Low"),
+        // Strip reasoning effort suffixes from raw model IDs, while keeping opaque response_model variant suffixes (such as -n, -exp-a, -tiered, -safety-le) verbatim
+        let suffixTable: [(String, String?)] = [
+            ("-extra-low-thinking", "Thinking"),
+            ("-high-thinking", "Thinking"),
+            ("-medium-thinking", "Thinking"),
+            ("-low-thinking", "Thinking"),
+            ("-extra-low", nil),
+            ("-high", nil),
+            ("-medium", nil),
+            ("-low", nil),
             ("-thinking", "Thinking"),
             ("-trial", "Trial"),
-            ("-preview", "Preview"),
-            ("-tiered", "Tiered"),
-            ("-exp-a", "Exp-A"),
-            ("-exp-b", "Exp-B"),
-            ("-exp", "Exp"),
-            ("-safety-le", "Safety-LE"),
-            ("-lite", "Lite"),
-            ("-n", "N"),
-            ("-a", "A"),
-            ("-b", "B")
+            ("-preview", "Preview")
         ]
         let strippedValue = value.hasPrefix("google/") ? String(value.dropFirst(7)) : value
         for (suffix, label) in suffixTable where strippedValue.hasSuffix(suffix) {
             let baseKey = String(strippedValue.dropLast(suffix.count))
             if let baseName = names[baseKey] {
-                return "\(baseName) \(label)"
+                if let label = label, !label.isEmpty {
+                    return "\(baseName) \(label)"
+                }
+                return baseName
             }
         }
 
-        // Auto-format newly launched Gemini 4+ codename models (e.g. gemini-4-carbon, gemini-4-neon, gemini-4-argon-high)
-        if let regex = try? NSRegularExpression(pattern: "^gemini-([4-9](?:\\.[0-9]+)?)-([a-z][a-z0-9]*?)(?:-([a-z0-9-]+))?$", options: [.caseInsensitive]),
+        // Auto-format standalone Gemini 4+ codename models (e.g. gemini-4-carbon, gemini-4-neon)
+        if let regex = try? NSRegularExpression(pattern: "^gemini-([4-9](?:\\.[0-9]+)?)-([a-z][a-z0-9]*?)(?:-(extra-low|high|medium|low|trial))?$", options: [.caseInsensitive]),
            let match = regex.firstMatch(in: strippedValue, range: NSRange(location: 0, length: (strippedValue as NSString).length)) {
             let ns = strippedValue as NSString
             let ver = ns.substring(with: match.range(at: 1))
             let code = ns.substring(with: match.range(at: 2)).capitalized
             if match.range(at: 3).location != NSNotFound {
-                let tailRaw = ns.substring(with: match.range(at: 3))
-                let tailFormatted = tailRaw.split(separator: "-").map { part -> String in
-                    let p = String(part)
-                    return p.count <= 1 ? p.uppercased() : p.capitalized
-                }.joined(separator: " ")
-                return "Gemini \(ver) \(code) \(tailFormatted)"
+                let tailRaw = ns.substring(with: match.range(at: 3)).lowercased()
+                if tailRaw == "trial" {
+                    return "Gemini \(ver) \(code) Trial"
+                }
             }
             return "Gemini \(ver) \(code)"
         }
