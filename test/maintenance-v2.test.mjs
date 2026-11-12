@@ -211,6 +211,7 @@ test('v2 存储治理: 严格保护主对话、已归档对话树(archived=1)与
     const m = new CacheMaintenance(profile, trash, async () => false, {
       geminiDir,
       browserRunning: async () => false,
+      archiveDatabases: async () => ({ complete: true }),
     });
 
     // 活跃 RUNNING 会话在 3 分钟内有写入，hasRunningConversation 应返回 true
@@ -219,7 +220,7 @@ test('v2 存储治理: 严格保护主对话、已归档对话树(archived=1)与
     // 1. 测试保留近 30 天窗口：仅孤儿项进入清单，12 天前的历史瘦身项不出现
     const scan30 = await m.scan({ retentionDays: 30 });
     assert.equal(scan30.retentionDays, 30);
-    assert.ok(scan30.entries.some(e => e.name === 'OrphanAgentData' && e.defaultSelected === true));
+    assert.ok(!scan30.entries.some(e => e.name === 'OrphanAgentData')); // 缺父关系不是安全删除证据
     assert.ok(!scan30.entries.some(e => e.name === 'AgentSubagentDatabases'));
     assert.ok(!scan30.entries.some(e => e.name === 'AgentTaskStepLogs'));
 
@@ -238,15 +239,14 @@ test('v2 存储治理: 严格保护主对话、已归档对话树(archived=1)与
     // 执行 7 天窗口全项清理（含无损孤儿 + 3 项历史深度瘦身）
     const scanExec = await m.scan({ retentionDays: 7 });
     await m.clear(scanExec.token, [
-      'OrphanAgentData',
       'AgentTaskStepLogs',
       'AgentVerboseTranscripts',
       'AgentSubagentDatabases',
     ]);
 
     // 验证孤儿数据与 subOld.db 已被移入废纸篓
-    await assert.rejects(lstat(join(convDir, `${subOrphan}.db`)));
-    await assert.rejects(lstat(join(brainDir, subOrphan)));
+    assert.ok(await lstat(join(convDir, `${subOrphan}.db`)));
+    assert.ok(await lstat(join(brainDir, subOrphan)));
     await assert.rejects(lstat(join(convDir, `${subOld}.db`)));
 
     // 验证主对话 rootOld.db、正式产物 design_plan.md 与紧凑版 transcript.jsonl 100% 完好保留！
@@ -332,14 +332,14 @@ test('v2 存储治理: 清理孤儿与历史 Subagent .db 前自动固化本地 
 
     // 2. 清理孤儿与历史 Subagent 数据库
     const scan = await m.scan({ retentionDays: 7 });
-    const cleared = await m.clear(scan.token, ['OrphanAgentData', 'AgentSubagentDatabases']);
-    assert.equal(cleared.moved, 2);
+    const cleared = await m.clear(scan.token, ['AgentSubagentDatabases']);
+    assert.equal(cleared.moved, 1);
     await assert.rejects(lstat(subDb));
-    await assert.rejects(lstat(orphanDb));
+    assert.ok(await lstat(orphanDb));
 
     // 验证归档账本文件已生成，且清理后统计数据与历史事件明细 100% 零损一致
     const archiveRaw = JSON.parse(await readFile(join(stateDir, 'usage-archived-events.json'), 'utf8'));
-    assert.equal(Object.keys(archiveRaw.databases).length, 2);
+    assert.equal(Object.keys(archiveRaw.databases).length, 1);
 
     const afterClear = await usageMgr.getUsageSummary(true);
     assert.equal(afterClear.all_time.totals.input_tokens, 5000);
@@ -353,13 +353,13 @@ test('v2 存储治理: 清理孤儿与历史 Subagent .db 前自动固化本地 
     assert.equal(eventsAfterClear.total, 3);
 
     // 验证历史重估功能对已归档事件同样兼容无误
-    const revalued = await usageMgr.revalueHistory(true);
+    const revalued = await usageMgr.revalueHistory(true, { previewId: (await usageMgr.previewRevalueHistory()).previewId });
     assert.equal(revalued.before, baselineUsd);
     assert.equal(revalued.after, baselineUsd);
 
     // 3. 从废纸篓一键原位还原两个 .db 后，验证 event_key 幂等去重，绝不重复双倍计费
     const restored = await m.restore(basename(cleared.restorePath));
-    assert.equal(restored.restored, 2);
+    assert.equal(restored.restored, 1);
     assert.ok(await lstat(subDb));
     assert.ok(await lstat(orphanDb));
 

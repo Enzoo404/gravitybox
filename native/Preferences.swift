@@ -33,6 +33,10 @@ final class AppUpdateManager {
     private(set) var availableRelease: AppReleaseInfo?
     private(set) var downloadedDMGURL: URL?
     var onStateChanged: (() -> Void)?
+    #if NATIVE_UI_TEST
+    var checkTransport: ((URLRequest, @escaping (Data?, URLResponse?, Error?) -> Void) -> Void)?
+    #endif
+    private var checkGeneration = 0
     private var checkInFlight = false
     private var downloadInFlight = false
     private var downloadTask: Task<Void, Never>?
@@ -143,24 +147,32 @@ final class AppUpdateManager {
     }
 
     func checkForUpdates(silent: Bool = false) {
+        guard Thread.isMainThread else { DispatchQueue.main.async { [weak self] in self?.checkForUpdates(silent: silent) }; return }
         guard !checkInFlight, !downloadInFlight, !installationInFlight else { return }
         #if NATIVE_UI_TEST
-        if let release = availableRelease {
-            transition(.updateAvailable(release))
-        } else {
-            transition(.upToDate)
+        if checkTransport == nil {
+            transition(availableRelease.map { .updateAvailable($0) } ?? .upToDate)
+            return
         }
-        return
-        #else
+        #endif
         checkInFlight = true
+        checkGeneration += 1
+        let generation = checkGeneration
         transition(.checking)
         var req = URLRequest(url: Self.latestReleaseEndpoint, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 10)
         req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         req.setValue("GravityBox/\(currentVersion)", forHTTPHeaderField: "User-Agent")
         req.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
 
-        URLSession.shared.dataTask(with: req) { [weak self] data, response, error in
-            guard let self else { return }
+        let transport: (URLRequest, @escaping (Data?, URLResponse?, Error?) -> Void) -> Void
+        #if NATIVE_UI_TEST
+        transport = checkTransport ?? { request, completion in URLSession.shared.dataTask(with: request, completionHandler: completion).resume() }
+        #else
+        transport = { request, completion in URLSession.shared.dataTask(with: request, completionHandler: completion).resume() }
+        #endif
+        transport(req) { [weak self] data, response, error in
+          DispatchQueue.main.async {
+            guard let self, generation == self.checkGeneration, self.checkInFlight else { return }
             defer { self.checkInFlight = false }
             if let error {
                 if !silent {
@@ -246,8 +258,8 @@ final class AppUpdateManager {
                     self.preDownloadRelease(info, silent: true)
                 }
             }
-        }.resume()
-        #endif
+          }
+        }
     }
 
     static func formatReleaseNotes(_ raw: String) -> String {
@@ -1190,7 +1202,7 @@ final class PreferencesController: NSObject {
             divider(),
             settingRow(icon: "arrow.clockwise", tint: Design.blue, title: "配额刷新间隔", subtitle: "定时在后台同步已保存账号的最新剩余配额", control: refresh),
             divider(),
-            settingRow(icon: "dollarsign.circle", tint: Design.blue, title: "自动更新价格基准", subtitle: "定期从官方同步最新模型定价，并自动补齐历史未计价账目", control: pricingControlGroup)
+            settingRow(icon: "dollarsign.circle", tint: Design.blue, title: "自动更新价格基准", subtitle: "同步 GravityBox 维护的公开价格表，保留官方来源与计价条件", control: pricingControlGroup)
         ], spacing: 12)
         for child in general.arrangedSubviews { fillWidth(child, in: general) }
 
@@ -1375,7 +1387,7 @@ final class PreferencesController: NSObject {
             if case .success = result {
                 self.app.configuration.value.autoPricingSyncEnabled = enabled
                 try? self.app.configuration.save()
-                self.feedback.stringValue = enabled ? "自动更新已开启：将定期从官方拉取最新模型定价" : "自动更新已关闭：仅使用本地参考单价"
+                self.feedback.stringValue = enabled ? "自动更新已开启：将同步 GravityBox 维护的公开价格表" : "自动更新已关闭：仅使用本地参考单价"
                 self.feedback.textColor = Design.secondary
                 self.feedback.isHidden = false
             } else { self.pricingSyncSwitch.state = self.app.configuration.value.autoPricingSyncEnabled ? .on : .off }
@@ -1391,7 +1403,7 @@ final class PreferencesController: NSObject {
             self.pricingSyncCheckBtn?.title = "立即检查"
             if case .success(let payload) = result {
                 if let count = payload["count"] as? Int {
-                    self.feedback.stringValue = "价格基准已同步最新官方数据（覆盖 \(count) 款主流模型）"
+                    self.feedback.stringValue = "已同步公开价格基准，来源和条件见统计详情（覆盖 \(count) 款主流模型）"
                     self.feedback.textColor = .systemGreen
                     self.feedback.isHidden = false
                     self.app.overview?.fetch()

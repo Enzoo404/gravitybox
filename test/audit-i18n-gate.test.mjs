@@ -196,12 +196,8 @@ test('I04 免 vendor 模式：verifyBundleSource 与 coverage-report CLI 门禁�
     const dictDir = await writeDict(dir);
 
     // 1. 成功路径：官方支持版本 + 匹配官方指纹 + 有效 strings 数组
-    const valid = await verifyBundleSource({
-      appVersion: '2.24.0',
-      bundleSha256: pinned,
-      strings: [{ text: 'Cancel', kinds: [] }],
-      source: 'virtual-no-vendor',
-    }, { noVendor: true });
+    const trusted = JSON.parse(await readFile(new URL('../ui-strings/2.24.0.json', import.meta.url), 'utf8'));
+    const valid = await verifyBundleSource({ ...trusted, source: 'virtual-no-vendor' }, { noVendor: true });
     assert.equal(valid.verified, true);
     assert.equal(valid.byteVerified, false);
     assert.equal(valid.noVendor, true);
@@ -238,11 +234,8 @@ test('I04 免 vendor 模式：verifyBundleSource 与 coverage-report CLI 门禁�
     assert.match(emptyStrings.reason, /缺少有效的 strings 数组/);
 
     // 5. CLI 门禁验证：--no-vendor 模式在没有物理 bundle 时能够通过门禁
-    const extractionPath = await writeExtraction(dir, {
-      appVersion: '2.24.0',
-      bundleSha256: pinned,
-      source: join(dir, 'non-existent-bundle.js'),
-    });
+    const extractionPath = join(dir, 'trusted-extraction.json');
+    await writeFile(extractionPath, JSON.stringify({ ...trusted, source: join(dir, 'non-existent-bundle.js') }));
     const runWithoutNoVendor = await runTool('coverage-report.mjs', [
       '--strings', extractionPath,
       '--dict', dictDir,
@@ -253,7 +246,7 @@ test('I04 免 vendor 模式：verifyBundleSource 与 coverage-report CLI 门禁�
 
     const runWithNoVendor = await runTool('coverage-report.mjs', [
       '--strings', extractionPath,
-      '--dict', dictDir,
+      '--dict', join(process.cwd(), 'dict'),
       '--out', join(dir, 'rep-pass.json'),
       '--gate',
       '--no-vendor',

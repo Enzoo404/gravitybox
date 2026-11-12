@@ -59,7 +59,7 @@ final class DashboardPage: NSObject {
         refreshQuotaButton = QuotaRefreshButton(target: nil, action: #selector(refreshActiveQuota))
         refreshQuotaButton.controlSize = .small
         let stack = pageStack(title: "总览")
-        stack.spacing = 10
+        stack.spacing = Design.Spacing.page
         activeAccountLabel.font = .systemFont(ofSize: 15, weight: .semibold)
         activeAccountLabel.lineBreakMode = .byTruncatingTail
         activeAccountLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -115,7 +115,7 @@ final class DashboardPage: NSObject {
             heroInner.setCustomSpacing(8, after: argonDivider)
             heroInner.setCustomSpacing(6, after: third)
         }
-        heroCard.cornerRadius = 14
+        heroCard.cornerRadius = Design.Radius.card
         heroCard.borderWidth = 0.5
         heroCard.borderColor = Design.border
         stack.addArrangedSubview(heroCard)
@@ -142,7 +142,7 @@ final class DashboardPage: NSObject {
         trendHeader.alignment = .centerY
         for c in todayTrendChart.constraints where c.firstAttribute == .height { c.constant = 86 }
         let trendCard = group([trendHeader, divider(), todayTrendChart], inset: 12, spacing: 6)
-        trendCard.cornerRadius = 14
+        trendCard.cornerRadius = Design.Radius.card
         trendCard.borderWidth = 0.5
         trendCard.borderColor = Design.border
 
@@ -156,7 +156,7 @@ final class DashboardPage: NSObject {
         bentoRightStack.alignment = .leading
         bentoRightStack.spacing = 6
         let rightCard = group([rightHeader, divider(), bentoRightStack], inset: 12, spacing: 6)
-        rightCard.cornerRadius = 14
+        rightCard.cornerRadius = Design.Radius.card
         rightCard.borderWidth = 0.5
         rightCard.borderColor = Design.border
 
@@ -206,6 +206,7 @@ final class DashboardPage: NSObject {
         nameLabel.lineBreakMode = .byTruncatingTail
         nameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         nameLabel.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+        enableTextCopy(nameLabel, value: title, title: "复制完整模型 ID")
 
         let pill = pillBadge(badgeText, color: badgeTint)
         pill.isHidden = badgeText.isEmpty

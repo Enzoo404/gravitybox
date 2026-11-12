@@ -250,7 +250,7 @@ final class BackendBridge {
             "status", "task_list", "task_cancel", "usage_cancel", "ping",
             "dashboard_summary", "account_list", "account_get", "account_switch_preflight",
             "maintenance_scan", "maintenance_history", "usage_summary", "usage_events",
-            "usage_snapshot_release", "auto_switch_get", "auto_switch_best",
+            "usage_snapshot_release", "usage_ledger_review", "api_pricing_revalue_preview", "auto_switch_get", "auto_switch_best",
             "account_recovery_info", "api_pricing_get"
         ]
         let channel = readOnlyCommands.contains(command) ? controlQueue : queue

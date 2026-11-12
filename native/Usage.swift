@@ -79,7 +79,7 @@ final class UsagePage: NSObject {
         let headerActions = horizontal([accountPopup, periodSegment, refreshButton, exportButton], spacing: 8)
         headerActions.alignment = .centerY
         let root = pageStack(title: "用量", actions: headerActions)
-        root.spacing = 14
+        root.spacing = Design.Spacing.roomy
         totalTokensMetric.font = .monospacedDigitSystemFont(ofSize: 30, weight: .semibold)
         let trendHeader = horizontal([vertical([text("Token 用量", size: 11, color: Design.secondary), totalTokensMetric, tokensDetail], spacing: 6), flexibleSpace(), trendTitleLabel])
         let trend = vertical([trendHeader, trendChart], spacing: 12)
@@ -210,7 +210,7 @@ final class UsagePage: NSObject {
     private func syncExportButtonState(for period: String) {
         let summary = latestReport["summary"] as? [String: Any] ?? [:]
         exportButton.isEnabled = !loading
-            && (latestReport["period"] as? String) == period
+            && UsageQueryIdentity(accountId: selectedAccountId, period: period).matches(latestReport)
             && latestReport["snapshotId"] != nil
             && (summary["availability"] as? String) != "unavailable"
     }
@@ -219,9 +219,7 @@ final class UsagePage: NSObject {
         guard !loading else { return }
         loading = true
         refreshButton.setBusy(true, available: app.reachable)
-        if force {
-            exportButton.isEnabled = false
-        }
+        exportButton.isEnabled = false
         let requestKey = metricsKeyForCurrentPeriod()
         let segIdx = max(0, min(periods.count - 1, periodSegment.selectedSegment))
         let period = periods[segIdx]
@@ -242,15 +240,28 @@ final class UsagePage: NSObject {
                 // 失败同样进入 15s 退避，避免每个 3s tick 反复请求。
                 self.metricsKey = requestKey
                 self.syncExportButtonState(for: period)
-                self.statusSummary.stringValue = "读取失败，页面保留上次结果：\(error.localizedDescription)"
+                let oldAccount = self.latestReport["selectedAccountId"] as? String ?? "all"
+                let oldOptions = self.latestReport["availableAccounts"] as? [[String: Any]] ?? []
+                let oldLabel = oldOptions.first { ($0["id"] as? String) == oldAccount }?["label"] as? String ?? "上次所选账号"
+                let oldPeriod = self.latestReport["period"] as? String ?? ""
+                self.statusSummary.stringValue = "读取失败，保留上次结果（\(oldAccount == "all" ? "全部账号" : oldLabel) · \(oldPeriod)）：\(error.localizedDescription)"
                 self.statusSummary.textColor = accessibleWarningColor()
             case .success(let value):
+                guard UsageQueryIdentity(accountId: requestedAccountId, period: period).matches(value) else {
+                    self.statusSummary.stringValue = "返回的统计范围不匹配，已停止展示和导出，请重新读取"
+                    self.statusSummary.textColor = accessibleWarningColor()
+                    self.exportButton.isEnabled = false
+                    return
+                }
                 self.metricsKey = requestKey
                 self.latestReport = value
                 if let accounts = value["availableAccounts"] as? [[String: Any]] {
                     self.syncAccountPopup(accounts: accounts)
                 }
                 let summary = value["summary"] as? [String: Any] ?? [:]
+                // Request state is independent of chart identity: a successful retry must
+                // clear the old error even when the data snapshot itself did not change.
+                self.updateReadStatus(summary)
                 let snapshotKey = "\(value["snapshotId"] ?? ""):\(period):\(self.selectedAccountId):\(summary["availability"] ?? ""):\(summary["failedDatabasesCount"] ?? 0):\(summary["skippedLargeRecords"] ?? 0):\(summary["unknownTimeRecords"] ?? 0)"
                 if !snapshotKey.hasPrefix(":") && snapshotKey == self.renderedSnapshotKey { self.syncExportButtonState(for: period); return }
                 self.renderedSnapshotKey = snapshotKey
@@ -296,12 +307,7 @@ final class UsagePage: NSObject {
                 let avgIn = requests > 0 ? total / requests : 0
                 self.requestsDetail.stringValue = requests > 0 ? "平均每次约 \(self.formatCompactTokens(avgIn)) Token" : "当前时段暂无调用"
 
-                let failedCount = intVal(summary, "failedDatabasesCount", fallback: intVal(summary, "failed_databases_count"))
-                let skippedRecords = intVal(summary, "skippedLargeRecords", fallback: intVal(summary, "skipped_large_records"))
-                let unknown = intVal(summary, "unknownTimeRecords")
-                self.statusSummary.stringValue = InterfaceText.usageScope(scanned: intVal(summary,"databasesScanned"), discovered: intVal(summary,"databasesDiscovered"), failed:failedCount, skipped:skippedRecords, unknown:unknown)
-                self.statusSummary.textColor = failedCount > 0 || skippedRecords > 0 ? accessibleWarningColor() : .secondaryLabelColor
-
+                self.updateReadStatus(summary)
 
                 let priceRows = value["byModel"] as? [[String: Any]] ?? []
                 let outdated = priceRows.filter { ($0["pricingStatus"] as? String ?? "") == "expired" }.count
@@ -332,6 +338,18 @@ final class UsagePage: NSObject {
                 }
             }
         }
+    }
+
+    private func updateReadStatus(_ summary: [String: Any]) {
+        let failed = intVal(summary, "failedDatabasesCount", fallback: intVal(summary, "failed_databases_count"))
+        let skipped = intVal(summary, "skippedLargeRecords", fallback: intVal(summary, "skipped_large_records"))
+        let unknown = intVal(summary, "unknownTimeRecords")
+        let scope = InterfaceText.usageScope(scanned: intVal(summary, "databasesScanned"), discovered: intVal(summary, "databasesDiscovered"), failed: failed, skipped: skipped, unknown: unknown)
+        let cached = summary["availability"] as? String == "cached"
+        let warnings = summary["pricing_warnings"] as? [String] ?? []
+        let unattributed = intVal(summary, "unattributed_requests")
+        statusSummary.stringValue = (cached ? "上次记录 · " : "") + scope + (selectedAccountId == "all" ? "" : " · 按运行时身份观测归类") + (unattributed > 0 ? " · 全部历史中 \(unattributed) 条账号归属待确认" : "") + (warnings.isEmpty ? "" : " · 有 \(warnings.count) 项待核对，见统计详情")
+        statusSummary.textColor = failed > 0 || skipped > 0 || unknown > 0 || cached || !warnings.isEmpty ? accessibleWarningColor() : .secondaryLabelColor
     }
 
     func updateChartsAndBreakdown(summary: [String: Any], value: [String: Any], segIdx: Int, totalTokens: Int, totalUsd: Double) {
@@ -516,9 +534,10 @@ final class UsagePage: NSObject {
     }
     @objc func exportUsage() {
         let selected = periods[max(0, min(periods.count - 1, periodSegment.selectedSegment))]
-        guard !loading, exportButton.isEnabled, latestReport["period"] as? String == selected, latestReport["snapshotId"] != nil, let window = app.window else { return }
+        guard !loading, exportButton.isEnabled, UsageQueryIdentity(accountId: selectedAccountId, period: selected).matches(latestReport), latestReport["snapshotId"] != nil, let window = app.window else { return }
         let snapshot = latestReport
-        let accTag = selectedAccountId == "all" ? "" : "-\(selectedAccountId)"
+        let reportAccount = latestReport["selectedAccountId"] as? String ?? "all"
+        let accTag = reportAccount == "all" ? "" : "-\(reportAccount)"
         saveUsageJSON(snapshot, name: "GravityBox-用量-\(selected)\(accTag).json", window: window, app: app)
     }
     @objc func showDiagnostics() {
@@ -558,7 +577,28 @@ final class UsagePage: NSObject {
         }
         let scanSummaryText = scanDetails.isEmpty ? "" : "\n扫描状态：" + scanDetails.joined(separator: " · ")
         let overview = "会话数据库：\(intVal(summary, "databasesScanned"))/\(intVal(summary, "databasesDiscovered"))\n读取失败：\(failedCount)\n未读取记录：\(skippedRecords)\n时间未知记录：\(intVal(summary, "unknownTimeRecords"))\n时间未知 Token：\(intVal(summary, "unknownTimeTokens").formatted())\(scanSummaryText)\n\n异常记录\n" + (failures.isEmpty ? "无异常记录" : failures)
-        InspectionDetails.show("统计详情", sections: [("读取概况", overview), ("价格基准", ((summary["pricingWarnings"] as? [String] ?? summary["pricing_warnings"] as? [String] ?? []).joined(separator: "\n")) + "\n\n" + (priceDetail.isEmpty ? "暂无价格数据" : priceDetail)), ("数据库诊断", detail.isEmpty ? "暂无读取记录" : detail)], in: window)
+        diagnosticsButton.isEnabled = false
+        app.bridge.send(["command": "usage_ledger_review"]) { [weak self] result in
+            guard let self else { return }
+            self.diagnosticsButton.isEnabled = true
+            let review: [String: Any]
+            switch result {
+            case .success(let value): review = value["review"] as? [String: Any] ?? [:]
+            case .failure(let error): review = ["message": "账本预览读取失败：" + error.localizedDescription]
+            }
+            let samples = review["samples"] as? [[String: Any]] ?? []
+            var reviewText = review["message"] as? String ?? "暂无旧账本待核对事项"
+            reviewText += "\n原有事件：\(intVal(review, "originalEventCount")) · 合成事件：\(intVal(review, "syntheticCount")) · 身份待核对：\(intVal(review, "identityReviewCount"))"
+            if let baseline = review["baselinePath"] as? String { reviewText += "\n只读恢复基准：" + baseline }
+            for sample in samples {
+                let before = sample["before"] as? [String: Any] ?? [:]
+                reviewText += "\n\n\(before["model"] as? String ?? "未知模型") · 原记录 \(intVal(before, "tokens")) Token\n\(sample["reason"] as? String ?? "")\n\(sample["after"] as? String ?? "")"
+            }
+            let receipts = summary["historical_amount_receipts"] as? [String: Any] ?? [:]
+            if intVal(receipts, "unmatchedCount") > 0 { reviewText += "\n\n金额凭据 \(intVal(receipts, "unmatchedCount")) 项，合计 \(InterfaceText.formatUsd(doubleVal(receipts, "unmatchedUsd")))；缺少原始用量，不计入Token和请求数。" }
+            guard window.activeSheetWindow == nil else { return }
+            InspectionDetails.show("统计详情", sections: [("读取概况", overview), ("价格基准", ((summary["pricingWarnings"] as? [String] ?? summary["pricing_warnings"] as? [String] ?? []).joined(separator: "\n")) + "\n\n" + (priceDetail.isEmpty ? "暂无价格数据" : priceDetail)), ("历史账本修订预览（只读）", reviewText), ("数据库诊断", detail.isEmpty ? "暂无读取记录" : detail)], in: window)
+        }
     }
 
 }

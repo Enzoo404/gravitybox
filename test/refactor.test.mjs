@@ -2,20 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import 'node:http';
 import { join } from 'node:path';
-import { Controller } from '../dist/controller.js';
 import { dictionaryFromEntries, loadDictionaryLayers } from '../dist/dictionary.js';
 import { validateTranslations } from '../tools/merge-translations.mjs';
 import { loadDictLayers } from '../tools/coverage-report.mjs';
 import { atomicJson } from '../dist/files.js';
 import { Tasks } from '../dist/tasks.js';
-const configuration = { provider: 'openai', apiKey: 'synthetic-audit-key', baseUrl: 'https://model.invalid/v1', model: 'synthetic' };
-const sleep = ms => new Promise(r => setTimeout(r, ms));
 const root = new URL('../', import.meta.url);
 async function state() { const directory = await mkdtemp('/tmp/gb-test-'); await mkdir(join(directory, '词典')); return directory; }
-function controller(directory) { return new Controller({ appPath: '/nonexistent', profile: '/nonexistent', stateDir: directory, dictionary: dictionaryFromEntries({ Save: '保存' }), onStatus: () => {} }); }
-async function prepared(c, directory, count) { const path = join(directory, 'pending.json'); await writeFile(path, JSON.stringify({ entries: Array.from({ length: count }, (_, i) => ({ key: `Audit feature number ${i}` })) })); return c.previewPending(configuration, path); }
 
 test('运行时与发布门禁采用相同词典优先级', async () => {
   const runtime = await loadDictionaryLayers(fileURLToPath(new URL('dict/', root))); const gate = await loadDictLayers(fileURLToPath(new URL('dict/', root)));

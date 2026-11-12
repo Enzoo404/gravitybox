@@ -115,7 +115,7 @@ export class CdpHudBridge implements ICdpHudBridge {
     } catch {
       return;
     }
-    if (!parsed || typeof parsed !== 'object' || typeof parsed.type !== 'string') return;
+    if (!parsed || typeof parsed !== 'object' || !['SESSION_ATTACHED', 'SESSION_CHANGED', 'MODEL_CHANGED', 'STREAMING_CHANGED', 'REQUEST_REFRESH', 'SESSION_DETACHED'].includes(parsed.type)) return;
 
     for (const handler of this.clientEventHandlers) {
       try {
@@ -129,21 +129,25 @@ export class CdpHudBridge implements ICdpHudBridge {
     if (!conversationId) return;
 
     const paneKey = `${targetId}::${paneSlotId}`;
+    const existing = this.activePanes.get(paneKey);
+    const revision = parsed.sessionRevision;
+    if (typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 1) return;
+    if (existing && (revision < existing.sessionRevision || revision === existing.sessionRevision && conversationId !== existing.conversationId)) return;
 
     if (parsed.type === 'SESSION_DETACHED') {
+      if (!existing || revision !== existing.sessionRevision || conversationId !== existing.conversationId) return;
       this.activePanes.delete(paneKey);
       this.activePanes.delete(`${targetId}::${cascadeId}`);
       return;
     }
 
-    const existing = this.activePanes.get(paneKey);
     const sameConv = existing && existing.conversationId === conversationId ? existing : undefined;
     const minNextRevision = sameConv
       ? sameConv.sessionRevision
       : (existing?.sessionRevision ?? 0) + 1;
     const nextRevision =
       typeof parsed.sessionRevision === 'number' && parsed.sessionRevision > 0
-        ? Math.max(parsed.sessionRevision, minNextRevision)
+        ? parsed.sessionRevision
         : minNextRevision;
 
     const isSubagentRunning =

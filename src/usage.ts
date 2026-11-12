@@ -8,6 +8,8 @@ import { homedir } from 'node:os';
 import { atomicJson, atomicText } from './files.js';
 import { createHash } from 'node:crypto';
 import { APP_VERSION } from './version.js';
+import type { LedgerSnapshot } from './usage-aggregate.js';
+import { UsageLedger, type LedgerEvent } from './usage-ledger.js';
 
 try {
   process.loadEnvFile?.();
@@ -94,13 +96,17 @@ export interface TokenUsageSummary {
   snapshot_id?: string;
   last_attempt_at?: number;
   pricing_warnings?: string[];
+  unattributed_requests?: number;
+  unattributed_tokens?: number;
+  ledger_review_records?: number;
+  historical_amount_receipts?: { unmatchedCount: number; unmatchedUsd: number };
   available_accounts?: AvailableAccountUsageOption[];
   selected_account_id?: string;
 }
 
 export interface AvailableAccountUsageOption {
   id: string; // 'all' | accountId | email
-  label: string; // '全部账号' | 'siensen1896@gmail.com' | 'abeyond404@gmail.com'
+  label: string; // '全部账号' | 'account-one@example.invalid' | 'account-two@example.invalid'
   email?: string;
   name?: string | null;
   type?: 'all' | 'account';
@@ -195,6 +201,11 @@ export function resolvePricingForTimestamp(
 
 export interface GenerationEvent {
   event_key?: string;
+  source_id?: string;
+  source_observed_at?: number;
+  generation_index?: number;
+  legacy_event_key?: string;
+  account_confidence?: 'observed' | 'unknown' | 'legacy';
   model: string;
   input_tokens: number;
   output_tokens: number;
@@ -439,6 +450,7 @@ export class UsageStatsManager {
   private rateLocksPath: string;
   private rateLocks: Record<string, { usd: number; price: ApiPricing }> = Object.create(null);
   private rateLocksLoaded = false;
+  private rateLocksLoading?: Promise<void>;
   private rateLocksDirty = false;
   private rateLocksUnavailable = false;
   private priceRefMap = new Map<string, ApiPricing>();
@@ -450,10 +462,11 @@ export class UsageStatsManager {
   private inFlightForced = false;
   private inFlightAccountKey = 'all';
   private pendingForced?: Promise<TokenUsageSummary>;
+  private pricingMutation?: Promise<unknown>;
   private discoveryErrors: NonNullable<TokenUsageSummary['database_diagnostics']> = [];
   private periodKey = '';
   private pricingWarnings:string[]=[];
-  private snapshots = new Map<string,{events:GenerationEvent[];prices:Record<string,ApiPricing>;rawPricing:Record<string,ApiPricingEntry>;summary:TokenUsageSummary;expires:number; pins:number}>();
+  private snapshots = new Map<string,{events:GenerationEvent[];prices:Record<string,ApiPricing>;rawPricing:Record<string,ApiPricingEntry>;summary:TokenUsageSummary;expires:number; pins:number; ledger?:LedgerSnapshot}>();
   private scanAbort?: AbortController;
   private fileCache = new Map<
     string,
@@ -474,18 +487,24 @@ export class UsageStatsManager {
   private persistCachePath?: string;
   private persistLoaded = false;
   private fileCacheDirty = false;
-  private usageLedgerPath: string;
+  private ledger: UsageLedger;
   private usageLedgerLoaded = false;
+  private usageLedgerLoading?: Promise<void>;
   private usageLedgerDirty = false;
-  private usageLedgerEvents = new Map<string, GenerationEvent & { db_file?: string; ingested_at?: string }>();
+  private usageLedgerEvents = new Map<string, LedgerEvent>();
+  private pendingLedgerEvents = new Map<string, LedgerEvent>();
+  private largeLedger = false;
+  private ledgerUnavailable = false;
+  private archivedUnavailable = false;
+  private storageWarnings = new Set<string>();
   private cachedSummariesByAccount = new Map<string, { data: TokenUsageSummary; expiresAt: number }>();
   private lastAggregationKeysByAccount = new Map<string, string>();
   private knownAccounts: Array<{ id: string; email: string; name?: string | null }> = [];
   private currentAccountContext?: { id?: string; email?: string };
-  private accountContextSwitchedAtSec = 0;
-  private readonly managerStartedAtSec = Math.floor(Date.now() / 1000);
+  private accountContextObservedAtSec = Math.floor(Date.now() / 1000);
   private archivedEventsPath: string;
   private archivedEventsLoaded = false;
+  private archivedEventsLoading?: Promise<void>;
   private archivedByDb = new Map<
     string,
     {
@@ -513,7 +532,7 @@ export class UsageStatsManager {
     if (options?.dataDirectoryName && !ALLOWED_DATA_DIRECTORY_NAMES.includes(options.dataDirectoryName)) throw new Error('仅统计 Antigravity 正式版用量');
     this.dataDirectoryNames = options?.dataDirectoryName ? [options.dataDirectoryName] : ALLOWED_DATA_DIRECTORY_NAMES;
     const stateDir = options?.stateDir ?? (options?.geminiDir && options.geminiDir !== defaultGeminiDir ? join(options.geminiDir, '.gravitybox_state') : defaultStateDir);
-    this.usageLedgerPath = join(stateDir, 'usage-ledger.json');
+    this.ledger = new UsageLedger(stateDir);
     this.rateLocksPath = join(stateDir, 'usage-rate-locks.json');
     this.archivedEventsPath = join(stateDir, 'usage-archived-events.json');
     this.pricingCachePath = join(stateDir, 'api_pricing.json');
@@ -526,6 +545,11 @@ export class UsageStatsManager {
       const cacheTag = options?.dataDirectoryName ?? 'antigravity';
       this.persistCachePath = join(homedir(), 'Library', 'Caches', 'GravityBox', `usage-db-cache-${cacheTag}-v3.json`);
     }
+  }
+
+  async ledgerReview(): Promise<Record<string, unknown>> {
+    try { return await this.ledger.review(); }
+    catch { return { readOnly: true, unavailable: true, message: '旧账本损坏、版本不支持或超出读取预算；原件已保留，未生成修订候选或覆盖数据。' }; }
   }
 
   setAutoRemotePricingSync(enabled: boolean) { this.autoRemotePricingSync = enabled; }
@@ -551,47 +575,57 @@ export class UsageStatsManager {
     );
   }
 
-  async revalueHistory(confirmed = false, options?: { mode?: 'force_all' | 'unpriced_only' }): Promise<{ before: number; after: number; message: string }> {
-    if (!confirmed) throw Error('重新估算历史费用需要明确确认');
-    const mode = options?.mode ?? 'force_all';
-    const before = (await this.getUsageSummary(true)).all_time.estimated_usd;
-    if (this.rateLocksUnavailable) throw Error('历史费率账本不可读，未重新估算');
-    const original = structuredClone(this.rateLocks);
-    const receipt = `${this.rateLocksPath}.revalue-${Date.now()}.json`;
-    // Preserve the old rates before touching the active ledger, including on crash.
-    await atomicText(receipt, JSON.stringify({ version: 1, at: new Date().toISOString(), mode, before, entries: original }) + '\n');
-    if (mode === 'unpriced_only') {
-      let prunedCount = 0;
-      for (const [key, value] of Object.entries(this.rateLocks)) {
-        if (this.isUnpricedRateLock(value)) {
-          delete this.rateLocks[key];
-          prunedCount++;
-        }
-      }
-      this.rateLocksDirty = prunedCount > 0;
-    } else {
-      this.rateLocks = Object.create(null);
-      this.rateLocksDirty = true;
-    }
-    this.cachedSummariesByAccount.clear(); this.lastAggregationKeysByAccount.clear(); this.snapshots.clear();
-    try {
-      const after = (await this.getUsageSummary(true)).all_time.estimated_usd;
-      await atomicText(receipt, JSON.stringify({ version: 1, at: new Date().toISOString(), mode, before, after, entries: original,
-        changes: Object.entries(this.rateLocks).filter(([key,value]) => original[key]?.usd !== value.usd)
-          .map(([key,value]) => ({ key, before: original[key]?.usd ?? null, after: value.usd })) }) + '\n');
-      const actionDesc = mode === 'unpriced_only' ? '未计价历史记录已补充估算' : '历史费用已重新估算';
-      return { before, after, message: `${actionDesc}：$${before.toFixed(2)} → $${after.toFixed(2)}；原费率与前后对照已保留` };
-    } catch (error) {
-      this.rateLocks = original; this.rateLocksDirty = false;
-      this.cachedSummariesByAccount.clear(); this.lastAggregationKeysByAccount.clear(); this.snapshots.clear();
-      await this.saveRateLocks();
-      throw error;
-    }
+  async previewRevalueHistory(mode: 'force_all' | 'unpriced_only' = 'force_all') {
+    await this.getUsageSummary(true);
+    return this.ledger.revalue({ action: 'preview', mode, prices: await this.getRawPricingTable(), accounts: [], now: Math.floor(Date.now() / 1000) });
   }
 
-  private async loadRateLocks(): Promise<void> {
+  private async mutateHistoricalPricing<T>(operation: () => Promise<T>): Promise<T> {
+    if (this.pricingMutation) await this.pricingMutation;
+    const pendingRead = this.inFlight;
+    const work = (async () => { await pendingRead?.catch(() => {}); await this.rateLocksLoading?.catch(() => {}); return operation(); })();
+    this.pricingMutation = work;
+    try { return await work; }
+    finally { if (this.pricingMutation === work) this.pricingMutation = undefined; }
+  }
+
+  async revalueHistory(confirmed = false, options?: { mode?: 'force_all' | 'unpriced_only'; previewId?: string }): Promise<{ before: number; after: number; message: string }> {
+    if (!confirmed) throw Error('重新估算历史费用需要明确确认');
+    if (!options?.previewId) throw Error('请先查看历史重估预览，再确认该预览；历史金额未改变');
+    return this.mutateHistoricalPricing(async () => {
+      const result = await this.ledger.revalue({ action: 'apply', confirmed, previewId: options.previewId,
+        prices: await this.getRawPricingTable(), accounts: [], now: Math.floor(Date.now() / 1000) });
+      this.rateLocksLoaded = false;
+      this.rateLocks = Object.create(null);
+      this.cachedSummariesByAccount.clear(); this.lastAggregationKeysByAccount.clear(); this.snapshots.clear();
+      return result;
+    });
+  }
+
+  async restoreRevalueHistory(previewId: string, confirmed = false) {
+    return this.mutateHistoricalPricing(async () => {
+      const result = await this.ledger.revalue({ action: 'restore', previewId, confirmed, prices: await this.getRawPricingTable(), accounts: [], now: Math.floor(Date.now() / 1000) });
+      this.rateLocksLoaded = false; this.rateLocks = Object.create(null);
+      this.cachedSummariesByAccount.clear(); this.lastAggregationKeysByAccount.clear(); this.snapshots.clear();
+      return result;
+    });
+  }
+
+  private loadRateLocks(): Promise<void> {
+    if (this.rateLocksLoading) return this.rateLocksLoading;
+    if (this.rateLocksLoaded) return Promise.resolve();
+    const work = this.loadRateLocksOnce().finally(() => { if (this.rateLocksLoading === work) this.rateLocksLoading = undefined; });
+    this.rateLocksLoading = work;
+    return work;
+  }
+
+  private async loadRateLocksOnce(): Promise<void> {
     if (this.rateLocksLoaded) return;
     this.rateLocksLoaded = true;
+    if (this.largeLedger || this.ledgerUnavailable || this.archivedUnavailable) {
+      if (this.ledgerUnavailable || this.archivedUnavailable) this.rateLocksUnavailable = true;
+      return;
+    }
     try {
       const data = JSON.parse(await readFile(this.rateLocksPath, 'utf8'));
       if (data.version !== 1 || !data.entries || typeof data.entries !== 'object') throw Error('费率账本格式无效');
@@ -617,6 +651,11 @@ export class UsageStatsManager {
         this.pricingWarnings.push('历史费率账本不可读，停止重新计价；请保留原文件供恢复');
       }
     }
+
+    if (!this.rateLocksUnavailable) {
+      const indexed = await this.ledger.locks();
+      for (const [key, value] of Object.entries(indexed)) this.rateLocks[key] = { usd: value.usd, price: this.cachedPriceRef(value.price) };
+    }
   }
 
   private async saveRateLocks(): Promise<void> {
@@ -637,12 +676,21 @@ export class UsageStatsManager {
       slimEntries[key] = { usd: val.usd, p: getProfileIndex(val.price) };
     }
     const payload = { version: 1, profiles, entries: slimEntries };
+    await this.ledger.saveLocks(this.rateLocks);
     await atomicText(this.rateLocksPath, JSON.stringify(payload) + '\n');
   }
 
   private lockedCost(event: GenerationEvent, price: ApiPricing | null): number | null {
-    if (this.rateLocksUnavailable || event.timestamp_seconds <= 0) return null;
-    if (event.event_key && Object.hasOwn(this.rateLocks, event.event_key)) return this.rateLocks[event.event_key]!.usd;
+    if (this.rateLocksUnavailable || this.ledgerUnavailable || this.archivedUnavailable || event.timestamp_seconds <= 0) return null;
+    const existing = event.event_key ? this.rateLocks[event.event_key] ?? (event.legacy_event_key && this.usageLedgerEvents.get(event.legacy_event_key)?.timestamp_seconds === event.timestamp_seconds ? this.rateLocks[event.legacy_event_key] : undefined) : undefined;
+    if (existing) {
+      if (!event.source_id) return existing.usd;
+      const usd = calculateEstimatedUsd(event.input_tokens, event.output_tokens, event.cached_tokens, existing.price, event.cache_write_tokens ?? 0);
+      if (!this.rateLocks[event.event_key!] || this.rateLocks[event.event_key!]!.usd !== usd) {
+        this.rateLocks[event.event_key!] = { usd, price: existing.price }; this.rateLocksDirty = true;
+      }
+      return usd;
+    }
     if (!price || ((event.cache_write_tokens ?? 0) > 0 && !Number.isFinite(price.cacheWrite))) return null;
     const usd = calculateEstimatedUsd(event.input_tokens, event.output_tokens, event.cached_tokens, price, event.cache_write_tokens ?? 0);
     if (event.event_key) {
@@ -711,14 +759,22 @@ export class UsageStatsManager {
     return { key: `antigravity/${base}`, dirName: 'antigravity' };
   }
 
-  private async loadArchivedEvents(): Promise<void> {
+  private loadArchivedEvents(): Promise<void> {
+    if (this.archivedEventsLoading) return this.archivedEventsLoading;
+    if (this.archivedEventsLoaded) return Promise.resolve();
+    const work = this.loadArchivedEventsOnce().finally(() => { if (this.archivedEventsLoading === work) this.archivedEventsLoading = undefined; });
+    this.archivedEventsLoading = work;
+    return work;
+  }
+
+  private async loadArchivedEventsOnce(): Promise<void> {
     if (this.archivedEventsLoaded) return;
     this.archivedEventsLoaded = true;
     try {
       const raw = JSON.parse(await readFile(this.archivedEventsPath, 'utf8'));
-      if (!raw || raw.version !== 1 || typeof raw.databases !== 'object' || raw.databases === null) return;
+      if (!raw || raw.version !== 1 || typeof raw.databases !== 'object' || raw.databases === null) throw Error('归档账本版本或结构无效');
       for (const [key, entry] of Object.entries<any>(raw.databases)) {
-        if (!entry || !Array.isArray(entry.events)) continue;
+        if (!entry || !Array.isArray(entry.events)) throw Error('归档账本事件列表无效');
         const validEvents = entry.events.filter((e: any): e is GenerationEvent =>
           Boolean(
             e &&
@@ -730,6 +786,7 @@ export class UsageStatsManager {
             Number.isFinite(e.timestamp_seconds)
           )
         );
+        if (validEvents.length !== entry.events.length) throw Error('归档账本含无效事件');
         this.archivedByDb.set(key, {
           archivedAt: typeof entry.archivedAt === 'string' ? entry.archivedAt : new Date(0).toISOString(),
           generationsScanned: Number.isFinite(entry.generationsScanned) ? Number(entry.generationsScanned) : validEvents.length,
@@ -739,7 +796,8 @@ export class UsageStatsManager {
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        this.pricingWarnings.push('归档用量账本读取异常，已保留原文件');
+        this.archivedUnavailable = true;
+        this.storageWarnings.add('归档用量账本读取异常，原件已保留，停止写回');
       }
     }
   }
@@ -751,100 +809,75 @@ export class UsageStatsManager {
   setCurrentAccountContext(ctx?: { id?: string; email?: string }): void {
     const prevId = this.currentAccountContext?.id || this.currentAccountContext?.email || '';
     const nextId = ctx?.id || ctx?.email || '';
-    if (prevId && nextId && prevId !== nextId) {
-      this.accountContextSwitchedAtSec = Math.floor(Date.now() / 1000);
-    }
+    if (prevId !== nextId) this.accountContextObservedAtSec = Math.ceil(Date.now() / 1000);
     this.currentAccountContext = ctx ? { id: ctx.id, email: ctx.email } : undefined;
   }
 
-  private async loadUsageLedger(): Promise<void> {
+  private loadUsageLedger(): Promise<void> {
+    if (this.usageLedgerLoading) return this.usageLedgerLoading;
+    if (this.usageLedgerLoaded) return Promise.resolve();
+    const work = this.loadUsageLedgerOnce().finally(() => { if (this.usageLedgerLoading === work) this.usageLedgerLoading = undefined; });
+    this.usageLedgerLoading = work;
+    return work;
+  }
+
+  private async loadUsageLedgerOnce(): Promise<void> {
     if (this.usageLedgerLoaded) return;
     this.usageLedgerLoaded = true;
     try {
-      const raw = JSON.parse(await readFile(this.usageLedgerPath, 'utf8'));
-      if (raw && (raw.version === 1 || raw.version === 2) && Array.isArray(raw.events)) {
-        for (const ev of raw.events) {
-          if (ev && typeof ev.event_key === 'string' && ev.event_key) {
-            this.usageLedgerEvents.set(ev.event_key, ev);
-          }
+      this.largeLedger = await this.ledger.count() > 50_000;
+      for (const event of this.largeLedger ? [] : await this.ledger.load()) {
+        if (event.db_file === 'recovered_session.db') {
+          this.storageWarnings.add('旧账本含费用反推的合成事件，原记录已保留，未计入可核验用量；请核对恢复材料');
+          continue;
         }
+        if (event.account_confidence === 'legacy') this.storageWarnings.add('旧JSON的账号归属缺少确证，已保留原件，仅计入全部账号；可在账本预览中核对');
+        this.usageLedgerEvents.set(event.event_key!, event);
       }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        this.pricingWarnings.push('读取持久化用量账本异常，已保留原文件');
-      }
+    } catch {
+      this.ledgerUnavailable = true;
+      this.storageWarnings.add('持久化用量总账无法读取或版本不支持，原件已保留，停止写回；当前只展示可读取的源数据');
     }
-
-    // 1. 同步现有已归档库中的 events
     await this.loadArchivedEvents();
-    for (const [key, arch] of this.archivedByDb.entries()) {
-      for (const ev of arch.events) {
-        if (ev.event_key && !this.usageLedgerEvents.has(ev.event_key)) {
-          this.usageLedgerEvents.set(ev.event_key, {
-            ...ev,
-            db_file: basename(key),
-            ingested_at: arch.archivedAt,
-          });
-          this.usageLedgerDirty = true;
-        }
-      }
+    for (const [key, archive] of this.archivedByDb) {
+      for (const event of archive.events) this.upsertLedger({ ...event, db_file: basename(key) });
     }
+  }
 
-    // 2. 灾难自愈：若账本中无 carbon 事件，但 rateLocks 锁定了历史 carbon 事件，自动挽救还原历史记录
-    // 使用历史归档基准时间戳（不落入今日/近30天趋势），绝不伪造归入今日；模型名保留原始锁定记录中的 model。
-    await this.loadRateLocks();
-    const hasCarbonInLedger = Array.from(this.usageLedgerEvents.values()).some(e => e.model.toLowerCase().includes('carbon'));
-    if (!hasCarbonInLedger) {
-      const carbonKeys = new Set<string>();
-      for (const [key, lock] of Object.entries(this.rateLocks)) {
-        if (lock.price?.model?.toLowerCase().includes('carbon')) {
-          carbonKeys.add(key);
-        }
-      }
-      if (carbonKeys.size > 0) {
-        const historicalAnchorSec = 1735689600; // 2025-01-01T00:00:00Z
-        for (const eventKey of carbonKeys) {
-          const lock = this.rateLocks[eventKey]!;
-          const cost = lock.usd;
-          const inputRate = lock.price.input || 2;
-          const outputRate = lock.price.output || 10;
-          const outTok = Math.max(10, Math.round((cost * 1_000_000 * 0.2) / outputRate));
-          const inTok = Math.max(50, Math.round((cost * 1_000_000 * 0.8) / inputRate));
-          const totalTok = inTok + outTok;
-          this.usageLedgerEvents.set(eventKey, {
-            event_key: eventKey,
-            model: lock.price.model || 'gemini-4-carbon',
-            input_tokens: inTok,
-            output_tokens: outTok,
-            cached_tokens: 0,
-            total_tokens: totalTok,
-            timestamp_seconds: historicalAnchorSec,
-            db_file: 'recovered_session.db',
-            ingested_at: new Date().toISOString(),
-          });
-          this.usageLedgerDirty = true;
-        }
-      }
+  private upsertLedger(event: LedgerEvent): void {
+    const key = event.event_key;
+    if (!key || event.db_file === 'recovered_session.db') return;
+    const previous = this.usageLedgerEvents.get(key);
+    if ((previous?.source_observed_at ?? 0) > (event.source_observed_at ?? 0)) return;
+    const next = { ...previous, ...event,
+      timestamp_seconds: event.timestamp_seconds || previous?.timestamp_seconds || 0,
+      ingested_at: previous?.ingested_at ?? event.ingested_at ?? new Date().toISOString() };
+    // Absence of new attribution evidence must not erase an existing observed identity.
+    if (!event.account_id && previous?.account_confidence === 'observed') {
+      next.account_id = previous.account_id;
+      next.account_email = previous.account_email;
+      next.account_confidence = previous.account_confidence;
     }
-
-    if (this.usageLedgerDirty) {
-      await this.saveUsageLedger();
-    }
+    if (previous && JSON.stringify(previous) === JSON.stringify(next)) return;
+    this.usageLedgerEvents.set(key, next);
+    if (this.usageLedgerEvents.size > 50_000) this.largeLedger = true;
+    this.pendingLedgerEvents.set(key, next);
+    this.usageLedgerDirty = true;
   }
 
   private async saveUsageLedger(): Promise<void> {
     if (!this.usageLedgerDirty) return;
+    if (this.ledgerUnavailable || this.archivedUnavailable) return;
+    const pending = [...this.pendingLedgerEvents.values()];
     try {
-      const events = Array.from(this.usageLedgerEvents.values());
-      await atomicJson(this.usageLedgerPath, {
-        version: 1,
-        updated_at: new Date().toISOString(),
-        count: events.length,
-        events,
-      });
-      this.usageLedgerDirty = false;
-    } catch (e) {
-      console.warn('保存持久化用量账本失败:', (e as Error).message);
+      await this.ledger.save(pending);
+      for (const event of pending) {
+        if (this.pendingLedgerEvents.get(event.event_key!) === event) this.pendingLedgerEvents.delete(event.event_key!);
+      }
+      this.usageLedgerDirty = this.pendingLedgerEvents.size > 0;
+    } catch {
+      this.storageWarnings.add('用量总账未能保存，原始数据已保留；统计尚未持久化，请检查磁盘与权限');
+      this.ledgerUnavailable = true;
     }
   }
 
@@ -864,6 +897,7 @@ export class UsageStatsManager {
       if (res && res.events.length > 0) {
         captured += res.events.length;
       }
+      if (this.largeLedger) { await this.saveUsageLedger(); this.usageLedgerEvents.clear(); }
     }
     if (this.usageLedgerDirty) {
       await this.saveUsageLedger();
@@ -888,7 +922,9 @@ export class UsageStatsManager {
     }
     await this.loadArchivedEvents();
     await this.loadPersistentFileCache();
+    await this.loadUsageLedger();
     await this.loadRateLocks();
+    if (this.archivedUnavailable || this.ledgerUnavailable || this.rateLocksUnavailable) throw Error('账本不可读，已中止清理以保护历史记录');
     const rawPricing = await this.getRawPricingTable();
 
     let archivedCount = 0;
@@ -897,13 +933,13 @@ export class UsageStatsManager {
       if (typeof dbPath !== 'string' || !dbPath.endsWith('.db')) continue;
       const st = await lstat(dbPath).catch(() => null);
       if (!st || !st.isFile() || st.isSymbolicLink()) continue;
-      const res = await this.scanDatabaseEvents(dbPath, false);
-      if (res.hasError && !res.usedCached) {
+      const res = await this.scanDatabaseEvents(dbPath, true);
+      if (res.hasError || res.usedCached || res.skippedLargeRecords > 0) {
         throw new Error(`归档会话数据库用量失败（${basename(dbPath)}）：${res.error || '无法读取'}；已中止清理以保护历史账单`);
       }
       for (const ev of res.events) {
         const price = this.resolvePricing(rawPricing, ev.model, ev.timestamp_seconds);
-        this.lockedCost(ev, price);
+        if (!this.largeLedger) this.lockedCost(ev, price);
       }
       const { key } = this.normalizeArchivedDbKey(dbPath);
       this.archivedByDb.set(key, {
@@ -921,12 +957,17 @@ export class UsageStatsManager {
         await this.saveRateLocks();
         this.rateLocksDirty = false;
       }
+      await this.saveUsageLedger();
+      if (this.largeLedger) await this.ledger.aggregate({ prices: rawPricing, accounts: this.knownAccounts, now: Math.floor(Date.now() / 1000) });
+      if (this.ledgerUnavailable) throw Error('归档总账未能持久化，已中止清理');
       await this.savePersistentFileCache();
       await atomicJson(this.archivedEventsPath, {
         version: 1,
         updatedAt: new Date().toISOString(),
         databases: Object.fromEntries(this.archivedByDb.entries()),
       });
+      const persisted = JSON.parse(await readFile(this.archivedEventsPath, 'utf8'));
+      if (JSON.stringify(persisted.databases) !== JSON.stringify(Object.fromEntries(this.archivedByDb))) throw Error('归档回读校验失败，已中止清理');
       this.invalidateCache();
     }
     return { archivedCount, eventCount };
@@ -1320,20 +1361,16 @@ export class UsageStatsManager {
   }> {
     let fileStat: any = null;
     let walStat: any = null;
+    let sourceId = '';
     try {
-      const preStat = this.discoveredStats.get(dbPath);
-      if (preStat && Date.now() - preStat.at < 2000) {
-        this.discoveredStats.delete(dbPath);
-        fileStat = { mtimeMs: preStat.mtimeMs, size: preStat.size };
-        walStat = preStat.walMtimeMs > 0 || preStat.walSize > 0 ? { mtimeMs: preStat.walMtimeMs, size: preStat.walSize } : null;
-      } else {
-        fileStat = await lstat(dbPath);
-        try { walStat = await lstat(`${dbPath}-wal`); } catch {}
-      }
+      this.discoveredStats.delete(dbPath);
+      fileStat = await lstat(dbPath);
+      sourceId = createHash('sha256').update(JSON.stringify([basename(dbPath), fileStat.dev, fileStat.ino, fileStat.birthtimeMs])).digest('hex');
+      try { walStat = await lstat(`${dbPath}-wal`); } catch {}
       if (!bypassCache) {
         const cached = this.fileCache.get(dbPath);
         if (
-          cached &&
+          cached && cached.events.every(event => event.source_id === sourceId) &&
           cached.mtimeMs === fileStat.mtimeMs &&
           cached.size === fileStat.size &&
           cached.walMtimeMs === (walStat?.mtimeMs ?? 0) &&
@@ -1379,6 +1416,11 @@ export class UsageStatsManager {
     }
 
     const genRows = genRes.rows;
+    if (genRows.length > 50_000) {
+      const cached = this.fileCache.get(dbPath);
+      return { events: cached?.events ?? [], generationsScanned: 0, skippedLargeRecords: genRows.length,
+        hasError: true, usedCached: !!cached, error: '单库生成记录超过有界读取预算；已保留已有账本，请分批归档后重试' };
+    }
     const events: GenerationEvent[] = [];
     let generationsScanned = 0;
     let skippedLargeRecords = 0;
@@ -1444,23 +1486,22 @@ export class UsageStatsManager {
       const assignedModel = resolveDatabaseModelFullName(modelId, label);
       const lockModelKey = modelId || label || '未知模型';
 
-      const dbLastModMs = Math.max(fileStat?.mtimeMs ?? 0, walStat?.mtimeMs ?? 0);
-      const cutoffSec = this.accountContextSwitchedAtSec > 0
-        ? this.accountContextSwitchedAtSec - 5
-        : this.managerStartedAtSec - 900;
-      const canAttributeToCurrent = Boolean(
-        this.currentAccountContext &&
-        ((timestamp > 0 && timestamp >= cutoffSec) ||
-          (timestamp === 0 && dbLastModMs >= cutoffSec * 1000))
-      );
+      // Only requests first observed after a positively observed identity can be attributed.
+      // Unknown timestamps and pre-start history remain unknown, regardless of database mtime.
+      const canAttributeToCurrent = Boolean(this.currentAccountContext && timestamp > 0
+        && timestamp >= this.accountContextObservedAtSec);
       const accountId = canAttributeToCurrent ? this.currentAccountContext?.id : undefined;
       const accountEmail = canAttributeToCurrent ? this.currentAccountContext?.email : undefined;
-
+      const execution = ProtobufReader.findField(blob, 4)?.toString('hex') ?? '';
+      const legacyKey = createHash('sha256').update(JSON.stringify([
+        basename(dbPath), row.idx, execution || undefined, lockModelKey, rawInput, cachedTokens, cacheWriteTokens, outputTokens,
+      ])).digest('hex');
       const eventObj: GenerationEvent = {
         event_key: createHash('sha256').update(JSON.stringify([
-          dbPath.split('/').pop(), row.idx, ProtobufReader.findField(blob, 4)?.toString('hex'),
-          lockModelKey, rawInput, cachedTokens, cacheWriteTokens, outputTokens,
+          sourceId, row.idx, execution,
         ])).digest('hex'),
+        source_id: sourceId, generation_index: Number(row.idx), legacy_event_key: legacyKey,
+        account_confidence: canAttributeToCurrent ? 'observed' : 'unknown',
         model: assignedModel,
         input_tokens: inputTokens,
         output_tokens: outputTokens,
@@ -1477,17 +1518,7 @@ export class UsageStatsManager {
         }
       }
       events.push(eventObj);
-      if (eventObj.event_key) {
-        const existing = this.usageLedgerEvents.get(eventObj.event_key);
-        if (!existing) {
-          this.usageLedgerEvents.set(eventObj.event_key, {
-            ...eventObj,
-            db_file: basename(dbPath),
-            ingested_at: new Date().toISOString(),
-          });
-          this.usageLedgerDirty = true;
-        }
-      }
+
     }
     };
     const dataRes = await this.blobRows(dbPath, 'gen_metadata', 'data', 'data IS NOT NULL', parseRows, genRows, signal, reader);
@@ -1522,6 +1553,19 @@ export class UsageStatsManager {
       }
     }
 
+    const after = await lstat(dbPath).catch(() => null);
+    if (!await reader.verifyUnchanged() || !after || after.dev !== fileStat?.dev || after.ino !== fileStat?.ino) {
+      const previous = this.fileCache.get(dbPath);
+      return { events: previous?.events ?? events, generationsScanned, skippedLargeRecords,
+        hasError: true, usedCached: !!previous, error: '数据库在跨批读取期间变化，请重试' };
+    }
+    const observedAt = performance.timeOrigin + performance.now();
+    for (const event of events) event.source_observed_at = observedAt;
+    await this.loadUsageLedger();
+    for (const event of events) {
+      this.upsertLedger({ ...event, db_file: basename(dbPath) });
+      Object.assign(event, this.usageLedgerEvents.get(event.event_key!));
+    }
     const unknownTime = events.some(event => event.timestamp_seconds <= 0);
     const hasError = !stepOk && unknownTime;
     const timeError = hasError ? '时间信息读取失败，部分记录时间未知' : undefined;
@@ -1529,6 +1573,11 @@ export class UsageStatsManager {
       if (!this.fileCache.has(dbPath) && this.fileCache.size >= 2000) {
         const oldestKey = this.fileCache.keys().next().value;
         if (oldestKey) this.fileCache.delete(oldestKey);
+      }
+      let cachedEventCount = [...this.fileCache.values()].reduce((sum, value) => sum + value.events.length, 0);
+      for (const [key, value] of this.fileCache) {
+        if (cachedEventCount <= 50_000) break;
+        if (key !== dbPath) { this.fileCache.delete(key); cachedEventCount -= value.events.length; }
       }
       this.fileCache.set(dbPath, {
         mtimeMs: fileStat.mtimeMs,
@@ -1554,6 +1603,12 @@ export class UsageStatsManager {
     if (!snapshot || snapshot.expires<Date.now()) throw Error('统计快照已过期，请重新读取');
     if (pin) snapshot.pins++;
     if (snapshot.pins > 0) snapshot.expires = Date.now()+600000;
+    if (snapshot.ledger) {
+      if (accountId && accountId !== snapshot.ledger.accountId) throw Error('统计快照账号范围不匹配，请重新读取');
+      const targetEmail = this.knownAccounts.find(account => account.id === snapshot.ledger!.accountId)?.email;
+      const page = await this.ledger.events({ snapshot: snapshot.ledger, period, query: query.slice(0, 200), offset: Math.max(0, Math.floor(offset) || 0), limit: Math.min(500, Math.max(1, Math.floor(limit) || 200)), targetEmail });
+      return { ...page, generated_at: snapshot.summary.generated_at, snapshot_id: snapshot.summary.snapshot_id, availability: snapshot.summary.availability, scope: snapshot.summary.scan_scope_description };
+    }
     const {summary,prices,rawPricing}=snapshot as any;
     const start = new Date(summary.generated_at*1000); start.setHours(0, 0, 0, 0);
     if (period === '7d') start.setDate(start.getDate() - 6);
@@ -1599,6 +1654,7 @@ export class UsageStatsManager {
    */
   cancelRead() { this.scanAbort?.abort(new Error('读取已取消')); return !!this.scanAbort; }
   async getUsageSummary(forceRefresh = false, accountId?: string): Promise<TokenUsageSummary> {
+    if (this.pricingMutation) await this.pricingMutation;
     const accKey = accountId || 'all';
     if(this.inFlight) {
       if(this.inFlightAccountKey===accKey && (!forceRefresh||this.inFlightForced)) return this.inFlight;
@@ -1641,6 +1697,13 @@ export class UsageStatsManager {
       const res = await this.scanDatabaseEvents(p, bypassFileCache, signal);
       if (!res.cacheHit) allCacheHits = false;
       for (const ev of res.events) allEvents.push(ev);
+      if (this.largeLedger || allEvents.length > 50_000) {
+        this.largeLedger = true;
+        for (const event of allEvents) this.upsertLedger(event);
+        await this.saveUsageLedger();
+        allEvents.length = 0;
+        this.usageLedgerEvents.clear();
+      }
       generationsScanned += res.generationsScanned;
       skippedLargeRecords += res.skippedLargeRecords;
       if (res.hasError) failedDatabasesCount++;
@@ -1690,32 +1753,69 @@ export class UsageStatsManager {
       }
     }
 
+    await this.loadUsageLedger();
+    if (this.largeLedger && !this.ledgerUnavailable) {
+      for (const event of allEvents) this.upsertLedger(event);
+      await this.saveUsageLedger();
+      const rawPricing = await this.getRawPricingTable();
+      const revision = await this.ledger.version();
+      const aggregateKey = JSON.stringify([revision, this.calendarKey(), rawPricing, accountId ?? 'all', this.knownAccounts]);
+      const prior = this.cachedSummariesByAccount.get(accKey)?.data;
+      const existingSnapshot = prior?.snapshot_id ? this.snapshots.get(prior.snapshot_id) : undefined;
+      if (prior && existingSnapshot?.ledger && this.lastAggregationKeysByAccount.get(accKey) === aggregateKey && await this.ledger.renew(existingSnapshot.ledger)) {
+        const availability = failedDatabasesCount > 0 || skippedLargeRecords > 0 || this.storageWarnings.size > 0 || prior.unknown_time_records ? 'partial' : 'complete';
+        const reused: TokenUsageSummary = { ...prior, availability, has_error: availability !== 'complete', hasError: availability !== 'complete',
+          failed_databases_count: failedDatabasesCount, database_diagnostics: diagnostics, last_attempt_at: Math.floor(Date.now() / 1000), pricing_warnings: [...this.pricingWarnings, ...this.storageWarnings] };
+        existingSnapshot.expires = Date.now() + 600000;
+        existingSnapshot.summary = reused;
+        this.cachedSummariesByAccount.set(accKey, { data: reused, expiresAt: Date.now() + 30000 });
+        return reused;
+      }
+      const aggregated = await this.ledger.aggregate({ prices: rawPricing, accountId, accounts: this.knownAccounts, liveFiles: dbPaths.map(path => basename(path)), now: Math.floor(Date.now() / 1000) });
+      if (aggregated.ledger_review_records) this.storageWarnings.add('旧JSON含缺少来源或归属证据的记录，原件已保留；请查看只读账本预览');
+      const availability = failedDatabasesCount > 0 || skippedLargeRecords > 0 || this.storageWarnings.size > 0 || aggregated.unknown_time_records || aggregated.historical_amount_receipts?.unmatchedCount ? 'partial' : 'complete';
+      const result: TokenUsageSummary = { ...aggregated, availability, has_error: availability !== 'complete', hasError: availability !== 'complete',
+        databases_scanned: dbPaths.length, databases_discovered: this.lastDiscoveredDatabaseCount || dbPaths.length,
+        generations_scanned: generationsScanned, skipped_large_records: skippedLargeRecords, failed_databases_count: failedDatabasesCount,
+        database_diagnostics: diagnostics, scan_scope_description: '本机索引用量总账（含已离线记录）', pricing_warnings: [...this.pricingWarnings, ...this.storageWarnings] };
+      const id = result.snapshot_id!;
+      const previous = this.snapshots.get(id);
+      if (previous) result.generated_at = previous.summary.generated_at;
+      this.snapshots.set(id, { summary: result, ledger: previous?.ledger ?? aggregated.ledger_snapshot, events: [], prices: {}, rawPricing,
+        expires: Date.now() + 600000, pins: previous?.pins ?? 0 });
+      this.lastAggregationKeysByAccount.set(accKey, JSON.stringify([await this.ledger.version(), this.calendarKey(), rawPricing, accountId ?? 'all', this.knownAccounts]));
+      this.cachedSummariesByAccount.set(accKey, { data: result, expiresAt: Date.now() + 30000 });
+      this.periodKey = this.calendarKey();
+      this.usageLedgerEvents.clear();
+      this.pruneSnapshots();
+      return result;
+    }
+
     const liveEventsCount = allEvents.length;
 
     await this.loadUsageLedger();
 
-    // 将所有扫描到的活体事件同步记录至追加型永久总账
-    for (const ev of allEvents) {
-      if (ev.event_key && !this.usageLedgerEvents.has(ev.event_key)) {
-        this.usageLedgerEvents.set(ev.event_key, {
-          ...ev,
-          ingested_at: new Date().toISOString(),
-        });
-        this.usageLedgerDirty = true;
-      }
-    }
+    for (const event of allEvents) this.upsertLedger(event);
 
     // 从追加型永久总账（UsageLedger）合并已离线/已归档或被官方清理的会话事件
     const seenEventKeys = new Set<string>();
     for (const ev of allEvents) {
       if (ev.event_key) seenEventKeys.add(ev.event_key);
     }
+    const currentLegacyKeys = new Set(allEvents.map(event => event.legacy_event_key).filter(Boolean));
+    const liveSourceFiles = new Set(dbPaths.map(path => basename(path)));
+    const representedFiles = new Set([...dbPaths.map(path => basename(path)), ...[...this.archivedByDb.keys()].map(path => basename(path))]);
     const mergedLedgerDbs = new Set<string>();
     for (const [evKey, ledgerEv] of this.usageLedgerEvents.entries()) {
+      if (currentLegacyKeys.has(evKey)) continue;
+      if (!ledgerEv.source_id && ledgerEv.db_file && liveSourceFiles.has(ledgerEv.db_file)) {
+        this.storageWarnings.add('旧账本缺少稳定请求身份，相关历史记录待核对；原JSON保留，未与当前源数据重复累计');
+        continue;
+      }
       if (!seenEventKeys.has(evKey)) {
         seenEventKeys.add(evKey);
         allEvents.push(ledgerEv);
-        mergedLedgerDbs.add(ledgerEv.db_file || evKey);
+        if (ledgerEv.db_file && !representedFiles.has(ledgerEv.db_file)) mergedLedgerDbs.add(ledgerEv.db_file);
       }
     }
     archivedDbCount += mergedLedgerDbs.size;
@@ -1755,7 +1855,7 @@ export class UsageStatsManager {
         ...cachedByAccEntry.data,
         database_diagnostics: diagnostics,
         last_attempt_at: now,
-        pricing_warnings: [...this.pricingWarnings],
+        pricing_warnings: [...this.pricingWarnings, ...this.storageWarnings],
       };
       this.cachedSummariesByAccount.set(accKey, { data: reused, expiresAt: Date.now() + 30_000 });
       if (reused.snapshot_id && this.snapshots.has(reused.snapshot_id)) {
@@ -2056,11 +2156,17 @@ export class UsageStatsManager {
     const totalDiscovered = (this.lastDiscoveredDatabaseCount || dbPaths.length) + archivedDbCount;
     const totalScanned = dbPaths.length + archivedDbCount;
     const allTimePeriod = buildPeriod(() => true);
+    const knownReceiptKeys = new Set(allEvents.flatMap(event => [event.event_key, event.legacy_event_key].filter((key): key is string => !!key)));
+    const unmatchedReceipts = Object.entries(this.rateLocks).filter(([key]) => !knownReceiptKeys.has(key));
+    if (unmatchedReceipts.length) this.storageWarnings.add('历史金额凭据缺少原始用量或时间，已单独保留待核对，不计入Token和请求数');
     const summary: TokenUsageSummary = {
       today: buildPeriod(ev => ev.timestamp_seconds >= todayStart && ev.timestamp_seconds < tomorrowStart),
       last_7_days: buildPeriod(ev => ev.timestamp_seconds >= sevenDaysStart && ev.timestamp_seconds < tomorrowStart),
       last_30_days: buildPeriod(ev => ev.timestamp_seconds >= thirtyDaysStart && ev.timestamp_seconds < tomorrowStart),
       all_time: allTimePeriod,
+      unattributed_requests: allEvents.filter(event => !event.account_id && !event.account_email).length,
+      unattributed_tokens: allEvents.filter(event => !event.account_id && !event.account_email).reduce((sum, event) => sum + event.total_tokens, 0),
+      historical_amount_receipts: { unmatchedCount: unmatchedReceipts.length, unmatchedUsd: unmatchedReceipts.reduce((sum, [, receipt]) => sum + receipt.usd, 0) },
       daily_trends: [...dailyMap.values()].sort((a, b) => a.date.localeCompare(b.date)),
       today_hourly: [...hourlyMap.values()].sort((a, b) => a.hour.localeCompare(b.hour)),
       available_accounts: [...accountMap.values()],
@@ -2078,10 +2184,10 @@ export class UsageStatsManager {
       priced_models: allTimePeriod.priced_models,
       unpriced_models: allTimePeriod.unpriced_models,
       failed_databases_count: failedDatabasesCount,
-      has_error: failedDatabasesCount > 0 || allEvents.some(e=>e.timestamp_seconds<=0),
-      hasError: failedDatabasesCount > 0 || allEvents.some(e=>e.timestamp_seconds<=0),
+      has_error: this.storageWarnings.size > 0 || failedDatabasesCount > 0 || allEvents.some(e=>e.timestamp_seconds<=0),
+      hasError: this.storageWarnings.size > 0 || failedDatabasesCount > 0 || allEvents.some(e=>e.timestamp_seconds<=0),
       availability: (failedDatabasesCount > 0 && allEvents.length === 0) || (failedDatabasesCount >= dbPaths.length && dbPaths.length > 0 && liveEventsCount === 0) ? 'unavailable'
-        : cachedDatabasesCount === dbPaths.length && dbPaths.length > 0 ? 'cached' : failedDatabasesCount > 0 || skippedLargeRecords > 0 || allEvents.some(e=>e.timestamp_seconds<=0) ? 'partial' : 'complete',
+        : cachedDatabasesCount === dbPaths.length && dbPaths.length > 0 ? 'cached' : this.storageWarnings.size > 0 || failedDatabasesCount > 0 || skippedLargeRecords > 0 || allEvents.some(e=>e.timestamp_seconds<=0) ? 'partial' : 'complete',
       unknown_time_records: allEvents.filter(e=>e.timestamp_seconds<=0).length,
       unknown_time_tokens: allEvents.filter(e=>e.timestamp_seconds<=0).reduce((n,e)=>n+e.total_tokens,0),
       database_diagnostics: diagnostics,
@@ -2096,7 +2202,7 @@ export class UsageStatsManager {
         return hash.digest('hex').slice(0, 20);
       })(),
       last_attempt_at: now,
-      pricing_warnings: [...this.pricingWarnings],
+      pricing_warnings: [...this.pricingWarnings, ...this.storageWarnings],
     };
 
     if (this.rateLocksDirty) {

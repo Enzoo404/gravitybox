@@ -934,6 +934,51 @@ import Cocoa
 
         Assistant.applicationChannel = "stable"
         assistant.configuration.value.applicationChannel = "stable"
+        // Failed account changes must never export stale contents under the new account name.
+        do {
+            let isolated = Assistant(state: state.appendingPathComponent("usage-query-contract"))
+            isolated.configuration = try ConfigurationStore(state: isolated.state)
+            isolated.bridge = BackendBridge(resources: state, state: isolated.state)
+            isolated.reachable = true
+            var fail = false
+            isolated.bridge.fixtureReply = { request in
+                if fail { return ["ok": false, "error": "synthetic read failure"] }
+                return ["ok": true, "period": request["period"] as? String ?? "today", "selectedAccountId": "all", "snapshotId": "stable-query-snapshot", "summary": ["availability": "complete", "totalTokens": 150, "requestCount": 1, "databasesScanned": 1, "databasesDiscovered": 1], "byModel": [], "dailyTrends": [], "todayHourly": []]
+            }
+            let page = UsagePage(app: isolated)
+            pump()
+            fail = true; page.fetch(force: true); pump()
+            check(page.statusSummary.stringValue.contains("读取失败"), "Failure feedback must be present")
+            fail = false; page.fetch(force: true); pump()
+            check(!page.statusSummary.stringValue.contains("读取失败"), "Same snapshot success must clear an earlier failure")
+            page.selectedAccountId = "account-b"
+            fail = true; page.fetch(force: true); pump()
+            check(!page.exportButton.isEnabled, "An account mismatch must disable stale export")
+            let privateBackup = state.appendingPathComponent("private-account-backup.json")
+            try writePrivateAccountBackup(Data("synthetic-only".utf8), to: privateBackup)
+            let permissions = (try FileManager.default.attributesOfItem(atPath: privateBackup.path)[.posixPermissions] as? NSNumber)?.intValue ?? 0
+            check(permissions & 0o777 == 0o600, "Account backups must be private from initial creation")
+            var checks = 0
+            let manager = isolated.updateManager
+            manager.checkTransport = { request, completion in
+                checks += 1
+                DispatchQueue.global().async {
+                    let response = HTTPURLResponse(url: request.url!, statusCode: 403, httpVersion: nil, headerFields: nil)
+                    completion(nil, response, nil)
+                }
+            }
+            manager.checkForUpdates(silent: true)
+            manager.checkForUpdates(silent: false)
+            pump()
+            check(checks == 1, "Overlapping update checks must share the main-thread busy gate")
+            manager.checkForUpdates(silent: false)
+            pump()
+            check(checks == 2, "A background 403 must reset busy state so retry can run")
+            for (input, expected) in [(999, "999"), (1000, "1K"), (999499, "999K"), (999500, "1M"), (999999, "1M"), (1_000_000, "1M"), (999_500_000, "1B")] {
+                check(InterfaceText.formatCompactTokens(input) == expected, "Compact number boundary must match HUD: \(input)")
+            }
+        }
+
         let result:[String:Any] = ["stableOnlySelectionPassed":true,"nativeLayouts":captures.count,"captures":captures,"menuCaptures":4,"safeSwitchSharedFlowPassed":true,"emailWidthPassed":true,"partialPricingPassed":true,"scope":"isolated synthetic AppKit fixture; not installed-app acceptance"]
         try JSONSerialization.data(withJSONObject:result,options:[.prettyPrinted,.sortedKeys]).write(to:output.appendingPathComponent("native-ui-results.json"))
         window.orderOut(nil)

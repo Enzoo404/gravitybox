@@ -279,7 +279,7 @@ async function run() {
   const option = (name: string, fallback?: string) => cliOption(args, name, fallback);
   const command = option('--command');
   if (command) { console.log(JSON.stringify(await request(command))); return; }
-  if (args.includes('--heal')) throw new Error('在线补译请在应用内预览词条与目的地址后确认发送');
+  if (args.includes('--heal')) throw new Error('当前版本不提供在线补译；可编辑个人词典或使用开发工具生成本地候选');
   const stateDir = resolve(option('--state-dir', join(homedir(), 'Library', 'Application Support', 'GravityBox'))!);
   try {
     process.loadEnvFile?.(join(stateDir, '.env'));
@@ -354,19 +354,13 @@ async function run() {
             name: a.name ?? null,
           })));
         }
-        const live = await probeLiveCached().catch(() => null);
-        const detectedEmail = live?.email ?? await accountsManager.detectCurrentAntigravityEmail().catch(() => null);
-        const active = listRes?.active_account;
-        if (active) {
-          usageManager.setCurrentAccountContext({
-            id: active.id,
-            email: active.email || detectedEmail || undefined,
-          });
-        } else if (detectedEmail) {
-          usageManager.setCurrentAccountContext({
-            id: detectedEmail,
-            email: detectedEmail,
-          });
+        const live = await accountsManager.probeLiveLanguageServer(globalThis.fetch, { forceRefresh: true }).catch(() => null);
+        const observedEmail = typeof live?.email === 'string' && /^[^\s@]+@[^\s@]+$/.test(live.email) ? live.email : null;
+        if (observedEmail) {
+          const matched = listRes?.accounts.find(account => account.email.toLowerCase() === observedEmail.toLowerCase());
+          usageManager.setCurrentAccountContext({ id: matched?.id ?? observedEmail, email: observedEmail });
+        } else {
+          usageManager.setCurrentAccountContext(undefined);
         }
         accountSyncedAt = Date.now();
       } catch {}
@@ -839,8 +833,10 @@ async function run() {
       }
       // P-01 / B-01: 只读 IPC 命令直接并发响应，不阻塞在写锁 commandChain 队列后
       const isReadOnlyAutoSwitch = command === 'auto_switch_best' && parsed.execute !== true;
-      if (['maintenance_scan', 'maintenance_history', 'account_recovery_info', 'auto_switch_get', 'usage_snapshot_release', 'usage_events', 'usage_summary', 'api_pricing_get'].includes(command) || isReadOnlyAutoSwitch) {
+      if (['maintenance_scan', 'maintenance_history', 'account_recovery_info', 'auto_switch_get', 'usage_snapshot_release', 'usage_events', 'usage_summary', 'usage_ledger_review', 'api_pricing_revalue_preview', 'api_pricing_get'].includes(command) || isReadOnlyAutoSwitch) {
         (async () => {
+          if (command === 'api_pricing_revalue_preview') { reply({ ok: true, preview: await usageManager.previewRevalueHistory(parsed.mode === 'unpriced_only' ? 'unpriced_only' : 'force_all') }); return; }
+          if (command === 'usage_ledger_review') { reply({ ok: true, review: await usageManager.ledgerReview() }); return; }
           if (command === 'maintenance_scan') { reply(await cacheMaintenance.scan({ retentionDays: parsed.retentionDays })); return; }
           if (command === 'maintenance_history') { reply({ ok: true, snapshots: await cacheMaintenance.history() }); return; }
           if (command === 'account_recovery_info') { reply({ ok: true, ...await switchService.recoveryInfo() }); return; }
@@ -949,7 +945,8 @@ async function run() {
       commandChain = commandChain.catch(() => {}).then(async () => {
         try {
           if(command==='shortcut_set'){if(!fixture)throw new Error('中英对照已移除');await controller.configureShortcut(parsed.enabled===true);reply({ok:true});return;}
-          if(command==='api_pricing_revalue'){const mode = parsed.mode === 'unpriced_only' ? 'unpriced_only' : 'force_all';reply({ok:true,...await usageManager.revalueHistory(parsed.confirm===true, { mode })});return;}
+          if(command==='api_pricing_revalue'){const mode = parsed.mode === 'unpriced_only' ? 'unpriced_only' : 'force_all';reply({ok:true,...await usageManager.revalueHistory(parsed.confirm===true, { mode, previewId: typeof parsed.previewId === 'string' ? parsed.previewId : undefined })});return;}
+          if(command==='api_pricing_revalue_rollback'){reply({ok:true,...await usageManager.restoreRevalueHistory(String(parsed.previewId ?? ''),parsed.confirm===true)});return;}
           if(command==='pricing_sync_set'){await atomicJson(join(stateDir, 'pricing-preferences.json'), {enabled:parsed.enabled===true});usageManager.setAutoRemotePricingSync(parsed.enabled===true);reply({ok:true});return;}
           if(command==='pricing_sync_status'){reply({ok:true,status:await usageManager.getPricingSyncStatus()});return;}
           if(command==='pricing_sync_check'){const res=await usageManager.syncRemotePricing(parsed.feedUrl,true);reply({ok:res.synced,...res,status:await usageManager.getPricingSyncStatus()});return;}

@@ -10,6 +10,7 @@ import * as https from 'node:https';
 import * as http from 'node:http';
 import { atomicJson, commitAccountAndIndex, recoverAccountCommit, commitFileSet, recoverFileSet } from './files.js';
 import { ReentrantMutex } from './mutex.js';
+import { validateAccountPolicy, validateAccountImport } from './account-policy.js';
 import { withProcessLease } from './process-lock.js';
 import { ProtobufReader } from './usage.js';
 import { decodeTopicRow } from './account-state.js';
@@ -1604,24 +1605,26 @@ export class AccountsManager {
     };
   }
 
-  async importAccounts(data: AccountExportResponse): Promise<{ imported: number; updated: number }> {
+  async importAccounts(data: AccountExportResponse): Promise<{ imported: number; updated: number; partial?: boolean; failures?: { index: number; message: string }[] }> {
     if (!data || !Array.isArray(data.accounts)) {
       throw new Error('导入格式错误：缺少 accounts 列表');
     }
     if (data.tokens_included === false) {
       throw new Error('该备份为脱敏摘要，不含登录凭据，无法恢复账号；请在导出时选择“包含凭据导出”');
     }
+    validateAccountImport(data);
     if (data.accounts.some(item => String(item.refresh_token ?? '') === '[REDACTED]')) {
       throw new Error('该备份包含脱敏占位符，无法恢复登录凭据；请重新导出并选择“包含凭据导出”');
     }
 
+    const failures: { index: number; message: string }[] = [];
     let imported = 0;
     let updated = 0;
     const index = await this.loadIndex();
     const existingEmails = new Set(index.accounts.map(a => a.email.toLowerCase()));
 
-    for (const item of data.accounts) {
-      if (!item.email || !item.refresh_token) continue;
+    for (const [itemIndex, item] of data.accounts.entries()) {
+      try {
       const isExisting = existingEmails.has(item.email.toLowerCase());
       await this.upsertAccount({
         email: item.email,
@@ -1638,9 +1641,11 @@ export class AccountsManager {
         imported++;
         existingEmails.add(item.email.toLowerCase());
       }
+      } catch {
+        failures.push({ index: itemIndex + 1, message: '该账号未能完整保存，请重新读取账号列表后重试' });
+      }
     }
-
-    return { imported, updated };
+    return { imported, updated, ...(failures.length ? { partial: true, failures } : {}) };
   }
 
   // ---- 额度与监控双窗口熔合体系 ----
@@ -1683,8 +1688,10 @@ export class AccountsManager {
     try {
       const raw = await readFile(this.autoSwitchPath, 'utf8');
       const parsed = JSON.parse(raw);
+      validateAccountPolicy(parsed);
       const reserve = Math.min(98, Math.max(1, Number(parsed.reserve_percentage ?? parsed.reservePercentage) || 10));
       const candidateMin = Math.min(100, Math.max(2, Number(parsed.candidate_min_percentage ?? parsed.candidateMinPercentage) || 30));
+      if (reserve >= candidateMin) throw Error('推荐门槛关系无效');
       return {
         enabled: parsed.enabled ?? false,
         strategy: parsed.strategy === 'round_robin' ? 'round_robin' : 'priority',
@@ -1696,7 +1703,8 @@ export class AccountsManager {
         candidate_account_ids: Array.isArray(parsed.candidate_account_ids) ? parsed.candidate_account_ids : [],
         last_switched_id: parsed.last_switched_id ?? undefined,
       };
-    } catch {
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw Error('账号推荐配置损坏或类型无效，原文件已保留');
       return {
         enabled: false,
         strategy: 'priority',
@@ -1711,6 +1719,7 @@ export class AccountsManager {
   }
 
   async setAutoSwitchConfig(config: Partial<AutoSwitchConfig> & Record<string, any>): Promise<AutoSwitchConfig> {
+    validateAccountPolicy(config);
     await this.init();
     return this.withWriteLock(async () => {
     const current = await this.getAutoSwitchConfig();

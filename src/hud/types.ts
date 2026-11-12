@@ -291,6 +291,7 @@ export type HudClientEvent =
       conversationId: string;
       cascadeId: string;
       paneSlotId?: string;
+      sessionRevision?: number;
       timestamp: number;
     }
   | {

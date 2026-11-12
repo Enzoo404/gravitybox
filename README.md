@@ -198,7 +198,7 @@ GRAVITYBOX_GOOGLE_CLIENT_SECRET=your_client_secret
 
 - **零遥测与零埋点**：不包含任何第三方统计、崩溃上报或行为追踪代码；
 - **账号与凭据本机存储**：账号库位于 `~/Library/Application Support/GravityBox`；`accounts/<id>.json` 以未加密 JSON 保存账号信息及 OAuth 凭据（包括 Access Token、Refresh Token），通过仅当前用户可读写的文件权限（`0600`）限制访问。应用同时使用 macOS 钥匙串读取或写入 Antigravity 登录态；切号恢复记录也可能保留恢复所需凭据。上述用户文件不打包进安装包或公开源码，请勿公开分享整个数据目录或含凭据备份；
-- **只读数据库快照**：统计 Token 用量时，在独立 Worker 线程中以只读模式读取本地会话数据库，不写入、不加锁，不阻塞 Antigravity 的正常读写；
+- **只读数据库快照**：统计 Token 用量时，在独立 Worker 线程中以只读模式读取本地会话数据库，不修改会话内容；分批读取后释放读取状态，并检测跨批次变化；短暂读取仍可能影响 SQLite 检查点，变化时标记部分结果并重试；
 - **外联边界透明**：应用仅在以下明确场景发起网络请求：
   1. 连接 Google 官方接口完成账号 OAuth 授权与云端配额查询；
   2. 连接 GitHub Releases / Raw 接口检查版本更新与同步公开模型价格表。
@@ -279,3 +279,11 @@ npm run package:mac
 GravityBox 是独立的第三方开源项目，与 Google LLC、Anthropic PBC、OpenAI Inc.、Apple Inc. 无任何隶属、合作或背书关系。文中提及的产品名称与商标均归各自权利人所有，详见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)。使用本项目前，请自行确认符合 Google Antigravity 及相关服务的使用条款，使用风险由使用者自行承担。
 
 [MIT](./LICENSE) © 2026 [Enzoo404](https://github.com/Enzoo404)
+
+### 诊断与维护能力边界
+
+账号页“备份…”提供导入与导出；包含凭据的导出仍需明确选择。界面覆盖资源扫描使用 `npm run i18n:scan`，当前可见页面取证使用 `node tools/real-acceptance.mjs`；Controller 的自动遍历/词条编辑准备与 MenuLanguagePreferences 保留为开发适配API，当前没有对应原生页面，也不提供在线补译。
+
+用量总账的新记录写入本机索引库 `usage-ledger-v2.sqlite`；旧 `usage-ledger.json` 保留为只读恢复基准，不自动覆盖。缺少原始用量的金额凭据单独列示，无法确认的历史账号归属保留未知。既有错误历史记录的修订需要先查看差异与恢复材料，不能通过价格同步悄悄重写历史金额。
+
+`npm run verify` 默认只验证当前冻结输入。新增正式版适配需先显式运行 `npm run i18n:extract -- --register-bundle` 并审阅快照/指纹清单。免vendor门禁核对已审阅快照的结构与完整性；历史快照未重新取得官方字节时会明确标注，新的提取使用 TypeScript 公开AST接口。

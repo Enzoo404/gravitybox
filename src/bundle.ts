@@ -3,7 +3,7 @@ import { get as httpGet } from 'node:http';
 import { createHash } from 'node:crypto';
 import type { Dictionary } from './dictionary.js';
 
-/** 当前经过完整实机验收与界面对账的版本。 */
+/** 已收录的界面包指纹清单；不代表当前构建逐版本完成实机验收。 */
 export const SUPPORTED_BUNDLES = new Map([
   ['2.23.0', '867d1990b61d87f4b9ff8c5ecb1551c8688135267f32e56e02563f2d3e78fd68'],
   ['2.23.1', 'ad12ecf66061edab6a3835d1360e1bad50787bc7b2f2c9d86568281360864696'],

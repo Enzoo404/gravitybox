@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,writeFile,readFile,rm,symlink,realpath} from 'node:fs/promises';
+import {existsSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join, basename} from 'node:path';
 import {BundleCache} from '../dist/bundle-cache.js';
@@ -56,8 +57,16 @@ test('个人全局覆盖高于 AI 场景补全；移除后恢复已有场景译�
  const dir=await mkdtemp(join(tmpdir(),'gravity-context-personal-'));const base=join(dir,'base'),user=join(dir,'user');try{await mkdir(base);await mkdir(user);await writeFile(join(base,'base.json'),'{}');const context=scopedKey('Open','button','/settings');await writeFile(join(user,'增量补全-2.23.1.json'),JSON.stringify({[context]:'打开资源'}));await writeFile(join(user,'个人覆盖.json'),'{"Open":"我的译文"}');let layers=await loadDictionaryLayers(base,user);assert.equal(layers.dictionary.entries[context],undefined);assert.equal(layers.dictionary.entries.Open,'我的译文');await writeFile(join(user,'个人覆盖.json'),'{}');layers=await loadDictionaryLayers(base,user);assert.equal(layers.dictionary.entries[context],'打开资源');}finally{await rm(dir,{recursive:true,force:true});}
 });
 
-test('清理期间应用重新打开会停止并撤回已移动的缓存，留下恢复记录',async()=>{
- const temp=await realpath(await mkdtemp(join(tmpdir(),'gravity-maint-race-')));const profile=join(temp,'profile'),trash=join(temp,'trash');await mkdir(profile);await mkdir(trash);try{for(const n of ['Cache','Code Cache','GPUCache']){await mkdir(join(profile,n));await writeFile(join(profile,n,'data'),n);}let calls=0;const m=new CacheMaintenance(profile,trash,async()=>++calls>=4);const scan=await m.scan();await assert.rejects(m.clear(scan.token),/撤回/);assert.equal(await readFile(join(profile,'Cache/data'),'utf8'),'Cache');assert.equal(await readFile(join(profile,'Code Cache/data'),'utf8'),'Code Cache');const entries=await (await import('node:fs/promises')).readdir(trash);assert.equal(entries.length,1);assert.match(await readFile(join(trash,entries[0],'恢复清单.json'),'utf8'),/interrupted/);}finally{await rm(temp,{recursive:true,force:true});}
+test('清理中重开应用保留恢复计划，退出后才撤回移动', async () => {
+ const temp=await realpath(await mkdtemp(join(tmpdir(),'gravity-maint-race-')));
+ const profile=join(temp,'profile'),trash=join(temp,'trash');await mkdir(profile);await mkdir(trash);
+ try {
+  for(const name of ['Cache','Code Cache','GPUCache']) {await mkdir(join(profile,name));await writeFile(join(profile,name,'data'),name);}
+  const m=new CacheMaintenance(profile,trash,async()=>!existsSync(join(profile,'Cache')));
+  const scan=await m.scan();await assert.rejects(m.clear(scan.token),/恢复待处理/);
+  const stopped=new CacheMaintenance(profile,trash,async()=>false);await stopped.history();
+  for(const name of ['Cache','Code Cache','GPUCache']) assert.equal(await readFile(join(profile,name,'data'),'utf8'),name);
+ } finally {await rm(temp,{recursive:true,force:true});}
 });
 
 test('缓存支持分项勾选清理、状态型缓存按需选择、受保护数据只读统计及废纸篓快照一键原位恢复',async()=>{
@@ -167,25 +176,13 @@ test('Phase 1 安全性: clear 清理过程中断时，主缓存文件与 WAL/jo
     await mkdir(join(profile, 'GPUCache'));
     await writeFile(join(profile, 'GPUCache', 'data.bin'), 'gpu-data');
 
-    let runCheckCount = 0;
-    // 模拟移动第一项成功后，移动下一项前应用被用户启动
-    const m = new CacheMaintenance(profile, trash, async () => {
-      runCheckCount++;
-      return runCheckCount >= 3;
-    });
-    const scan = await m.scan();
-    await assert.rejects(m.clear(scan.token, ['GPUCache', 'CachedData']), /应用已重新打开，停止清理/);
-
-    const m2 = new CacheMaintenance(profile, trash, async () => false);
-    await rm(trash, { recursive: true, force: true });
-    await mkdir(trash);
-    let runCheckCount2 = 0;
-    const m3 = new CacheMaintenance(profile, trash, async () => {
-      runCheckCount2++;
-      return runCheckCount2 >= 4;
-    });
-    const scan3 = await m3.scan();
-    await assert.rejects(m3.clear(scan3.token, ['CachedData', 'GPUCache']), /应用已重新打开，停止清理/);
+    for (const trigger of ['GPUCache', 'CachedData-wal']) {
+      const maintenance = new CacheMaintenance(profile, trash, async () => !existsSync(join(profile, trigger)));
+      const scan = await maintenance.scan();
+      await assert.rejects(maintenance.clear(scan.token, ['GPUCache', 'CachedData']), /恢复待处理/);
+      const stopped = new CacheMaintenance(profile, trash, async () => false);
+      await stopped.history();
+    }
 
     // 验证 CachedData 及其附属 WAL/SHM 文件均已原子移回 profile，绝无遗留在废纸篓中的 WAL 孤儿
     assert.equal(await readFile(join(profile, 'CachedData'), 'utf8'), 'main-cache-content');
@@ -194,7 +191,7 @@ test('Phase 1 安全性: clear 清理过程中断时，主缓存文件与 WAL/jo
 
     // 废纸篓中的中断快照记录中无残留的孤儿 WAL
     const trashDirs = await (await import('node:fs/promises')).readdir(trash);
-    assert.equal(trashDirs.length, 1);
+    assert.equal(trashDirs.length, 2);
     const trashFiles = await (await import('node:fs/promises')).readdir(join(trash, trashDirs[0]));
     assert.ok(!trashFiles.includes('CachedData-wal'));
     assert.ok(!trashFiles.includes('CachedData-shm'));

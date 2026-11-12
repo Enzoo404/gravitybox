@@ -140,7 +140,7 @@ final class CachePage: NSObject {
     let selectedSummaryBadge = pillBadge("正在扫描", color: .secondaryLabelColor)
     let appStateLabel = text("", size: 11.5, color: Design.secondary)
     let compositionBar = CacheCompositionBar()
-    let safeLegendLabel = text("无损与孤儿残留 —", size: 11, color: Design.secondary)
+    let safeLegendLabel = text("无损缓存与临时文件 —", size: 11, color: Design.secondary)
     let statefulLegendWrap = NSStackView()
     let statefulLegendLabel = text("可瘦身历史 —", size: 11, color: Design.secondary)
     let protectedLegendLabel = text("核心数据 — 已保护", size: 11, color: Design.secondary)
@@ -168,6 +168,7 @@ final class CachePage: NSObject {
     var statefulCacheBytes: Int64 = 0
     var totalProtectedBytes: Int64 = 0
     var totalCacheFiles: Int = 0
+    var uncertainConversationCount = 0
     var isTruncated = false
     var appRunning = false
     var browserBusy = false
@@ -503,7 +504,7 @@ final class CachePage: NSObject {
         case "AgentBrowserCache":
             return ("浏览器沙箱加速缓存", "Browser 沙箱的网页与编译缓存（保留站点登录与 Cookie）", "globe", "safe", true, nil)
         case "OrphanAgentData":
-            return ("已删对话残留与临时文件", "父对话已删除的孤儿任务碎片、崩溃日志与临时媒体缓存", "trash.slash", "safe", true, nil)
+            return ("崩溃日志与临时媒体", "父对话已删除的孤儿任务碎片、崩溃日志与临时媒体缓存", "trash.slash", "safe", true, nil)
         case "AgentTaskStepLogs":
             return ("历史任务与步骤输出日志", "非活跃对话的后台终端日志、步骤输出与 scratch 草稿", "terminal", "stateful", false, "主对话与正式产物完好保留")
         case "AgentVerboseTranscripts":
@@ -573,6 +574,7 @@ final class CachePage: NSObject {
             totalCacheFiles = entries.reduce(0) { $0 + intVal($1, "fileCount") }
         }
         isTruncated = value["truncated"] as? Bool == true
+        uncertainConversationCount = intVal(value["uncertainConversations"] as? [String: Any] ?? [:], "count")
 
         safeCacheBytes = entries.filter { !isStatefulItem($0) }.reduce(Int64(0)) { $0 + Int64(intVal($1, "bytes")) }
         statefulCacheBytes = entries.filter { isStatefulItem($0) }.reduce(Int64(0)) { $0 + Int64(intVal($1, "bytes")) }
@@ -632,41 +634,17 @@ final class CachePage: NSObject {
         reclaimableTitleLabel.stringValue = "可移入废纸篓体积"
         reclaimableValueLabel.stringValue = formatBytes(heroDisplayBytes)
 
-        if !blocked.isEmpty {
-            selectedSummaryBadge.title = "扫描受限"
-            selectedSummaryBadge.tint = .secondaryLabelColor
-        } else if totalCacheBytes <= 0 {
-            selectedSummaryBadge.title = "无需清理"
-            selectedSummaryBadge.tint = .secondaryLabelColor
-        } else if sel.statefulCount > 0 {
-            selectedSummaryBadge.title = "含 \(sel.statefulCount) 项历史瘦身"
-            selectedSummaryBadge.tint = Design.color(0xD97706, 0xFBBF24)
-        } else if selectedNames == recommendedNames && sel.count > 0 {
-            selectedSummaryBadge.title = "推荐安全项"
-            selectedSummaryBadge.tint = Design.blue
-        } else if sel.count > 0 {
-            selectedSummaryBadge.title = "已选 \(sel.count) 项"
-            selectedSummaryBadge.tint = Design.blue
-        } else {
-            selectedSummaryBadge.title = "未勾选"
-            selectedSummaryBadge.tint = .secondaryLabelColor
-        }
-
-        appStateLabel.stringValue = appRunning ? "Antigravity 运行中 · 清理前将预检并自动重启" : "Antigravity 未运行 · 可直接清理"
-
-        if !blocked.isEmpty {
-            breakdownWarningLabel.isHidden = false
-            breakdownWarningLabel.stringValue = blocked.map { "\($0["name"] ?? "缓存")：\($0["reason"] ?? "无法读取")" }.joined(separator: "；")
-        } else {
-            breakdownWarningLabel.isHidden = true
-            breakdownWarningLabel.stringValue = ""
-        }
+        var protectionNotes = blocked.map { "\($0["name"] ?? "缓存")：\($0["reason"] ?? "无法读取")" }
+        if uncertainConversationCount > 0 { protectionNotes.append("\(uncertainConversationCount) 个会话关系待确认，已保护并排除清理") }
+        breakdownWarningLabel.stringValue = protectionNotes.joined(separator: "；")
+        breakdownWarningLabel.setAccessibilityLabel(breakdownWarningLabel.stringValue)
+        breakdownWarningLabel.isHidden = protectionNotes.isEmpty
 
         compositionBar.safeBytes = safeCacheBytes
         compositionBar.statefulBytes = statefulCacheBytes
         compositionBar.protectedBytes = totalProtectedBytes
 
-        safeLegendLabel.stringValue = "无损与孤儿残留 \(formatBytes(safeCacheBytes))"
+        safeLegendLabel.stringValue = "无损缓存与临时文件 \(formatBytes(safeCacheBytes))"
         if statefulCacheBytes > 0 {
             statefulLegendWrap.isHidden = false
             statefulLegendLabel.stringValue = "可瘦身历史 \(formatBytes(statefulCacheBytes))"
@@ -849,7 +827,7 @@ final class CachePage: NSObject {
 
             if !safeNames.isEmpty {
                 let safeDot = Self.makeLegendDot(color: Design.blue)
-                let safeTitle = text("无损缓存与孤儿残留（推荐清理）", size: 11.5, weight: .semibold, color: Design.secondary)
+                let safeTitle = text("无损缓存与临时文件（推荐清理）", size: 11.5, weight: .semibold, color: Design.secondary)
                 let safeHeader = horizontal([safeDot, safeTitle], spacing: 6)
                 safeHeader.alignment = .centerY
                 itemsStack.addArrangedSubview(safeHeader)

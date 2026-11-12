@@ -1,13 +1,13 @@
 import { allApplicationTargets } from './application-target.js';
-import { lstat, readdir, rename, mkdir, readFile } from 'node:fs/promises';
+import { lstat, readdir, mkdir, readFile } from 'node:fs/promises';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { createHash, randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { atomicJson } from './files.js';
 import { ReentrantMutex } from './mutex.js';
 import { SqliteReadSnapshot } from './sqlite-read.js';
+import { executeMoves, reconcileMoves, readMaintenanceManifest, type JournalMove } from './maintenance-journal.js';
 
 export type CacheCategory = 'safe' | 'stateful';
 export type CacheSection = 'runtime' | 'history';
@@ -259,7 +259,7 @@ export const CACHE_METADATA: Record<string, CacheItemMetadata> = {
     defaultSelected: true,
   },
   'OrphanAgentData': {
-    title: '已删对话残留与临时文件',
+    title: '崩溃日志与临时媒体',
     subtitle: '父对话已删除的孤儿任务碎片、崩溃日志与临时媒体缓存',
     icon: 'trash.slash',
     category: 'safe',
@@ -487,6 +487,40 @@ export class CacheMaintenance {
     return await browserProfileRunning(join(agentDir, 'browser_profile'));
   }
 
+  private async guardJournalMove(snapshot: string, move: JournalMove): Promise<void> {
+    if (await this.running()) throw Error('请先退出 Antigravity，再恢复维护事务');
+    for (const path of [move.from, move.to]) {
+      const root = isStrictSubpath(snapshot, path) ? snapshot : this.allowedRootDirs().find(root => isStrictSubpath(root, path));
+      if (!root) throw Error('维护事务路径超出受控目录');
+      // Reject symlink ancestors even when the last few destination directories do not exist yet.
+      let cursor = resolve(root);
+      const rootStat = await lstat(cursor);
+      if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) throw Error('维护事务根目录身份不匹配');
+      for (const part of relative(cursor, dirname(path)).split(sep).filter(Boolean)) {
+        cursor = join(cursor, part);
+        const stat = await lstat(cursor).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+        if (stat && (stat.isSymbolicLink() || !stat.isDirectory())) throw Error('维护事务父路径身份不匹配');
+      }
+    }
+    if (move.from.includes('browser_profile') || move.to.includes('browser_profile')) {
+      if (await this.isBrowserProfileBusy()) throw Error('独立浏览器仍在使用该路径，暂停恢复');
+    }
+  }
+
+  private async recoverPendingSnapshots(): Promise<void> {
+    if (await this.running()) return;
+    const names = await readdir(this.trash).catch(error => { if (error.code === 'ENOENT') return []; throw error; });
+    for (const id of names.filter(name => /^GravityBox-缓存-\d+$/.test(name))) {
+      const dir = join(this.trash, id), file = join(dir, '恢复清单.json');
+      const stat = await lstat(dir);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) continue;
+      try {
+        const manifest = await readMaintenanceManifest(file);
+        await reconcileMoves(file, manifest, move => this.guardJournalMove(dir, move));
+      } catch { /* Keep the prepared plan visible; explicit restore can retry after conflicts are resolved. */ }
+    }
+  }
+
   private async ensureSafeAncestors(rootDir: string, targetPath: string): Promise<void> {
     const resolvedRoot = resolve(rootDir);
     const resolvedTarget = resolve(targetPath);
@@ -676,7 +710,10 @@ export class CacheMaintenance {
                 sidecarBytes += sideStat.size;
                 sidecarFiles += 1;
                 if (sideStat.mtimeMs > lastModifiedAt) lastModifiedAt = sideStat.mtimeMs;
-                sidecarMarks.push(`${suffix}:${sideStat.size}:${sideStat.mtimeMs}`);
+                // SQLite readers update SHM read marks. That coordination timestamp is
+                // not a change to DB/WAL content; still bind its identity, owner and size.
+                sidecarMarks.push(JSON.stringify([suffix, sideStat.dev, sideStat.ino, sideStat.uid,
+                  sideStat.size, suffix === '-shm' ? null : sideStat.mtimeMs]));
               }
             } catch (sideErr) {
               if ((sideErr as NodeJS.ErrnoException).code !== 'ENOENT') throw sideErr;
@@ -860,6 +897,7 @@ export class CacheMaintenance {
       const ftsRes = await reader.query(
         'SELECT DISTINCT conversation_id FROM conversations_fts WHERE archived = 1;'
       );
+      if (!ftsRes.ok) return { available: false, summaryMap, runningTreeIds, archivedTreeIds };
       if (ftsRes.ok) {
         for (const row of ftsRes.rows) {
           if (typeof row.conversation_id === 'string' && row.conversation_id.trim()) {
@@ -881,23 +919,23 @@ export class CacheMaintenance {
         return chain;
       };
 
-      const runningSeeds = new Set<string>();
-      for (const [cid, info] of summaryMap.entries()) {
-        if (info.status === 'CASCADE_RUN_STATUS_RUNNING') {
-          for (const a of ancestorsOf(cid)) runningSeeds.add(a);
+      const safeStatuses = new Set(['CASCADE_RUN_STATUS_IDLE', 'CASCADE_RUN_STATUS_DONE', 'CASCADE_RUN_STATUS_COMPLETED', 'CASCADE_RUN_STATUS_CLEARED', 'CASCADE_RUN_STATUS_ERROR', 'CASCADE_RUN_STATUS_CANCELLED', 'CASCADE_RUN_STATUS_CANCELED', 'CASCADE_RUN_STATUS_KILLED']);
+      const protectedTree = (seeds: Iterable<string>): Set<string> => {
+        const ancestors = new Set<string>();
+        for (const seed of seeds) for (const id of ancestorsOf(seed)) ancestors.add(id);
+        const protectedIds = new Set<string>();
+        for (const cid of summaryMap.keys()) {
+          const chain = ancestorsOf(cid);
+          if (chain.some(id => ancestors.has(id)) || chain.some(id => !summaryMap.has(id))) {
+            for (const id of chain) protectedIds.add(id);
+          }
         }
-      }
-      for (const cid of summaryMap.keys()) {
-        const chain = ancestorsOf(cid);
-        if (chain.some(id => runningSeeds.has(id))) {
-          for (const id of chain) runningTreeIds.add(id);
-        }
-        if (chain.some(id => directArchived.has(id))) {
-          for (const id of chain) archivedTreeIds.add(id);
-        }
-      }
+        return protectedIds;
+      };
+      for (const id of protectedTree([...summaryMap].filter(([, info]) => !safeStatuses.has(info.status)).map(([id]) => id))) runningTreeIds.add(id);
+      for (const id of protectedTree(directArchived)) archivedTreeIds.add(id);
 
-      return { available: true, summaryMap, runningTreeIds, archivedTreeIds };
+      return { available: await reader.verifyUnchanged(), summaryMap, runningTreeIds, archivedTreeIds };
     } catch {
       return { available: false, summaryMap, runningTreeIds, archivedTreeIds };
     } finally {
@@ -934,6 +972,7 @@ export class CacheMaintenance {
     verboseTranscriptTargets: SubTargetSpec[];
     subagentDbTargets: SubTargetSpec[];
     subagentCount: number;
+    uncertainCount: number;
   }> {
     const empty = {
       orphanTargets: [] as SubTargetSpec[],
@@ -942,6 +981,7 @@ export class CacheMaintenance {
       verboseTranscriptTargets: [] as SubTargetSpec[],
       subagentDbTargets: [] as SubTargetSpec[],
       subagentCount: 0,
+      uncertainCount: 0,
     };
     const agentDir = this.officialAgentDir();
     if (!agentDir) return empty;
@@ -956,6 +996,12 @@ export class CacheMaintenance {
     const convDir = join(agentDir, 'conversations');
     const brainDir = join(agentDir, 'brain');
 
+    const uncertainIds = new Set<string>();
+    for (const name of await readdir(convDir).catch(() => [] as string[])) {
+      if (!name.endsWith('.db')) continue;
+      const id = name.slice(0, -3), info = index.summaryMap.get(id);
+      if (UUID_REGEX.test(id) && (!index.available || !info || info.parentId && !index.summaryMap.has(info.parentId))) uncertainIds.add(id);
+    }
     const orphanTargets: SubTargetSpec[] = [];
     const orphanIds = new Set<string>();
 
@@ -977,61 +1023,8 @@ export class CacheMaintenance {
       }
     }
 
-    // 2. 识别父对话已被删除的孤儿 Subagent
-    if (index.available) {
-      for (const [cid, info] of index.summaryMap.entries()) {
-        if (!UUID_REGEX.test(cid)) continue;
-        if (!info.parentId || index.summaryMap.has(info.parentId)) continue;
-        if (index.runningTreeIds.has(cid) || index.archivedTreeIds.has(cid)) continue;
-
-        const dbFile = join(convDir, `${cid}.db`);
-        const bDir = join(brainDir, cid);
-        const dbSt = await lstat(dbFile).catch(() => null);
-        const bSt = await lstat(bDir).catch(() => null);
-        const latestMtime = Math.max(dbSt?.mtimeMs ?? 0, bSt?.mtimeMs ?? 0);
-        if (latestMtime > quietThresholdMs) continue;
-
-        let added = false;
-        if (dbSt && dbSt.isFile() && !dbSt.isSymbolicLink()) {
-          orphanTargets.push({ path: dbFile, isUsageDb: true });
-          added = true;
-        }
-        if (bSt && bSt.isDirectory() && !bSt.isSymbolicLink()) {
-          orphanTargets.push({ path: bDir });
-          added = true;
-        }
-        if (added) orphanIds.add(cid);
-      }
-
-      // 识别磁盘上超过 5 分钟、连 summaryMap 都不存在的无主残留
-      const unindexedQuietMs = nowMs - 300_000;
-      const convFiles = await readdir(convDir).catch(() => [] as string[]);
-      for (const f of convFiles) {
-        if (!f.endsWith('.db')) continue;
-        const cid = f.slice(0, -3);
-        if (!UUID_REGEX.test(cid) || index.summaryMap.has(cid) || index.archivedTreeIds.has(cid) || orphanIds.has(cid)) continue;
-        const dbFile = join(convDir, f);
-        const [st, walSt] = await Promise.all([
-          lstat(dbFile).catch(() => null),
-          lstat(`${dbFile}-wal`).catch(() => null),
-        ]);
-        const latestMtime = Math.max(st?.mtimeMs ?? 0, walSt?.mtimeMs ?? 0);
-        if (st && st.isFile() && !st.isSymbolicLink() && latestMtime <= unindexedQuietMs) {
-          orphanTargets.push({ path: dbFile, isUsageDb: true });
-          orphanIds.add(cid);
-        }
-      }
-      const brainEntries = await readdir(brainDir).catch(() => [] as string[]);
-      for (const cid of brainEntries) {
-        if (!UUID_REGEX.test(cid) || index.summaryMap.has(cid) || index.archivedTreeIds.has(cid)) continue;
-        const bDir = join(brainDir, cid);
-        const st = await lstat(bDir).catch(() => null);
-        if (st && st.isDirectory() && !st.isSymbolicLink() && st.mtimeMs <= unindexedQuietMs) {
-          orphanTargets.push({ path: bDir });
-          orphanIds.add(cid);
-        }
-      }
-    }
+    // An absent summary/parent is not a deletion receipt. Conversation DBs and brain
+    // directories with unknown ownership are protected, never classified as safe cache.
 
     // 3. 收集非孤儿会话的 brain 派生运行日志（与孤儿集合严格互不相交）
     const taskStepTargets: SubTargetSpec[] = [];
@@ -1039,7 +1032,7 @@ export class CacheMaintenance {
     const brainDirs = await readdir(brainDir).catch(() => [] as string[]);
 
     for (const cid of brainDirs) {
-      if (!UUID_REGEX.test(cid) || orphanIds.has(cid) || index.runningTreeIds.has(cid)) continue;
+      if (!index.available || !index.summaryMap.has(cid) || !UUID_REGEX.test(cid) || orphanIds.has(cid) || index.runningTreeIds.has(cid) || index.archivedTreeIds.has(cid)) continue;
       const bPath = join(brainDir, cid);
       const bSt = await lstat(bPath).catch(() => null);
       if (!bSt || !bSt.isDirectory() || bSt.isSymbolicLink()) continue;
@@ -1115,6 +1108,7 @@ export class CacheMaintenance {
       verboseTranscriptTargets,
       subagentDbTargets,
       subagentCount,
+      uncertainCount: uncertainIds.size,
     };
   }
 
@@ -1288,6 +1282,7 @@ export class CacheMaintenance {
   }
 
   async history() {
+    await this.recoverPendingSnapshots();
     const snapshots: Array<{
       id: string;
       at: string;
@@ -1310,6 +1305,8 @@ export class CacheMaintenance {
           if (st.isSymbolicLink() || !st.isDirectory()) continue;
           const manifestRaw = await readFile(join(dir, '恢复清单.json'), 'utf8');
           const manifest = JSON.parse(manifestRaw);
+          const pendingRecovery = ['prepared', 'recovery-required'].includes(manifest.transaction?.phase);
+          const rolledBack = manifest.transaction?.phase === 'rolled-back' && manifest.transaction.purpose !== 'restore';
           const moved = Array.isArray(manifest.moved) ? manifest.moved : [];
           const logicalSet = new Set<string>();
           let restorableCount = 0;
@@ -1348,8 +1345,8 @@ export class CacheMaintenance {
             items,
             itemTitles,
             movedCount: Array.isArray(manifest.scope) && manifest.scope.length > 0 ? manifest.scope.length : items.length || moved.length,
-            restorable: !manifest.interrupted && !manifest.restoredAt && restorableCount > 0 && restorableCount === moved.length,
-            interrupted: manifest.interrupted === true,
+            restorable: pendingRecovery || (!rolledBack && !manifest.interrupted && !manifest.restoredAt && restorableCount > 0 && restorableCount === moved.length),
+            interrupted: manifest.interrupted === true || pendingRecovery,
             ...(typeof manifest.restoredAt === 'string' ? { restoredAt: manifest.restoredAt } : {}),
           });
         } catch {}
@@ -1478,6 +1475,7 @@ export class CacheMaintenance {
         statefulBytes,
         totalBytes: safeBytes + statefulBytes,
         totalFiles: entries.reduce((n, e) => n + e.fileCount, 0),
+        uncertainConversations: { count: agentConvTargets.uncertainCount, message: '索引或父关系无法确认的会话已保护，未纳入安全清理' },
         protectedEntries: protectedSummary.protectedEntries,
         protectedBytes: protectedSummary.protectedBytes,
         truncated: protectedSummary.truncated === true,
@@ -1542,7 +1540,8 @@ export class CacheMaintenance {
         .flatMap(entry => entry.subTargets)
         .filter(sub => sub.isUsageDb)
         .map(sub => sub.path);
-      if (usageDbsToArchive.length > 0 && this.options.archiveDatabases) {
+      if (usageDbsToArchive.length > 0) {
+        if (!this.options.archiveDatabases) throw Error('缺少完整用量归档服务，未移动任何会话数据库');
         await this.options.archiveDatabases(usageDbsToArchive);
       }
 
@@ -1550,122 +1549,37 @@ export class CacheMaintenance {
       const target = join(this.trash, `GravityBox-缓存-${Date.now()}`);
       await mkdir(target, { recursive: true, mode: 0o700 });
 
-      const moved: Array<{
-        entryName: string;
-        from: string;
-        to: string;
-        sidecars: string[];
-      }> = [];
-      let clearedBytes = 0;
-      let clearedFiles = 0;
-      const movedLogicalNames = new Set<string>();
-      let multiSeq = 0;
-
-      try {
-        for (const row of current) {
-          if (!row.exists || row.subTargets.length === 0) continue;
-          if (await this.running()) throw Error('应用已重新打开，停止清理');
-          const recheck = row.isSingleLegacyRoot
-            ? await this.inspectSingleProfileItem(row.name)
-            : await this.inspectMultiTargetItem(row.name, row.subTargets);
-          if (recheck.fingerprint !== row.fingerprint) throw Error('缓存正在变化，停止清理');
-
-          for (const sub of row.subTargets) {
-            const from = sub.path;
-            if (!this.isAllowedTargetPath(from)) {
-              throw Error(`清理路径超出安全边界（${row.name}）`);
+      const moved: Array<{ entryName: string; from: string; to: string }> = [];
+      const operations: JournalMove[] = [];
+      let sequence = 0;
+      for (const row of current) {
+        if (!row.exists || !row.subTargets.length) continue;
+        const recheck = row.isSingleLegacyRoot
+          ? await this.inspectSingleProfileItem(row.name)
+          : await this.inspectMultiTargetItem(row.name, row.subTargets);
+        if (recheck.fingerprint !== row.fingerprint) throw Error('缓存正在变化，停止清理');
+        for (const sub of row.subTargets) {
+          if (!this.isAllowedTargetPath(sub.path)) throw Error('清理路径超出安全边界');
+          const to = row.isSingleLegacyRoot ? join(target, row.name)
+            : join(target, 'items', row.name, `${++sequence}-${basename(sub.path)}`);
+          moved.push({ entryName: row.name, from: sub.path, to });
+          operations.push({ from: sub.path, to });
+          for (const suffix of ['-journal', '-wal', '-shm']) {
+            const stat = await lstat(sub.path + suffix).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+            if (stat) {
+              if (stat.isSymbolicLink() || !stat.isFile()) throw Error('数据库事务日志身份不匹配');
+              operations.push({ from: sub.path + suffix, to: to + suffix });
             }
-            let to: string;
-            if (row.isSingleLegacyRoot) {
-              to = join(target, row.name);
-            } else {
-              const itemsDir = join(target, 'items', row.name);
-              await mkdir(itemsDir, { recursive: true, mode: 0o700 });
-              to = join(itemsDir, `${++multiSeq}-${basename(from)}`);
-            }
-
-            try {
-              await rename(from, to);
-            } catch (err) {
-              throw Error(`移动缓存到废纸篓失败（${row.name}）: ${(err as Error).message}`);
-            }
-
-            const movedSidecars: string[] = [];
-            for (const suffix of ['-journal', '-wal', '-shm']) {
-              const sideFrom = `${from}${suffix}`, sideTo = `${to}${suffix}`;
-              try {
-                const st = await lstat(sideFrom);
-                if (!st.isSymbolicLink() && st.isFile()) {
-                  await rename(sideFrom, sideTo);
-                  movedSidecars.push(suffix);
-                }
-              } catch (sideErr) {
-                if ((sideErr as NodeJS.ErrnoException).code !== 'ENOENT') {
-                  for (const rolledSuffix of movedSidecars) {
-                    await rename(`${to}${rolledSuffix}`, `${from}${rolledSuffix}`).catch(() => {});
-                  }
-                  await rename(to, from).catch(() => {});
-                  throw Error(`移动 ${row.name} 事务日志 (${suffix}) 失败: ${(sideErr as Error).message}`);
-                }
-              }
-            }
-
-            moved.push({ entryName: row.name, from, to, sidecars: movedSidecars });
           }
-
-          movedLogicalNames.add(row.name);
-          clearedBytes += row.bytes;
-          clearedFiles += row.fileCount;
         }
-      } catch (error) {
-        const recovery = [];
-        for (const item of [...moved].reverse()) {
-          let restored = false;
-          try {
-            await lstat(item.from);
-          } catch (e) {
-            if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
-              try {
-                await mkdir(dirname(item.from), { recursive: true });
-                await rename(item.to, item.from);
-                restored = true;
-              } catch {}
-            }
-          }
-          const suffixes = item.sidecars.length > 0 ? item.sidecars : ['-journal', '-wal', '-shm'];
-          for (const suffix of suffixes) {
-            const sideTo = `${item.to}${suffix}`, sideFrom = `${item.from}${suffix}`;
-            try {
-              const st = await lstat(sideTo);
-              if (!st.isSymbolicLink()) {
-                await rename(sideTo, sideFrom).catch(() => {});
-              }
-            } catch {}
-          }
-          recovery.push({ entryName: item.entryName, from: item.from, to: item.to, restored });
-        }
-        await atomicJson(join(target, '恢复清单.json'), {
-          schema: usesMultiSchema ? 2 : 1,
-          at: new Date().toISOString(),
-          moved: recovery,
-          interrupted: true,
-          scope: targetNames,
-        });
-        throw Error(`${(error as Error).message}。已尝试撤回本轮移动，恢复记录：${target}`);
       }
-
+      const clearedBytes = current.reduce((sum, row) => sum + row.bytes, 0);
+      const clearedFiles = current.reduce((sum, row) => sum + row.fileCount, 0);
+      const movedLogicalNames = new Set(moved.map(row => row.entryName));
+      const manifest = { schema: usesMultiSchema ? 2 : 1, at: new Date().toISOString(), moved,
+        totalBytes: clearedBytes, fileCount: clearedFiles, scope: targetNames };
+      await executeMoves(join(target, '恢复清单.json'), manifest, operations, move => this.guardJournalMove(target, move));
       this.cachedProtectedSummary = undefined;
-      await atomicJson(join(target, '恢复清单.json'), {
-        schema: usesMultiSchema ? 2 : 1,
-        at: new Date().toISOString(),
-        moved: moved.map(m => usesMultiSchema
-          ? { entryName: m.entryName, from: m.from, to: m.to }
-          : { from: m.from, to: m.to }
-        ),
-        totalBytes: clearedBytes,
-        fileCount: clearedFiles,
-        scope: targetNames,
-      });
 
       if (this.options.onMutated) {
         await this.options.onMutated();
@@ -1702,10 +1616,17 @@ export class CacheMaintenance {
       const manifestPath = join(dir, '恢复清单.json');
       let manifest: any;
       try {
-        manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+        manifest = await readMaintenanceManifest(manifestPath);
       } catch {
         throw Error('恢复清单损坏，无法恢复');
       }
+      if (manifest.transaction && ['prepared', 'recovery-required'].includes(manifest.transaction.phase)) {
+        await reconcileMoves(manifestPath, manifest, move => this.guardJournalMove(dir, move));
+        this.cachedProtectedSummary = undefined;
+        await this.options.onMutated?.();
+        return { ok: true, restored: 0, items: [], displacedCount: 0, message: '已恢复中断维护操作的原始现场' };
+      }
+      if (manifest.transaction?.phase === 'rolled-back' && manifest.transaction.purpose !== 'restore') throw Error('该维护事务已回滚，无需再次恢复');
       if (manifest.interrupted) throw Error('该快照为中断回滚记录，无需再次恢复');
       if (manifest.restoredAt) throw Error('该缓存快照已经恢复过了');
       const moved = Array.isArray(manifest.moved) ? manifest.moved : [];
@@ -1811,76 +1732,38 @@ export class CacheMaintenance {
         }
       }
 
-      // === 阶段 2：冲突安全位移（归档至 displaced/，严禁 rm 物理删除） ===
+      // Plan both displacement and restoration before the first rename. The reverse plan
+      // also restores regenerated caches if the process exits halfway through restoration.
       const displacedDir = join(dir, 'displaced');
       const displacedItems: Array<{ original: string; displaced: string; isSidecar?: boolean }> = [];
-      let dispSeq = 0;
-      try {
-        for (const plan of plans) {
-          const existingFrom = await lstat(plan.expectedFrom).catch(() => null);
-          if (existingFrom) {
-            await mkdir(displacedDir, { recursive: true, mode: 0o700 });
-            const prefix = isSchemaV2 ? `${++dispSeq}-${plan.label}` : plan.label;
-            const displacedPath = join(displacedDir, `${prefix}.displaced-${Date.now()}`);
-            await rename(plan.expectedFrom, displacedPath);
-            displacedItems.push({ original: plan.expectedFrom, displaced: displacedPath });
-          }
-          for (const suffix of ['-journal', '-wal', '-shm']) {
-            const sideFrom = `${plan.expectedFrom}${suffix}`;
-            const sideStat = await lstat(sideFrom).catch(() => null);
-            if (sideStat) {
-              await mkdir(displacedDir, { recursive: true, mode: 0o700 });
-              const prefix = isSchemaV2 ? `${++dispSeq}-${plan.label}${suffix}` : `${plan.label}${suffix}`;
-              const sideDisplaced = join(displacedDir, `${prefix}.displaced-${Date.now()}`);
-              await rename(sideFrom, sideDisplaced);
-              displacedItems.push({ original: sideFrom, displaced: sideDisplaced, isSidecar: true });
-            }
+      const operations: JournalMove[] = [];
+      let sequence = 0;
+      for (const plan of plans) {
+        for (const suffix of ['', '-journal', '-wal', '-shm']) {
+          const original = plan.expectedFrom + suffix;
+          const existing = await lstat(original).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+          if (existing) {
+            const displaced = join(displacedDir, `${plan.label}${suffix}.displaced-${Date.now()}-${++sequence}-${randomUUID()}`);
+            displacedItems.push({ original, displaced, ...(suffix ? { isSidecar: true } : {}) });
+            operations.push({ from: original, to: displaced });
           }
         }
-      } catch (displaceError) {
-        for (const rec of [...displacedItems].reverse()) {
-          await rename(rec.displaced, rec.original).catch(() => {});
-        }
-        throw Error(`冲突位移过程失败: ${(displaceError as Error).message}。已自动回滚恢复现场。`);
       }
-
-      // === 阶段 3：原子还原与双向逆向回滚 ===
-      const restoredRecords: Array<{ from: string; to: string }> = [];
-      const restoredLogicalNames = new Set<string>();
-      try {
-        for (const plan of plans) {
-          await mkdir(dirname(plan.expectedFrom), { recursive: true });
-          await rename(plan.expectedTo, plan.expectedFrom);
-          restoredRecords.push({ from: plan.expectedTo, to: plan.expectedFrom });
-          for (const suffix of ['-journal', '-wal', '-shm']) {
-            const sideTo = `${plan.expectedTo}${suffix}`, sideFrom = `${plan.expectedFrom}${suffix}`;
-            const sideStat = await lstat(sideTo).catch(() => null);
-            if (sideStat && !sideStat.isSymbolicLink() && sideStat.isFile()) {
-              await rename(sideTo, sideFrom);
-              restoredRecords.push({ from: sideTo, to: sideFrom });
-            }
+      for (const plan of plans) {
+        for (const suffix of ['', '-journal', '-wal', '-shm']) {
+          const source = plan.expectedTo + suffix;
+          if (await lstat(source).catch(error => { if (error.code === 'ENOENT') return null; throw error; })) {
+            operations.push({ from: source, to: plan.expectedFrom + suffix });
           }
-          restoredLogicalNames.add(plan.entryName);
         }
-      } catch (restoreError) {
-        for (const rec of [...restoredRecords].reverse()) {
-          await rename(rec.to, rec.from).catch(() => {});
-        }
-        for (const rec of [...displacedItems].reverse()) {
-          await rename(rec.displaced, rec.original).catch(() => {});
-        }
-        throw Error(`还原快照过程失败: ${(restoreError as Error).message}。已自动双向回滚恢复现场。`);
       }
-
-      // === 阶段 4：清单固化与完成标记 ===
-      this.cachedProtectedSummary = undefined;
-      const uniqueDisplacedCount = displacedItems.filter(d => !d.isSidecar).length;
-      await atomicJson(manifestPath, {
-        ...manifest,
-        restoredAt: new Date().toISOString(),
-        displacedCount: uniqueDisplacedCount,
-        displaced: displacedItems.map(d => ({ from: d.original, to: d.displaced })),
+      const uniqueDisplacedCount = displacedItems.filter(item => !item.isSidecar).length;
+      await executeMoves(manifestPath, manifest, operations, move => this.guardJournalMove(dir, move), {
+        restoredAt: new Date().toISOString(), displacedCount: uniqueDisplacedCount,
+        displaced: displacedItems.map(item => ({ from: item.original, to: item.displaced })),
       });
+      this.cachedProtectedSummary = undefined;
+      const restoredLogicalNames = new Set(plans.map(plan => plan.entryName));
 
       if (this.options.onMutated) {
         await this.options.onMutated();

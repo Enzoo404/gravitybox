@@ -86,7 +86,7 @@ test('event prices survive manager restart and price-table replacement; unknown-
   const restarted = new UsageStatsManager({geminiDir:dir,stateDir:dir}); assert.equal((await restarted.getUsageSummary(true)).all_time.estimated_usd,2);
   assert.equal(Object.keys(JSON.parse(await readFile(join(dir,'usage-rate-locks.json'),'utf8')).entries).length,1);
   await assert.rejects(restarted.revalueHistory(false), /明确确认/);
-  assert.equal((await restarted.revalueHistory(true)).after,4);
+  assert.equal((await restarted.revalueHistory(true, { previewId: (await restarted.previewRevalueHistory()).previewId })).after,4);
   assert.equal((await new UsageStatsManager({geminiDir:dir,stateDir:dir}).getUsageSummary(true)).all_time.estimated_usd,4);
   assert.equal(resolvePricingForTimestamp(prices(2)['audit-model'],0),null);
   assert.equal(resolvePricingForTimestamp([{input:1,output:1,cached:0,validUntil:'2026-01-01T00:00:00Z'}],now),null);

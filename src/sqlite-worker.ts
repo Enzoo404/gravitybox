@@ -280,6 +280,7 @@ function executeHudScan(req: HudWorkerScanRequest): { result: HudWorkerScanResul
 // readOnly protects database contents; SQLite manages its own read coordination sidecars.
 let database: DatabaseSync | undefined;
 let sessionError: string | undefined;
+let sessionDataVersion = 0;
 
 function openSession(path: string) {
   try { database?.exec('ROLLBACK;'); database?.close(); } catch {}
@@ -287,7 +288,8 @@ function openSession(path: string) {
   sessionError = undefined;
   try {
     database = new DatabaseSync(path, { readOnly: true });
-    database.exec('PRAGMA busy_timeout=1000; BEGIN;');
+    database.exec('PRAGMA query_only=ON; PRAGMA busy_timeout=250;');
+    sessionDataVersion = Number(database.prepare('PRAGMA data_version').get()?.data_version);
   } catch (error) {
     sessionError = (error as Error).message;
   }
@@ -303,7 +305,7 @@ if (typeof workerData?.path === 'string' && workerData.path.length > 0) {
   openSession(workerData.path);
 }
 
-parentPort?.on('message', (request: { id: string; open?: string; sql?: string; close?: boolean; reusable?: boolean; projection?: {table:string;column:string;idx:number}; hudScan?: HudWorkerScanRequest }) => {
+parentPort?.on('message', (request: { id: string; open?: string; sql?: string; verify?: boolean; close?: boolean; reusable?: boolean; projection?: {table:string;column:string;idx:number}; hudScan?: HudWorkerScanRequest }) => {
   if (request.hudScan) {
     try {
       const { result, transfers } = executeHudScan(request.hudScan);
@@ -332,7 +334,14 @@ parentPort?.on('message', (request: { id: string; open?: string; sql?: string; c
   }
   try {
     let rows: Record<string,any>[];
+    if (request.verify) {
+      const unchanged = sessionDataVersion === Number(database.prepare('PRAGMA data_version').get()?.data_version);
+      parentPort?.postMessage({ id: request.id, ok: unchanged, rows: [], ...(unchanged ? {} : { error: '数据库在读取期间变化，请重试' }) });
+      return;
+    }
     if(request.projection){
+      database.exec('BEGIN;');
+      try {
       const {table,column,idx}=request.projection;
       if(!Number.isSafeInteger(idx)||!((table==='gen_metadata'&&column==='data')||(table==='steps'&&column==='metadata')))throw Error('元数据投影请求无效');
       const sizes=database.prepare(`SELECT length(${column}) AS size FROM ${table} WHERE idx=?`).all(idx);
@@ -341,6 +350,7 @@ parentPort?.on('message', (request: { id: string; open?: string; sql?: string; c
       const projected=projectProtobuf(Number(sizes[0]!.size),(offset,length)=>statement.get(offset+1,length,idx)!.chunk as Uint8Array,table==='gen_metadata'?GENERATION_PROJECTION:STEP_PROJECTION);
       // Small Buffers may share Node's non-transferable slab. Give IPC its own ArrayBuffer.
       rows=[{idx,size:sizes[0]!.size,data_blob:Uint8Array.from(projected.data),projected:true,projectionBytesRead:projected.bytesRead}];
+      } finally { database.exec('ROLLBACK;'); }
     } else rows = database.prepare(request.sql!).all();
     const transfers = new Set<ArrayBuffer>();
     for (const row of rows) for (const value of Object.values(row)) {

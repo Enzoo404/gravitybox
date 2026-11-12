@@ -14,6 +14,17 @@ enum PerformanceSignpost {
 
 // The approved standalone preview is the visual contract. Native system surfaces keep OS behavior.
 enum Design {
+    /// Density roles, not a mandate to make menu cards and full pages equally spacious.
+    enum Spacing {
+        static let compact: CGFloat = 6
+        static let standard: CGFloat = 12
+        static let roomy: CGFloat = 14
+        static let page: CGFloat = 10
+    }
+    enum Radius {
+        static let card: CGFloat = 14
+        static let compact: CGFloat = 10
+    }
     static func shouldAnimate(in view: NSView?) -> Bool {
         #if NATIVE_UI_TEST
         return false

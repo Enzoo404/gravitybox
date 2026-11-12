@@ -560,18 +560,37 @@
     },
     "gemini-2.5-flash": {
       "model": "gemini-2.5-flash",
-      "input": 0.1,
-      "output": 0.4,
-      "cached": 0.025,
+      "input": 0.3,
+      "output": 2.5,
+      "cached": 0.03,
       "provenance": {
         "sourceUrl": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "platform": "Google Cloud 标准 Global API",
-        "conditions": "Google Cloud 官方 Gemini 2.5 Flash 标准文本基准 (<=128k Tokens)",
+        "conditions": "Google Cloud 标准文本参考价；2026-11-12为本地核价起点，不代表官方调价日期",
         "checkedAt": "2026-11-12",
-        "validFrom": null,
+        "validFrom": "2026-11-12T00:00:00Z",
         "validUntil": null,
         "verification": "confirmed"
-      }
+      },
+      "intervals": [
+        {
+          "model": "gemini-2.5-flash",
+          "input": 0.3,
+          "output": 2.5,
+          "cached": 0.03,
+          "validFrom": "2026-11-12T00:00:00Z",
+          "validUntil": null,
+          "provenance": {
+            "sourceUrl": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
+            "platform": "Google Cloud 标准 Global API",
+            "conditions": "Google Cloud 标准文本参考价；2026-11-12为本地核价起点，不代表官方调价日期",
+            "checkedAt": "2026-11-12",
+            "validFrom": "2026-11-12T00:00:00Z",
+            "validUntil": null,
+            "verification": "confirmed"
+          }
+        }
+      ]
     },
     "gemini-2.5-pro": {
       "model": "gemini-2.5-pro",
@@ -953,5 +972,21 @@
       }
     }
   },
-  "aliases": {}
+  "aliases": {},
+  "feedModels": [
+    "gemini-2.5-flash",
+    "gemini-2.5-pro",
+    "gemini-3.1-pro",
+    "claude-3-5-sonnet",
+    "claude-3-5-haiku",
+    "gpt-4o",
+    "gpt-4o-mini",
+    "gemini-3.8-flash",
+    "gemini-4-argon",
+    "gemini-4-carbon",
+    "claude-opus-5-5",
+    "claude-sonnet-5-5"
+  ],
+  "pricingVersion": "2026-11-12",
+  "pricingUpdatedAt": "2026-11-12T00:00:00Z"
 }

@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { UsageStatsManager, matchPricingKeys } from '../dist/usage.js';
+import { UsageLedger } from '../dist/usage-ledger.js';
 import { normalizeModelId } from '../dist/model-identity.js';
 
 test('Vertex AI 模型路径清洗与价格归一化', () => {
@@ -50,7 +51,7 @@ test('追加型总账：即使底层数据库被官方清除，历史事件与 T
               total_tokens: 1700,
               timestamp_seconds: 1731400000,
               account_id: 'acc-zhangli-1',
-              account_email: 'abeyond404@gmail.com',
+              account_email: 'account-two@example.invalid',
             },
           ],
           generationsScanned: 1,
@@ -71,7 +72,7 @@ test('追加型总账：即使底层数据库被官方清除，历史事件与 T
             timestamp_seconds: 1731400010,
             account_type: 'consumer',
             account_id: 'acc-personal-1',
-            account_email: 'dev@gmail.com',
+            account_email: 'developer@example.invalid',
           },
         ],
         generationsScanned: 1,
@@ -86,12 +87,10 @@ test('追加型总账：即使底层数据库被官方清除，历史事件与 T
     assert.equal(firstSummary.all_time.totals.request_count, 2);
 
     // 检查账本文件是否已经持久化
-    const ledgerRaw = await readFile(join(tempDir, 'usage-ledger.json'), 'utf8');
-    const ledger = JSON.parse(ledgerRaw);
-    assert.equal(ledger.version, 1);
-    assert.ok(Array.isArray(ledger.events));
-    assert.ok(ledger.events.some((e) => e.event_key === '1111111111111111111111111111111111111111111111111111111111111111'));
-    assert.ok(ledger.events.some((e) => e.event_key === '2222222222222222222222222222222222222222222222222222222222222222'));
+    const ledger = await new UsageLedger(tempDir).load();
+    assert.equal(ledger.length, 2);
+    assert.ok(ledger.some(event => event.event_key === '1'.repeat(64)));
+    assert.ok(ledger.some(event => event.event_key === '2'.repeat(64)));
 
     // 模拟场景：用户退出企业账号，Antigravity 官方物理删除了 enterpriseSession 数据库！
     const secondManager = new UsageStatsManager({ stateDir: tempDir, geminiDir: '/synthetic/gemini' });
@@ -109,7 +108,7 @@ test('追加型总账：即使底层数据库被官方清除，历史事件与 T
           timestamp_seconds: 1731400010,
           account_type: 'consumer',
           account_id: 'acc-personal-1',
-          account_email: 'dev@gmail.com',
+          account_email: 'developer@example.invalid',
         },
       ],
       generationsScanned: 1,
@@ -130,7 +129,7 @@ test('追加型总账：即使底层数据库被官方清除，历史事件与 T
   }
 });
 
-test('自动灾难自愈：从历史 rate-locks 逆推恢复已被官方删除的会话事件', async () => {
+test('缺少原始事件时仅保留金额凭据，不从费率锁反推用量', async () => {
   const tempDir = await mkdtemp(join(tmpdir(), 'gb-heal-test-'));
   try {
     // 构造场景：磁盘上没有任何 .db 文件，也没有 usage-ledger.json
@@ -159,12 +158,11 @@ test('自动灾难自愈：从历史 rate-locks 逆推恢复已被官方删除�
     manager.discoverDatabaseFiles = async () => [];
 
     const summary = await manager.getUsageSummary(true);
-    // 自愈机制成功恢复出 sample-1 事件
-    assert.equal(summary.all_time.totals.request_count, 1);
-    assert.ok(summary.all_time.estimated_usd > 0);
-    const model = summary.all_time.by_model[0];
-    assert.equal(model.model, 'gemini-4-carbon');
-    assert.equal(model.priced, true);
+    assert.equal(summary.all_time.totals.request_count, 0);
+    assert.equal(summary.all_time.totals.total_tokens, 0);
+    assert.equal(summary.all_time.estimated_usd, 0);
+    assert.equal(summary.all_time.by_model.length, 0);
+    assert.deepEqual(summary.historical_amount_receipts, { unmatchedCount: 1, unmatchedUsd: 0.05 });
   } finally {
     await rm(tempDir, { recursive: true, force: true }).catch(() => {});
   }
@@ -176,9 +174,9 @@ test('账号下钻筛选器：首项全部账号，后续依次排列真实账�
     const manager = new UsageStatsManager({ stateDir: tempDir, geminiDir: '/synthetic/gemini' });
     // 注入当前保存的已知真实账号列表（例如当前账号、第二个账号、第三个账号）
     manager.setKnownAccounts([
-      { id: 'acc_siensen', email: 'siensen1896@gmail.com', name: '无限' },
-      { id: 'acc_zhangli', email: 'abeyond404@gmail.com', name: '张礼' },
-      { id: 'acc_wenqi', email: 'zanenx404@gmail.com', name: 'Wen Qi Zhang' },
+      { id: 'acc_siensen', email: 'account-one@example.invalid', name: '测试账号一' },
+      { id: 'acc_zhangli', email: 'account-two@example.invalid', name: '测试账号二' },
+      { id: 'acc_wenqi', email: 'account-three@example.invalid', name: 'Fixture Three' },
     ]);
 
     manager.discoverDatabaseFiles = async () => ['synthetic'];
@@ -193,7 +191,7 @@ test('账号下钻筛选器：首项全部账号，后续依次排列真实账�
           total_tokens: 1200,
           timestamp_seconds: 1731420000,
           account_id: 'acc_zhangli',
-          account_email: 'abeyond404@gmail.com',
+          account_email: 'account-two@example.invalid',
         },
         {
           event_key: 'ev-flash-1',
@@ -204,7 +202,7 @@ test('账号下钻筛选器：首项全部账号，后续依次排列真实账�
           total_tokens: 400,
           timestamp_seconds: 1731420100,
           account_id: 'acc_siensen',
-          account_email: 'siensen1896@gmail.com',
+          account_email: 'account-one@example.invalid',
         },
       ],
       generationsScanned: 2,
@@ -217,16 +215,16 @@ test('账号下钻筛选器：首项全部账号，后续依次排列真实账�
     const allSummary = await manager.getUsageSummary(true, 'all');
     assert.equal(allSummary.all_time.totals.total_tokens, 1600);
     assert.equal(allSummary.all_time.totals.request_count, 2);
-    // 依次为：全部账号、siensen1896@gmail.com、abeyond404@gmail.com、zanenx404@gmail.com
+    // 依次为：全部账号、account-one@example.invalid、account-two@example.invalid、account-three@example.invalid
     assert.equal(allSummary.available_accounts?.length, 4);
     assert.equal(allSummary.available_accounts[0].id, 'all');
     assert.equal(allSummary.available_accounts[0].label, '全部账号');
-    assert.equal(allSummary.available_accounts[1].label, 'siensen1896@gmail.com');
-    assert.equal(allSummary.available_accounts[2].label, 'abeyond404@gmail.com');
-    assert.equal(allSummary.available_accounts[3].label, 'zanenx404@gmail.com');
+    assert.equal(allSummary.available_accounts[1].label, 'account-one@example.invalid');
+    assert.equal(allSummary.available_accounts[2].label, 'account-two@example.invalid');
+    assert.equal(allSummary.available_accounts[3].label, 'account-three@example.invalid');
     assert.equal(allSummary.selected_account_id, 'all');
 
-    // 2. 筛选张礼（abeyond404@gmail.com）— 包含其 Vertex 项目的 Gemini 4 Carbon
+    // 2. 筛选测试账号二（account-two@example.invalid）— 包含其 Vertex 项目的 Gemini 4 Carbon
     const zhangliSummary = await manager.getUsageSummary(true, 'acc_zhangli');
     assert.equal(zhangliSummary.all_time.totals.total_tokens, 1200);
     assert.equal(zhangliSummary.all_time.totals.request_count, 1);
@@ -234,7 +232,7 @@ test('账号下钻筛选器：首项全部账号，后续依次排列真实账�
     assert.equal(zhangliSummary.all_time.by_model[0].model, 'gemini-4-carbon');
     assert.equal(zhangliSummary.selected_account_id, 'acc_zhangli');
 
-    // 3. 筛选当前账号无限（siensen1896@gmail.com）
+    // 3. 筛选当前账号测试账号一（account-one@example.invalid）
     const siensenSummary = await manager.getUsageSummary(true, 'acc_siensen');
     assert.equal(siensenSummary.all_time.totals.total_tokens, 400);
     assert.equal(siensenSummary.all_time.totals.request_count, 1);

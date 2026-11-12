@@ -136,16 +136,7 @@ async function reportSuccessToStepSummary({ version, scope, digest, steps }) {
 async function main() {
   /* 先做参数格式/重复校验，避免跑完构建才发现 CLI 写错。 */
   const earlyTarget = parseTargetAppVersionArg(argv);
-  if (!argv.includes('--no-auto-extract')) {
-    try {
-      const { appVersion: detectInstalledAppVersion, extractFromRunningApp } = await import('./extract-ui-strings.mjs');
-      const installed = await detectInstalledAppVersion();
-      if (installed && /^\d+\.\d+\.\d+$/.test(installed) && !existsSync(join(root, 'ui-strings', `${installed}.json`))) {
-        const res = await extractFromRunningApp({ projectRoot: root, registerBundle: true });
-        process.stdout.write(`[verify] 检测到本机新版本 Antigravity ${res.appVersion}，已自动提取 ui-strings/${res.appVersion}.json 并登记官方指纹\n`);
-      }
-    } catch { /* Antigravity 未运行时保持离线验证已收录版本 */ }
-  }
+  if (argv.includes('--auto-extract')) throw Error('验证不修改适配输入；请先显式运行 i18n:extract -- --register-bundle，审阅后再验证');
   const initialDigest = await sourceDigest(root);
   const version = JSON.parse(await readFile(join(root, 'package.json'))).version;
   const out = join(root, '质检报告', `${version}-改造验收`); await mkdir(out, { recursive: true });
@@ -167,6 +158,7 @@ async function main() {
   }
   await step('构建', process.execPath, [join(root, 'node_modules/typescript/bin/tsc')]);
   await step('运行时', process.execPath, [join(root, 'tools/copy-runtime.mjs')]);
+  await step('价格资产', process.execPath, [join(root, 'tools/sync-pricing-feed.mjs')]);
   const tests = (await readdir(join(root, 'test'))).filter(name => name.endsWith('.test.mjs')).map(name => join(root, 'test', name));
   await step('单元与集成', process.execPath, ['--test', ...tests]);
   await step('浏览器回归', process.execPath, [join(root, 'test/browser.mjs')]);

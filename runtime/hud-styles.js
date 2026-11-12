@@ -6,6 +6,9 @@
 
 export const HUD_STYLES_CSS = `
 :host {
+  --hud-space-compact: 6px;
+  --hud-space-standard: 12px;
+  --hud-radius-card: 12px;
   /* ==================== 浅色模式 (Antigravity Light Theme) ==================== */
   --hud-dock-bg: rgba(10, 10, 12, 0.032);
   --hud-dock-border: rgba(10, 10, 12, 0.075);
@@ -462,7 +465,7 @@ export const HUD_STYLES_CSS = `
   max-width: calc(100vw - 24px);
   max-height: calc(100vh - 48px);
   overflow: visible;
-  border-radius: 12px;
+  border-radius: var(--hud-radius-card);
   background-color: var(--hud-popover-bg);
   border: 1px solid var(--hud-popover-border);
   box-shadow: var(--hud-popover-shadow);
@@ -514,7 +517,7 @@ export const HUD_STYLES_CSS = `
   overflow-y: auto;
   overflow-x: hidden;
   padding: 12px 14px;
-  border-radius: 12px;
+  border-radius: var(--hud-radius-card);
 }
 
 .hud-popover-arrow {
@@ -619,7 +622,7 @@ export const HUD_STYLES_CSS = `
 .hud-popover-grid {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--hud-space-compact);
 }
 
 .hud-popover-row {
@@ -637,7 +640,7 @@ export const HUD_STYLES_CSS = `
 .hud-popover-label {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--hud-space-compact);
   color: var(--hud-text-secondary);
   font-size: 11.5px;
   font-weight: 400;

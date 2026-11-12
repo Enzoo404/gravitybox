@@ -119,8 +119,8 @@ test('已暂停的汉化在重新启动时保持暂停，不为更新自动注�
 }));
 
 
-test('分批读取共享一个只读事务，数据库期间被写入也不拼接两代数据',()=>fixture(async dir=>{
+test('分批读取释放事务并拒绝把数据库变化冒充一致快照',()=>fixture(async dir=>{
  const path=join(dir,'snapshot.db'),db=new DatabaseSync(path);db.exec('PRAGMA journal_mode=WAL; CREATE TABLE data(id INTEGER PRIMARY KEY,value INTEGER); INSERT INTO data VALUES(1,100);');
- const reader=new SqliteReadSnapshot(path);try{assert.equal((await reader.query('SELECT value FROM data WHERE id=1;')).rows[0].value,100);db.exec('UPDATE data SET value=200; INSERT INTO data VALUES(2,300);');const same=await reader.query('SELECT * FROM data ORDER BY id;');assert.deepEqual(same.rows,[{id:1,value:100}]);}finally{await reader.close();}
+ const reader=new SqliteReadSnapshot(path);try{assert.equal((await reader.query('SELECT value FROM data WHERE id=1;')).rows[0].value,100);db.exec('UPDATE data SET value=200; INSERT INTO data VALUES(2,300);');const same=await reader.query('SELECT * FROM data ORDER BY id;');assert.deepEqual(same.rows,[{id:1,value:200},{id:2,value:300}]);assert.equal(await reader.verifyUnchanged(),false);const checkpoint=db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get();assert.equal(checkpoint.busy,0);}finally{await reader.close();}
  const next=new SqliteReadSnapshot(path);try{const result=await next.query('SELECT * FROM data ORDER BY id;');assert.equal(result.ok,true,result.error);assert.deepEqual(result.rows,[{id:1,value:200},{id:2,value:300}]);}finally{await next.close();db.close();}
 }));

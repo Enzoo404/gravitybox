@@ -5,9 +5,11 @@ import { promisify } from 'node:util';
 import { homedir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { extractUiStrings, isEnglishSource, isFragmentLiteral, CODE_ONLY_WORDS, fetchBuffer, computeBundleSha256 } from '../dist/bundle.js';
+import { isEnglishSource, isFragmentLiteral, CODE_ONLY_WORDS, fetchBuffer, computeBundleSha256 } from '../dist/bundle.js';
 import { discover, allowedTarget, verifyPageService } from '../dist/discovery.js';
 import { compareVersions } from './release-scope.mjs';
+import { extractUiStringsAst as extractUiStrings } from './extract-ui-ast.mjs';
+import { snapshotDigest } from './extraction-snapshot.mjs';
 export { isEnglishSource, isFragmentLiteral, CODE_ONLY_WORDS };
 const root = fileURLToPath(new URL('../', import.meta.url)), args = process.argv.slice(2);
 const option = (name, fallback) => { const i = args.indexOf(name); return i < 0 ? fallback : args[i + 1]; };
@@ -63,10 +65,18 @@ export async function registerSupportedBundle(version, bundleSha256, projectRoot
   return true;
 }
 
+export async function registerExtractionSnapshot(value, projectRoot = root) {
+  const file = join(projectRoot, 'assets', 'ui-extraction-manifest.json');
+  const manifest = JSON.parse(await readFile(file, 'utf8'));
+  manifest.versions[value.appVersion] = { bundleSha256: value.bundleSha256, snapshotSha256: snapshotDigest(value),
+    extractor: value.extractor, trust: 'explicit-byte-extraction', byteVerifiedAt: new Date().toISOString() };
+  await writeFile(file, JSON.stringify(manifest, null, 2) + '\n');
+}
+
 /**
  * 从当前运行中的官方 Antigravity 实例自动提取最新版本的界面串并落盘 ui-strings/<version>.json。
  */
-export async function extractFromRunningApp({ app = APP, profile = PROFILE, base, outPath, registerBundle = true, projectRoot = root } = {}) {
+export async function extractFromRunningApp({ app = APP, profile = PROFILE, base, outPath, registerBundle = false, projectRoot = root } = {}) {
   const version = await appVersion(app);
   if (!version || !/^\d+\.\d+\.\d+$/.test(version)) throw new Error('无法读取本机 Antigravity 版本号');
   const endpoint = await discover(app, profile);
@@ -84,7 +94,7 @@ export async function extractFromRunningApp({ app = APP, profile = PROFILE, base
   for (const entry of strings) for (const kind of entry.kinds) byKind[kind] = (byKind[kind] ?? 0) + 1;
   const bundleSha256 = computeBundleSha256(source);
   const value = {
-    schema: 1,
+    schema: 1, extractor: 'typescript-ast-v1',
     appVersion: version,
     source: bundleRelative,
     bundleSha256,
@@ -97,6 +107,7 @@ export async function extractFromRunningApp({ app = APP, profile = PROFILE, base
   await mkdir(dirname(out), { recursive: true });
   await writeFile(out, JSON.stringify(value, null, 1) + '\n');
   const registered = registerBundle ? await registerSupportedBundle(version, bundleSha256, projectRoot) : false;
+  if (registerBundle) await registerExtractionSnapshot(value, projectRoot);
   return { out, count: strings.length, appVersion: version, bundleSha256, registered, value };
 }
 
@@ -125,11 +136,12 @@ async function main() {
   for (const entry of strings) for (const kind of entry.kinds) byKind[kind] = (byKind[kind] ?? 0) + 1;
   const bundleSha256 = computeBundleSha256(source);
   /* schema 保持不变；只保证 source 对 --bundle 路径是可回溯的绝对路径。 */
-  const value = { schema: 1, appVersion: version, source: sourceName, bundleSha256, bundleBytes: Buffer.byteLength(source), extractedAt: new Date().toISOString(), counts: { total: strings.length, ...byKind }, strings };
+  const value = { schema: 1, extractor: 'typescript-ast-v1', appVersion: version, source: sourceName, bundleSha256, bundleBytes: Buffer.byteLength(source), extractedAt: new Date().toISOString(), counts: { total: strings.length, ...byKind }, strings };
   if (args.includes('--stdout')) { process.stdout.write(JSON.stringify(value, null, 1) + '\n'); return; }
   const out = option('--out', join(root, 'ui-strings', `${version}.json`)); await mkdir(dirname(out), { recursive: true }); await writeFile(out, JSON.stringify(value, null, 1) + '\n');
-  const shouldRegister = args.includes('--register-bundle') || (!bundle && !args.includes('--no-register-bundle'));
+  const shouldRegister = args.includes('--register-bundle');
   const registered = shouldRegister ? await registerSupportedBundle(version, bundleSha256, root) : false;
+  if (shouldRegister) await registerExtractionSnapshot(value, root);
   console.log(JSON.stringify({ out, count: strings.length, appVersion: version, ...(registered ? { registeredInBundleTs: true } : {}) }));
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main().catch(error => { console.error(error.message); process.exitCode = 1; });

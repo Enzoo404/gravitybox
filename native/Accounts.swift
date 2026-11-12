@@ -1,5 +1,19 @@
 import Cocoa
+import Darwin
 import UniformTypeIdentifiers
+
+/// Restrict permissions at creation, before any credential bytes are written.
+func writePrivateAccountBackup(_ data: Data, to destination: URL) throws {
+    let temporary = destination.deletingLastPathComponent().appendingPathComponent(".gravitybox-backup-\(UUID().uuidString).tmp")
+    let descriptor = Darwin.open(temporary.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
+    guard descriptor >= 0 else { throw BackendFailure(message: "无法创建私密账号备份，请检查目标文件夹权限") }
+    let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+    defer { try? handle.close(); try? FileManager.default.removeItem(at: temporary) }
+    try handle.write(contentsOf: data)
+    try handle.synchronize()
+    try handle.close()
+    guard Darwin.rename(temporary.path, destination.path) == 0 else { throw BackendFailure(message: "账号备份未能保存，原目标已保留") }
+}
 
 final class AccountsPage: NSObject {
     unowned let app: Assistant
@@ -161,10 +175,11 @@ final class AccountsPage: NSObject {
         toggleCollapseAllButton.toolTip = nil
         toggleCollapseAllButton.setAccessibilityLabel(toggleCollapseAllButton.title)
 
-        let headerActions = horizontal([toggleCollapseAllButton, refreshQuotaBtn, saveCurrentBtn], spacing: 8)
+        let backupButton = button("备份…", target: nil, action: #selector(showBackupMenu(_:)))
+        let headerActions = horizontal([toggleCollapseAllButton, refreshQuotaBtn, backupButton, saveCurrentBtn], spacing: 8)
         headerActions.detachesHiddenViews = true
         let root = pageStack(title: "账号", actions: headerActions)
-        root.spacing = 10
+        root.spacing = Design.Spacing.page
 
         // B12: 待生效横幅
         let pendingIcon = symbol("arrow.uturn.backward.circle.fill", size: 16, color: Design.blue)
@@ -256,7 +271,7 @@ final class AccountsPage: NSObject {
         fillWidth(policyRow, in: policyContent)
         fillWidth(recommendationRow, in: policyContent)
         let box = group([policyContent], inset: 14)
-        box.cornerRadius = 14
+        box.cornerRadius = Design.Radius.card
         box.fillColor = Design.card
         (box as? DesignCardBox)?.enablesHoverHighlight = true
         policyBox = box
@@ -274,6 +289,7 @@ final class AccountsPage: NSObject {
         view = scrollPage(root)
         super.init()
 
+        backupButton.target = self
         toggleCollapseAllButton.target = self
         saveCurrentBtn.target = self
         refreshQuotaBtn.target = self
@@ -521,7 +537,7 @@ final class AccountsPage: NSObject {
             bar.useCompactLayout()
             bar.heightAnchor.constraint(greaterThanOrEqualToConstant: 34).isActive = true
         }
-        cardBox.cornerRadius = 14
+        cardBox.cornerRadius = Design.Radius.card
 
         return AccountCardViews(
             id: id,
@@ -1396,11 +1412,7 @@ final class AccountsPage: NSObject {
                     let state = PerformanceSignpost.begin("AccountExportWrite")
                     let result = Result {
                         let d = try JSONSerialization.data(withJSONObject: dataJson, options: [.prettyPrinted, .sortedKeys])
-                        try d.write(to: url, options: .atomic)
-                        if includeCredentials {
-                            // 备份里含 refresh token：写后立即收紧权限，避免同机其他用户或同步盘外泄。
-                            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
-                        }
+                        try writePrivateAccountBackup(d, to: url)
                     }
                     PerformanceSignpost.end("AccountExportWrite", state)
                     DispatchQueue.main.async {
@@ -1421,33 +1433,53 @@ final class AccountsPage: NSObject {
         }
     }
 
+    @objc func showBackupMenu(_ sender: NSButton) {
+        let menu = NSMenu()
+        for (title, action) in [("导入账号备份…", #selector(importAccounts)), ("导出账号备份…", #selector(exportAccounts))] {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            item.target = self
+            menu.addItem(item)
+        }
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.minY), in: sender)
+    }
+
     @objc func importAccounts() {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.json]
         panel.canChooseDirectories = false
         guard let window = app.window, window.activeSheetWindow == nil else { return }
-        panel.beginSheetModal(for: window) { [weak self] res in
-            guard let self, res == .OK, let url = panel.url else { return }
-            do {
-                let d = try Data(contentsOf: url)
-                guard let json = try JSONSerialization.jsonObject(with: d) as? [String: Any] else {
-                    throw BackendFailure(message: "请选择有效的账号备份 JSON 文件")
+        panel.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .OK, let url = panel.url else { return }
+            DispatchQueue.global(qos: .userInitiated).async {
+                let result = Result { () throws -> [String: Any] in
+                    let size = (try url.resourceValues(forKeys: [.fileSizeKey])).fileSize ?? 0
+                    guard size <= 3_500_000 else { throw BackendFailure(message: "账号备份超过3.5MB，请拆分后导入") }
+                    let data = try Data(contentsOf: url)
+                    guard data.count <= 3_500_000,
+                          let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw BackendFailure(message: "请选择有效的账号备份JSON文件") }
+                    return json
                 }
-                self.app.bridge.send(["command": "account_import", "data": json]) { [weak self] r in
-                    guard let self else { return }
-                    switch r {
-                    case .failure(let err):
-                        self.app.showMessage("导入失败：\(err.localizedDescription)", error: true)
-                    case .success(let val):
-                        let imported = val["imported"] as? Int ?? 0
-                        let updated = val["updated"] as? Int ?? 0
-                        self.app.showMessage("已导入 \(imported) 个新账号，更新 \(updated) 个已有账号。")
-                        self.fetch()
-                        self.app.refresh()
+                DispatchQueue.main.async {
+                    switch result {
+                    case .failure(let error): self.app.showMessage("读取文件失败：\(error.localizedDescription)", error: true)
+                    case .success(let json): self.submitAccountImport(json)
                     }
                 }
-            } catch {
-                self.app.showMessage("读取文件失败：\(error.localizedDescription)", error: true)
+            }
+        }
+    }
+
+    private func submitAccountImport(_ json: [String: Any]) {
+        app.bridge.send(["command": "account_import", "data": json]) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .failure(let error): self.app.showMessage("导入失败：\(error.localizedDescription)", error: true)
+            case .success(let value):
+                let imported = intVal(value, "imported"), updated = intVal(value, "updated")
+                let failures = value["failures"] as? [[String: Any]] ?? []
+                self.app.showMessage("已导入 \(imported) 个新账号，更新 \(updated) 个已有账号。" + (failures.isEmpty ? "" : "另有 \(failures.count) 项未完成，请核对列表后重试。"), error: !failures.isEmpty)
+                self.fetch()
+                self.app.refresh()
             }
         }
     }

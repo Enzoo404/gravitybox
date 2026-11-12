@@ -51,7 +51,7 @@ function releasePooledWorker(worker: Worker) {
   idleWorkers.push({ worker, timer, cleanup: removeIdle });
 }
 
-/** One background, read-only SQLite transaction per database scan. */
+/** Bounded read-only statements; no transaction is retained while the caller parses batches. */
 export class SqliteReadSnapshot {
   private worker: Worker;
   private failure?: string;
@@ -111,6 +111,7 @@ export class SqliteReadSnapshot {
   async query(sql: string): Promise<{ok:boolean;rows:any[];error?:string}> {
     return this.request({sql});
   }
+  async verifyUnchanged(): Promise<boolean> { return (await this.request({ verify: true })).ok; }
   async projectBlob(table:'gen_metadata'|'steps', column:'data'|'metadata', idx:number): Promise<{ok:boolean;rows:any[];error?:string}> {
     return this.request({projection:{table,column,idx}});
   }

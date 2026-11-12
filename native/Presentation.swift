@@ -118,10 +118,20 @@ enum InterfaceText {
     }
 
     static func formatCompactTokens(_ count: Int, formatSmallWithLocale: Bool = false) -> String {
-        if count >= 1_000_000_000 { return String(format: "%.1fB", Double(count) / 1_000_000_000.0) }
-        if count >= 1_000_000 { return String(format: "%.1fM", Double(count) / 1_000_000.0) }
-        if count >= 1_000 { return String(format: "%.1fK", Double(count) / 1_000.0) }
-        return formatSmallWithLocale ? count.formatted() : "\(count)"
+        let value = max(0, count)
+        guard value >= 1_000 else { return formatSmallWithLocale ? value.formatted() : "\(value)" }
+        let scale = pow(10.0, floor(log10(Double(value))) - 2)
+        let rounded = (Double(value) / scale).rounded() * scale
+        let divisor = rounded >= 1e9 ? 1e9 : rounded >= 1e6 ? 1e6 : 1e3
+        let unit = divisor == 1e9 ? "B" : divisor == 1e6 ? "M" : "K"
+        let scaled = rounded / divisor
+        let decimals = max(0, 2 - Int(floor(log10(scaled))))
+        var number = String(format: "%.*f", locale: Locale(identifier: "en_US_POSIX"), decimals, scaled)
+        if number.contains(".") {
+            while number.hasSuffix("0") { number.removeLast() }
+            if number.hasSuffix(".") { number.removeLast() }
+        }
+        return number + unit
     }
 
     static func formatUsd(_ value: Double) -> String {
