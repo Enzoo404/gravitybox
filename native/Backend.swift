@@ -226,7 +226,7 @@ final class BackendBridge {
         let handle = try FileHandle(forWritingTo: log)
         do { try handle.seekToEnd() } catch { try? handle.close(); throw error }
         let process = Process(); process.executableURL = node
-        process.arguments = ["--max-old-space-size=128", resources.appendingPathComponent("core/dist/main.js").path, "--state-dir", state.path]
+        process.arguments = ["--max-old-space-size=256", resources.appendingPathComponent("core/dist/main.js").path, "--state-dir", state.path]
         process.standardOutput = FileHandle.nullDevice; process.standardError = handle
         process.terminationHandler = { [weak self] process in
             DispatchQueue.main.async {
