@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm, readFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
@@ -90,4 +90,41 @@ test('event prices survive manager restart and price-table replacement; unknown-
   assert.equal((await new UsageStatsManager({geminiDir:dir,stateDir:dir}).getUsageSummary(true)).all_time.estimated_usd,4);
   assert.equal(resolvePricingForTimestamp(prices(2)['audit-model'],0),null);
   assert.equal(resolvePricingForTimestamp([{input:1,output:1,cached:0,validUntil:'2026-01-01T00:00:00Z'}],now),null);
+});
+
+test('legacy rate-locks format is automatically and losslessly migrated to slim profiles format', async t => {
+  const dir = await setup(t);
+  const legacyEntryKey1 = 'a'.repeat(64);
+  const legacyEntryKey2 = 'b'.repeat(64);
+  const legacyPricing = { model: 'gemini-3.8-flash-n', input: 0.5, output: 3, cached: 0.125 };
+  const legacyPayload = {
+    version: 1,
+    entries: {
+      [legacyEntryKey1]: { usd: 0.046283, price: legacyPricing },
+      [legacyEntryKey2]: { usd: 0.012345, price: legacyPricing }
+    }
+  };
+  await writeFile(join(dir, 'usage-rate-locks.json'), JSON.stringify(legacyPayload, null, 2));
+
+  const manager = new UsageStatsManager({ geminiDir: dir, stateDir: dir });
+  // Trigger read and summary generation
+  const summary = await manager.getUsageSummary(true);
+  assert.ok(summary);
+
+  const rawSaved = await readFile(join(dir, 'usage-rate-locks.json'), 'utf8');
+  const migrated = JSON.parse(rawSaved);
+  assert.equal(migrated.version, 1);
+  assert.ok(Array.isArray(migrated.profiles));
+  assert.equal(migrated.profiles.length, 1);
+  assert.equal(migrated.profiles[0].model, 'gemini-3.8-flash-n');
+  assert.equal(Object.keys(migrated.entries).length, 2);
+  assert.equal(migrated.entries[legacyEntryKey1].usd, 0.046283);
+  assert.equal(migrated.entries[legacyEntryKey1].p, 0);
+  assert.equal(migrated.entries[legacyEntryKey2].usd, 0.012345);
+  assert.equal(migrated.entries[legacyEntryKey2].p, 0);
+
+  // Restart manager and verify it reads the migrated slim format correctly
+  const restarted = new UsageStatsManager({ geminiDir: dir, stateDir: dir });
+  const summaryAfterRestart = await restarted.getUsageSummary(true);
+  assert.ok(summaryAfterRestart);
 });

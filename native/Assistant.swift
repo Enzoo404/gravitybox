@@ -64,6 +64,8 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     private var popoverLocalKeyMonitor: Any?
     private var quotaRefreshStartedAt: Date?
     private var recoveryAttempts = 0
+    private var autoRestartAttempts = 0
+    private var lastAutoRestartAt = Date.distantPast
     /// 汉化开关命令在途时的乐观目标：期间到达的陈旧状态快照不得把开关弹回旧状态。
     private var pendingTranslationTarget: Bool?
     private var translationCommandGeneration = 0
@@ -173,6 +175,7 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         bridge.onExit = { [weak self] message in
             guard let self, !self.quitting else { return }
             self.reachable = false; self.failPendingQuotaRefresh(message); self.updateViews()
+            self.scheduleSelfHealingRestart(reason: message)
         }
         if configuration.value.navigationVersion != 5 {
             configuration.value.migrateNavigation(); try? configuration.save()
@@ -1575,7 +1578,7 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             switch result {
             case .success(let value):
                 self.updateManager.cleanupAfterSuccessfulLaunch()
-                self.reachable = true; self.recoveryAttempts = 0; var raw=value["status"] as? [String:Any] ?? [:];raw["taskRevision"]=value["taskRevision"];raw["runningTasks"]=value["runningTasks"];self.statusValue=self.mergeStatusSnapshot(raw, previous:self.statusValue);if let rows=value["tasks"] as? [[String:Any]]{self.taskRows=rows;self.lastTaskRevision=value["taskRevision"] as? Int ?? 0}
+                self.reachable = true; self.recoveryAttempts = 0; self.autoRestartAttempts = 0; var raw=value["status"] as? [String:Any] ?? [:];raw["taskRevision"]=value["taskRevision"];raw["runningTasks"]=value["runningTasks"];self.statusValue=self.mergeStatusSnapshot(raw, previous:self.statusValue);if let rows=value["tasks"] as? [[String:Any]]{self.taskRows=rows;self.lastTaskRevision=value["taskRevision"] as? Int ?? 0}
                 if includeAccounts {
                     let accountsChanged = (!self.statusValue.accountsRevision.isEmpty && self.statusValue.accountsRevision != self.lastFetchedAccountsRevision) || self.statusValue.liveAccountEmail != self.lastFetchedLiveEmail
                     let periodicAccountRefreshDue = (self.menuTracking || (self.contentVisible && self.currentPage == 1)) && Date().timeIntervalSince(self.lastAccountListFetchAt) >= 15.0
@@ -1603,6 +1606,40 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         guard quotaRefreshing || pendingAccountTaskId != nil else { return }
         quotaRefreshing = false; pendingAccountTaskId = nil; quotaRefreshStartedAt = nil
         quotaRefreshError = message; quotaRefreshPollTimer?.invalidate(); quotaRefreshPollTimer = nil
+    }
+    func scheduleSelfHealingRestart(reason: String) {
+        guard !quitting, !bridge.isRestarting else { return }
+        let now = Date()
+        if now.timeIntervalSince(lastAutoRestartAt) > 60.0 {
+            autoRestartAttempts = 0
+        }
+        guard autoRestartAttempts < 3 else {
+            NSLog("[GravityBox] 后台子进程短时间内连续异常退出 3 次，停止自动拉起并保留报错: %@", reason)
+            return
+        }
+        autoRestartAttempts += 1
+        lastAutoRestartAt = now
+        NSLog("[GravityBox] 后台子进程异常退出 (%@)，将在 1 秒后尝试自动自愈重启 (第 %d/3 次)...", reason, autoRestartAttempts)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            guard let self, !self.quitting, !self.reachable, !self.bridge.isOwnedProcessRunning else { return }
+            self.bridge.launch { [weak self] result in
+                guard let self else { return }
+                switch result {
+                case .success:
+                    NSLog("[GravityBox] 后台子进程自愈重启成功，重新同步状态与用量。")
+                    self.refresh()
+                    if self.contentVisible && self.currentPage == 2 {
+                        self.usagePage?.fetch()
+                    }
+                    if self.menuPopover?.isShown == true, let panel = self.menuPanelController {
+                        let periodKey = MenuPanelController.periods[max(0, min(MenuPanelController.periods.count - 1, panel.selectedPeriod))]
+                        self.fetchUsageSummary(period: periodKey, force: true, allowCached: false)
+                    }
+                case .failure(let error):
+                    NSLog("[GravityBox] 后台子进程自愈重启失败: %@", error.localizedDescription)
+                }
+            }
+        }
     }
     func updateServiceFootnote() {
         let isConnected = reachable

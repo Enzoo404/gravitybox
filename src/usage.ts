@@ -5,7 +5,7 @@ import { SqliteReadSnapshot } from './sqlite-read.js';
 import { readdir, readFile, lstat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { atomicJson } from './files.js';
+import { atomicJson, atomicText } from './files.js';
 import { createHash } from 'node:crypto';
 import { APP_VERSION } from './version.js';
 
@@ -398,6 +398,7 @@ export class UsageStatsManager {
   private rateLocksLoaded = false;
   private rateLocksDirty = false;
   private rateLocksUnavailable = false;
+  private priceRefMap = new Map<string, ApiPricing>();
   private geminiDir: string;
   private dataDirectoryNames: readonly DataDirectoryName[];
   private pricingCachePath: string;
@@ -456,6 +457,16 @@ export class UsageStatsManager {
 
   setAutoRemotePricingSync(enabled: boolean) { this.autoRemotePricingSync = enabled; }
 
+  private cachedPriceRef(price: ApiPricing): ApiPricing {
+    const key = JSON.stringify(price);
+    let ref = this.priceRefMap.get(key);
+    if (!ref) {
+      ref = Object.freeze(structuredClone(price));
+      this.priceRefMap.set(key, ref);
+    }
+    return ref;
+  }
+
   async revalueHistory(confirmed = false): Promise<{ before: number; after: number; message: string }> {
     if (!confirmed) throw Error('重新估算历史费用需要明确确认');
     const before = (await this.getUsageSummary(true)).all_time.estimated_usd;
@@ -463,20 +474,20 @@ export class UsageStatsManager {
     const original = structuredClone(this.rateLocks);
     const receipt = `${this.rateLocksPath}.revalue-${Date.now()}.json`;
     // Preserve the old rates before touching the active ledger, including on crash.
-    await atomicJson(receipt, { version: 1, at: new Date().toISOString(), before, entries: original });
+    await atomicText(receipt, JSON.stringify({ version: 1, at: new Date().toISOString(), before, entries: original }) + '\n');
     this.rateLocks = Object.create(null);
     this.rateLocksDirty = true;
     this.cachedSummary = null; this.lastAggregationKey = ''; this.snapshots.clear();
     try {
       const after = (await this.getUsageSummary(true)).all_time.estimated_usd;
-      await atomicJson(receipt, { version: 1, at: new Date().toISOString(), before, after, entries: original,
+      await atomicText(receipt, JSON.stringify({ version: 1, at: new Date().toISOString(), before, after, entries: original,
         changes: Object.entries(this.rateLocks).filter(([key,value]) => original[key]?.usd !== value.usd)
-          .map(([key,value]) => ({ key, before: original[key]?.usd ?? null, after: value.usd })) });
+          .map(([key,value]) => ({ key, before: original[key]?.usd ?? null, after: value.usd })) }) + '\n');
       return { before, after, message: `历史费用已重新估算：$${before.toFixed(2)} → $${after.toFixed(2)}；原费率与前后对照已保留` };
     } catch (error) {
       this.rateLocks = original; this.rateLocksDirty = false;
       this.cachedSummary = null; this.lastAggregationKey = ''; this.snapshots.clear();
-      await atomicJson(this.rateLocksPath, { version: 1, entries: original });
+      await this.saveRateLocks();
       throw error;
     }
   }
@@ -487,9 +498,20 @@ export class UsageStatsManager {
     try {
       const data = JSON.parse(await readFile(this.rateLocksPath, 'utf8'));
       if (data.version !== 1 || !data.entries || typeof data.entries !== 'object') throw Error('费率账本格式无效');
+      const profiles: ApiPricing[] = Array.isArray(data.profiles) ? data.profiles : [];
+      let hasLegacyInlinePrice = false;
       for (const [key, value] of Object.entries<any>(data.entries)) {
-        if (!/^[a-f0-9]{64}$/.test(key) || !Number.isFinite(value?.usd) || value.usd < 0 || !value.price) throw Error('费率账本条目无效');
-        this.rateLocks[key] = value;
+        if (!/^[a-f0-9]{64}$/.test(key) || !Number.isFinite(value?.usd) || value.usd < 0) throw Error('费率账本条目无效');
+        let price: ApiPricing | undefined = value.price ? this.cachedPriceRef(value.price) : undefined;
+        if (!price && typeof value.p === 'number' && profiles[value.p]) {
+          price = this.cachedPriceRef(profiles[value.p]!);
+        }
+        if (!price) throw Error('费率账本条目无效');
+        if (value.price) hasLegacyInlinePrice = true;
+        this.rateLocks[key] = { usd: value.usd, price };
+      }
+      if (hasLegacyInlinePrice || !data.profiles) {
+        this.rateLocksDirty = true;
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
@@ -499,13 +521,34 @@ export class UsageStatsManager {
     }
   }
 
+  private async saveRateLocks(): Promise<void> {
+    const profiles: ApiPricing[] = [];
+    const profileMap = new Map<string, number>();
+    const getProfileIndex = (price: ApiPricing): number => {
+      const key = JSON.stringify(price);
+      let idx = profileMap.get(key);
+      if (idx === undefined) {
+        idx = profiles.length;
+        profileMap.set(key, idx);
+        profiles.push(price);
+      }
+      return idx;
+    };
+    const slimEntries: Record<string, { usd: number; p: number }> = Object.create(null);
+    for (const [key, val] of Object.entries(this.rateLocks)) {
+      slimEntries[key] = { usd: val.usd, p: getProfileIndex(val.price) };
+    }
+    const payload = { version: 1, profiles, entries: slimEntries };
+    await atomicText(this.rateLocksPath, JSON.stringify(payload) + '\n');
+  }
+
   private lockedCost(event: GenerationEvent, price: ApiPricing | null): number | null {
     if (this.rateLocksUnavailable || event.timestamp_seconds <= 0) return null;
     if (event.event_key && Object.hasOwn(this.rateLocks, event.event_key)) return this.rateLocks[event.event_key]!.usd;
     if (!price || ((event.cache_write_tokens ?? 0) > 0 && !Number.isFinite(price.cacheWrite))) return null;
     const usd = calculateEstimatedUsd(event.input_tokens, event.output_tokens, event.cached_tokens, price, event.cache_write_tokens ?? 0);
     if (event.event_key) {
-      this.rateLocks[event.event_key] = { usd, price: structuredClone(price) };
+      this.rateLocks[event.event_key] = { usd, price: this.cachedPriceRef(price) };
       this.rateLocksDirty = true;
     }
     return usd;
@@ -1422,7 +1465,7 @@ export class UsageStatsManager {
 
     if (this.rateLocksDirty) {
       // Commit before exposing a new summary: never report an unlocked historical amount.
-      await atomicJson(this.rateLocksPath, { version: 1, entries: this.rateLocks });
+      await this.saveRateLocks();
       this.rateLocksDirty = false;
     }
     this.periodKey=calKey;
