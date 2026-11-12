@@ -1129,10 +1129,15 @@ final class PreferencesController: NSObject {
     let refresh = NSPopUpButton(frame: .zero, pullsDown: false)
     let login = DesignSwitch()
     let syncLifecycleSwitch = DesignSwitch()
+    let storageBadge = pillBadge("", color: Design.blue)
+    let storageSubtitleLabel = text("清理无损缓存、孤儿残留与历史运行日志，核心账号与主对话受保护", size: 11, color: Design.secondary, wrap: true)
+    var manageCacheBtn: NSButton!
     let aboutSubtitleLabel = text("", size: 11, color: Design.blue, wrap: true)
     var checkUpdateBtn: NSButton!
     let feedback = text("", size: 11, color: Design.secondary, wrap: true)
     var updateSheet: UpdateSheetController?
+    private var lastStorageScanAt: Date = .distantPast
+    private var storageScanInFlight = false
 
     init(app: Assistant) {
         self.app = app
@@ -1182,14 +1187,24 @@ final class PreferencesController: NSObject {
         ], spacing: 12)
         for child in general.arrangedSubviews { fillWidth(child, in: general) }
 
-        let manageCacheBtn = button("管理缓存…", target: self, action: #selector(showMaintenanceSheet))
+        storageBadge.isHidden = true
+        storageBadge.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        manageCacheBtn = button("管理存储…", target: self, action: #selector(showMaintenanceSheet))
         let storageRow = settingRow(
             icon: "internaldrive",
             tint: .systemOrange,
             title: "存储与维护",
-            subtitle: "仅清理可重建的运行加速缓存，账号与会话状态受保护",
+            badge: storageBadge,
+            subtitle: "",
             control: manageCacheBtn
         )
+        storageSubtitleLabel.maximumNumberOfLines = 1
+        storageSubtitleLabel.lineBreakMode = .byTruncatingTail
+        storageSubtitleLabel.toolTip = nil
+        if let rowStack = storageRow as? NSStackView,
+           let captionsStack = rowStack.arrangedSubviews.dropFirst().first as? NSStackView {
+            captionsStack.addArrangedSubview(storageSubtitleLabel)
+        }
         let maintenance = vertical([
             storageRow
         ], spacing: 12)
@@ -1250,7 +1265,57 @@ final class PreferencesController: NSObject {
         if maintenanceSheet == nil {
             maintenanceSheet = MaintenanceSheetController(app: app)
         }
-        maintenanceSheet?.show(in: window)
+        maintenanceSheet?.show(in: window) { [weak self] in
+            self?.refreshStorageRowState(force: true)
+        }
+    }
+
+    func applyStorageScanPayload(_ value: [String: Any]) {
+        lastStorageScanAt = Date()
+        let safeBytes = Int64(intVal(value, "safeBytes"))
+        let statefulBytes = Int64(intVal(value, "statefulBytes"))
+        if safeBytes >= 10 * 1024 * 1024 {
+            let formatted = ByteCountFormatter.string(fromByteCount: safeBytes, countStyle: .file)
+            storageBadge.title = "可释放 \(formatted)"
+            storageBadge.tint = Design.blue
+            storageBadge.isHidden = false
+        } else if statefulBytes >= 50 * 1024 * 1024 {
+            let formatted = ByteCountFormatter.string(fromByteCount: statefulBytes, countStyle: .file)
+            storageBadge.title = "可瘦身 \(formatted)"
+            storageBadge.tint = Design.secondary
+            storageBadge.isHidden = false
+        } else if safeBytes + statefulBytes > 0 {
+            storageBadge.title = "状态良好"
+            storageBadge.tint = Design.secondary
+            storageBadge.isHidden = false
+        } else {
+            storageBadge.isHidden = true
+        }
+        if safeBytes > 0 && statefulBytes > 0 {
+            let safeStr = ByteCountFormatter.string(fromByteCount: safeBytes, countStyle: .file)
+            let statefulStr = ByteCountFormatter.string(fromByteCount: statefulBytes, countStyle: .file)
+            storageSubtitleLabel.stringValue = "推荐清理 \(safeStr) 无损缓存，另有 \(statefulStr) 历史数据可按需瘦身"
+        } else {
+            storageSubtitleLabel.stringValue = "清理无损缓存、孤儿残留与历史运行日志，核心账号与主对话受保护"
+        }
+        storageSubtitleLabel.toolTip = nil
+    }
+
+    func refreshStorageRowState(force: Bool = false) {
+        guard app.reachable else { return }
+        guard !storageScanInFlight else { return }
+        if !force && Date().timeIntervalSince(lastStorageScanAt) < 60.0 {
+            return
+        }
+        storageScanInFlight = true
+        let retentionDays = app.cachePage?.selectedRetentionDays ?? 7
+        app.bridge.send(["command": "maintenance_scan", "retentionDays": retentionDays]) { [weak self] result in
+            guard let self else { return }
+            self.storageScanInFlight = false
+            if case .success(let value) = result {
+                self.applyStorageScanPayload(value)
+            }
+        }
     }
 
     @objc func showUpdateSheet() {
@@ -1282,6 +1347,7 @@ final class PreferencesController: NSObject {
         syncLifecycleSwitch.state = app.configuration.value.syncAntigravityLifecycle ? .on : .off
         refresh.selectItem(at: Self.refreshIntervals.firstIndex(of: app.configuration.value.quotaRefreshMinutes) ?? 0)
         refreshUpdateRowState()
+        refreshStorageRowState()
         updateSheet?.autoUpdateSwitch.state = app.configuration.value.autoUpdateEnabled ? .on : .off
     }
 

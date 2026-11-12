@@ -3,7 +3,7 @@ import { ALLOWED_DATA_DIRECTORY_NAMES, type DataDirectoryName } from './applicat
 import { MODEL_PRICES, MODEL_PRICE_ALIASES } from './model-catalog.js';
 import { SqliteReadSnapshot } from './sqlite-read.js';
 import { readdir, readFile, lstat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { homedir } from 'node:os';
 import { atomicJson, atomicText } from './files.js';
 import { createHash } from 'node:crypto';
@@ -431,6 +431,17 @@ export class UsageStatsManager {
   private persistCachePath?: string;
   private persistLoaded = false;
   private fileCacheDirty = false;
+  private archivedEventsPath: string;
+  private archivedEventsLoaded = false;
+  private archivedByDb = new Map<
+    string,
+    {
+      archivedAt: string;
+      generationsScanned: number;
+      skippedLargeRecords: number;
+      events: GenerationEvent[];
+    }
+  >();
   private lastAggregationKey = '';
   private remotePricingCachePath: string;
   private remotePricingUrl: string;
@@ -445,6 +456,7 @@ export class UsageStatsManager {
     this.dataDirectoryNames = options?.dataDirectoryName ? [options.dataDirectoryName] : ALLOWED_DATA_DIRECTORY_NAMES;
     const stateDir = options?.stateDir ?? defaultStateDir;
     this.rateLocksPath = join(stateDir, 'usage-rate-locks.json');
+    this.archivedEventsPath = join(stateDir, 'usage-archived-events.json');
     this.pricingCachePath = join(stateDir, 'api_pricing.json');
     this.remotePricingCachePath = join(stateDir, 'remote_pricing.json');
     this.remotePricingUrl = options?.remotePricingUrl ?? process.env.GRAVITYBOX_PRICING_FEED_URL ?? 'https://raw.githubusercontent.com/Enzoo404/gravitybox/main/assets/pricing-feed.json';
@@ -598,6 +610,112 @@ export class UsageStatsManager {
     await atomicJson(targetPath, { version: 3, entries }, undefined, { durability: 'relaxed' }).catch(() => {
       this.fileCacheDirty = true;
     });
+  }
+
+  private normalizeArchivedDbKey(dbPath: string): { key: string; dirName: string } {
+    const normalized = dbPath.replace(/\\/g, '/');
+    const parts = normalized.split('/').filter(Boolean);
+    const base = basename(normalized);
+    for (const allowed of ALLOWED_DATA_DIRECTORY_NAMES) {
+      const idx = parts.lastIndexOf(allowed);
+      if (idx >= 0) {
+        return { key: `${allowed}/${base}`, dirName: allowed };
+      }
+    }
+    return { key: `antigravity/${base}`, dirName: 'antigravity' };
+  }
+
+  private async loadArchivedEvents(): Promise<void> {
+    if (this.archivedEventsLoaded) return;
+    this.archivedEventsLoaded = true;
+    try {
+      const raw = JSON.parse(await readFile(this.archivedEventsPath, 'utf8'));
+      if (!raw || raw.version !== 1 || typeof raw.databases !== 'object' || raw.databases === null) return;
+      for (const [key, entry] of Object.entries<any>(raw.databases)) {
+        if (!entry || !Array.isArray(entry.events)) continue;
+        const validEvents = entry.events.filter((e: any): e is GenerationEvent =>
+          Boolean(
+            e &&
+            typeof e.model === 'string' &&
+            Number.isFinite(e.input_tokens) &&
+            Number.isFinite(e.output_tokens) &&
+            Number.isFinite(e.cached_tokens) &&
+            Number.isFinite(e.total_tokens) &&
+            Number.isFinite(e.timestamp_seconds)
+          )
+        );
+        this.archivedByDb.set(key, {
+          archivedAt: typeof entry.archivedAt === 'string' ? entry.archivedAt : new Date(0).toISOString(),
+          generationsScanned: Number.isFinite(entry.generationsScanned) ? Number(entry.generationsScanned) : validEvents.length,
+          skippedLargeRecords: Number.isFinite(entry.skippedLargeRecords) ? Number(entry.skippedLargeRecords) : 0,
+          events: validEvents,
+        });
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        this.pricingWarnings.push('归档用量账本读取异常，已保留原文件');
+      }
+    }
+  }
+
+  public invalidateCache(): void {
+    this.cachedSummary = null;
+    this.lastAggregationKey = '';
+    this.discoveredStats.clear();
+  }
+
+  /**
+   * 在存储维护将非活跃 Subagent / 孤儿会话 .db 移入废纸篓前，
+   * 先将其中的 Token 生成事件与锁定费率固化至 GravityBox 本地归档账本，确保历史账单零丢失。
+   */
+  public async archiveDatabasesBeforeClear(dbPaths: string[]): Promise<{ archivedCount: number; eventCount: number }> {
+    if (!Array.isArray(dbPaths) || dbPaths.length === 0) {
+      return { archivedCount: 0, eventCount: 0 };
+    }
+    await this.loadArchivedEvents();
+    await this.loadPersistentFileCache();
+    await this.loadRateLocks();
+    const rawPricing = await this.getRawPricingTable();
+
+    let archivedCount = 0;
+    let eventCount = 0;
+    for (const dbPath of dbPaths) {
+      if (typeof dbPath !== 'string' || !dbPath.endsWith('.db')) continue;
+      const st = await lstat(dbPath).catch(() => null);
+      if (!st || !st.isFile() || st.isSymbolicLink()) continue;
+      const res = await this.scanDatabaseEvents(dbPath, false);
+      if (res.hasError && !res.usedCached) {
+        throw new Error(`归档会话数据库用量失败（${basename(dbPath)}）：${res.error || '无法读取'}；已中止清理以保护历史账单`);
+      }
+      for (const ev of res.events) {
+        const price = this.resolvePricing(rawPricing, ev.model, ev.timestamp_seconds);
+        this.lockedCost(ev, price);
+      }
+      const { key } = this.normalizeArchivedDbKey(dbPath);
+      this.archivedByDb.set(key, {
+        archivedAt: new Date().toISOString(),
+        generationsScanned: res.generationsScanned,
+        skippedLargeRecords: res.skippedLargeRecords,
+        events: res.events,
+      });
+      archivedCount++;
+      eventCount += res.events.length;
+    }
+
+    if (archivedCount > 0) {
+      if (this.rateLocksDirty) {
+        await this.saveRateLocks();
+        this.rateLocksDirty = false;
+      }
+      await this.savePersistentFileCache();
+      await atomicJson(this.archivedEventsPath, {
+        version: 1,
+        updatedAt: new Date().toISOString(),
+        databases: Object.fromEntries(this.archivedByDb.entries()),
+      });
+      this.invalidateCache();
+    }
+    return { archivedCount, eventCount };
   }
 
   public resolvePricing(
@@ -1157,6 +1275,7 @@ export class UsageStatsManager {
     }
 
     await this.loadPersistentFileCache();
+    await this.loadArchivedEvents();
     const dbPaths = await this.discoverDatabaseFiles();
     const allEvents: GenerationEvent[] = [];
     let generationsScanned = 0;
@@ -1193,7 +1312,37 @@ export class UsageStatsManager {
       diagnostics.push({id:createHash('sha256').update(path).digest('hex').slice(0,10),state:cached?'cached_or_partial':'failed',category:'读取已取消或超过预算',lastSuccessAt:cached?.lastSuccessAt});
     }
 
-    if ((allEvents.length === 0 || cachedDatabasesCount === dbPaths.length) && failedDatabasesCount > 0 && this.cachedSummary?.data) {
+    let archivedDbCount = 0;
+    const archivedStampParts: string[] = [];
+    if (this.archivedByDb.size > 0) {
+      const allowedDirs = new Set<string>(this.dataDirectoryNames);
+      const liveDbKeys = new Set(dbPaths.map(p => this.normalizeArchivedDbKey(p).key));
+      const seenEventKeys = new Set<string>();
+      for (const ev of allEvents) {
+        if (ev.event_key) seenEventKeys.add(ev.event_key);
+      }
+      for (const [archKey, archEntry] of this.archivedByDb.entries()) {
+        const slashIdx = archKey.indexOf('/');
+        const dirName = slashIdx > 0 ? archKey.slice(0, slashIdx) : 'antigravity';
+        if (!allowedDirs.has(dirName) || liveDbKeys.has(archKey)) continue;
+        archivedDbCount++;
+        generationsScanned += archEntry.generationsScanned;
+        skippedLargeRecords += archEntry.skippedLargeRecords;
+        archivedStampParts.push(`${archKey}:${archEntry.events.length}:${archEntry.archivedAt}`);
+        for (const ev of archEntry.events) {
+          if (ev.event_key) {
+            if (seenEventKeys.has(ev.event_key)) continue;
+            seenEventKeys.add(ev.event_key);
+          }
+          allEvents.push(ev);
+        }
+      }
+      if (dbPaths.length === 0 && archivedDbCount > 0 && failedDatabasesCount === 0) {
+        allCacheHits = true;
+      }
+    }
+
+    if ((allEvents.length === 0 || (dbPaths.length > 0 && cachedDatabasesCount === dbPaths.length)) && failedDatabasesCount > 0 && this.cachedSummary?.data) {
       if (this.cachedSummary.data.snapshot_id && this.snapshots.has(this.cachedSummary.data.snapshot_id)) {
         this.snapshots.get(this.cachedSummary.data.snapshot_id)!.expires = Date.now() + 600000;
       }
@@ -1216,7 +1365,7 @@ export class UsageStatsManager {
     }
     const calKey = this.calendarKey();
     const aggKey = allCacheHits && failedDatabasesCount === 0
-      ? `${calKey}|${this.lastDiscoveredDatabaseCount}|${dbPaths.map(p => { const c = this.fileCache.get(p); return c ? `${p}:${c.mtimeMs}:${c.size}:${c.walMtimeMs}:${c.walSize}:${c.hasError ? 1 : 0}` : p; }).join(';')}|${JSON.stringify(rawPricing)}|${this.pricingWarnings.join(',')}`
+      ? `${calKey}|${this.lastDiscoveredDatabaseCount}|${dbPaths.map(p => { const c = this.fileCache.get(p); return c ? `${p}:${c.mtimeMs}:${c.size}:${c.walMtimeMs}:${c.walSize}:${c.hasError ? 1 : 0}` : p; }).join(';')}|arch:${archivedStampParts.join(';')}|${JSON.stringify(rawPricing)}|${this.pricingWarnings.join(',')}`
       : '';
     if (aggKey && aggKey === this.lastAggregationKey && this.cachedSummary?.data && this.periodKey === calKey) {
       const reused: TokenUsageSummary = {
@@ -1423,7 +1572,8 @@ export class UsageStatsManager {
       }
     }
 
-    const totalDiscovered = this.lastDiscoveredDatabaseCount || dbPaths.length;
+    const totalDiscovered = (this.lastDiscoveredDatabaseCount || dbPaths.length) + archivedDbCount;
+    const totalScanned = dbPaths.length + archivedDbCount;
     const allTimePeriod = buildPeriod(() => true);
     const summary: TokenUsageSummary = {
       today: buildPeriod(ev => ev.timestamp_seconds >= todayStart && ev.timestamp_seconds < tomorrowStart),
@@ -1432,11 +1582,13 @@ export class UsageStatsManager {
       all_time: allTimePeriod,
       daily_trends: [...dailyMap.values()].sort((a, b) => a.date.localeCompare(b.date)),
       today_hourly: [...hourlyMap.values()].sort((a, b) => a.hour.localeCompare(b.hour)),
-      databases_scanned: dbPaths.length,
+      databases_scanned: totalScanned,
       databases_discovered: totalDiscovered,
-      scan_scope_description: totalDiscovered > dbPaths.length
-        ? `已读取 ${dbPaths.length}/${totalDiscovered} 个会话数据库`
-        : `全部 ${dbPaths.length} 个会话数据库`,
+      scan_scope_description: totalDiscovered > totalScanned
+        ? `已读取 ${totalScanned}/${totalDiscovered} 个会话数据库`
+        : archivedDbCount > 0
+          ? `全部 ${totalScanned} 个会话数据库（含 ${archivedDbCount} 个已归档）`
+          : `全部 ${dbPaths.length} 个会话数据库`,
       generations_scanned: generationsScanned,
       skipped_large_records: skippedLargeRecords,
       generated_at: now,

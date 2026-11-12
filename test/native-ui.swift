@@ -97,28 +97,42 @@ import Cocoa
                 ]
                 return ["ok":true,"snapshot_id":"fixture-snapshot","rows":eventRows,"total":129,"scope":"全部 344 个会话数据库"]
             case "maintenance_scan":
+                let reqRetention = intVal(payload, "retentionDays", fallback: 7)
+                var scanEntries: [[String: Any]] = [
+                    ["name": "Cache", "title": "网络与静态资源缓存", "subtitle": "界面静态资源与临时网络响应数据", "icon": "internaldrive", "category": "safe", "defaultSelected": true, "bytes": 524_288_000, "fileCount": 1820, "exists": true, "clearable": true],
+                    ["name": "AgentBrowserCache", "title": "浏览器沙箱加速缓存", "subtitle": "Browser 沙箱的网页与编译缓存（保留站点登录与 Cookie）", "icon": "globe", "category": "safe", "defaultSelected": true, "bytes": 324_009_984, "fileCount": 1410, "exists": true, "clearable": true],
+                    ["name": "PartitionsCache", "title": "内嵌视图子分区缓存", "subtitle": "内嵌浏览器与隔离分区的静态资源及编译缓存", "icon": "square.split.2x2", "category": "safe", "defaultSelected": true, "bytes": 96_468_992, "fileCount": 420, "exists": true, "clearable": true],
+                    ["name": "OrphanAgentData", "title": "已删对话残留与临时文件", "subtitle": "含 6 个已删主对话遗留的孤儿记录、崩溃日志与临时媒体", "icon": "trash.slash", "category": "safe", "defaultSelected": true, "bytes": 48_234_496, "fileCount": 192, "exists": true, "clearable": true]
+                ]
+                let safeSum = 993_001_472
+                var statefulSum = 0
+                if reqRetention <= 7 {
+                    scanEntries.append(contentsOf: [
+                        ["name": "AgentSubagentDatabases", "title": "历史子智能体轨迹库", "subtitle": "7 天前共 142 个后台子智能体库（清理前自动归档 Token 账单）", "icon": "arrow.triangle.branch", "category": "stateful", "defaultSelected": false, "bytes": 856_686_592, "fileCount": 142, "exists": true, "clearable": true],
+                        ["name": "AgentTaskStepLogs", "title": "历史任务与步骤输出日志", "subtitle": "7 天前对话的后台终端日志、步骤输出与 scratch 草稿", "icon": "terminal", "category": "stateful", "defaultSelected": false, "bytes": 218_103_808, "fileCount": 980, "exists": true, "clearable": true]
+                    ])
+                    statefulSum = 1_074_790_400
+                }
                 return [
                     "ok": true,
                     "token": "fixture-token",
-                    "entries": [
-                        ["name": "Cache", "title": "网络与静态资源缓存", "subtitle": "界面静态资源、前端脚本与临时网络响应数据", "icon": "internaldrive", "category": "safe", "defaultSelected": true, "bytes": 864_026_624, "fileCount": 2640, "exists": true, "clearable": true],
-                        ["name": "Code Cache", "title": "V8 字节码编译缓存", "subtitle": "JavaScript 与 WebAssembly 预编译加速字节码", "icon": "cpu", "category": "safe", "defaultSelected": true, "bytes": 412_090_368, "fileCount": 1120, "exists": true, "clearable": true],
-                        ["name": "GPUCache", "title": "图形与着色器管线缓存", "subtitle": "Metal / WebGL 渲染管线与着色器编译产物", "icon": "sparkles.rectangle.stack", "category": "safe", "defaultSelected": true, "bytes": 184_549_376, "fileCount": 318, "exists": true, "clearable": true],
-                        ["name": "CachedData", "title": "工作区运行编译缓存", "subtitle": "主进程与渲染进程预编译脚本缓存", "icon": "memorychip", "category": "safe", "defaultSelected": true, "bytes": 38_797_312, "fileCount": 134, "exists": true, "clearable": true]
-                    ],
-                    "safeBytes": 1_499_463_680,
-                    "statefulBytes": 0,
-                    "totalBytes": 1_499_463_680,
-                    "totalFiles": 4212,
+                    "retentionDays": reqRetention,
+                    "entries": scanEntries,
+                    "safeBytes": safeSum,
+                    "statefulBytes": statefulSum,
+                    "totalBytes": safeSum + statefulSum,
+                    "totalFiles": 4964,
                     "protectedEntries": [
                         ["id": "workspace", "title": "工作区与核心账号凭据", "subtitle": "User/globalStorage（OAuth 令牌库 state.vscdb）、Cookies、Local Storage 与工作区配置", "icon": "folder.badge.gearshape", "bytes": 87_031_808, "fileCount": 324, "exists": true],
-                        ["id": "conversations", "title": "Agent 历史对话与上下文库", "subtitle": "本地会话历史记录与模型调用统计数据库", "icon": "bubble.left.and.bubble.right", "bytes": 2_841_640_960, "fileCount": 343, "exists": true]
+                        ["id": "conversations", "title": "Agent 历史对话与上下文库", "subtitle": "受保护的主对话、已归档对话、正式产物与站点会话", "icon": "bubble.left.and.bubble.right", "bytes": 1_841_640_960, "fileCount": 201, "exists": true]
                     ],
-                    "protectedBytes": 2_909_798_400,
+                    "protectedBytes": 1_928_672_768,
                     "snapshots": [
-                        ["id": "GravityBox-缓存-1729900800000", "timestamp": 1729900800, "totalBytes": 312_475_648, "fileCount": 3180, "items": ["Cache", "Code Cache", "GPUCache"], "movedCount": 3, "restorable": true, "interrupted": false]
+                        ["id": "GravityBox-缓存-1729900800000", "timestamp": 1729900800, "totalBytes": 312_475_648, "fileCount": 3180, "items": ["Cache", "AgentBrowserCache", "OrphanAgentData"], "itemTitles": ["网络与静态资源缓存", "浏览器沙箱加速缓存", "已删对话残留与临时文件"], "movedCount": 3, "restorable": true, "interrupted": false],
+                        ["id": "GravityBox-缓存-1729814400000", "timestamp": 1729814400, "totalBytes": 642_252_800, "fileCount": 1120, "items": ["AgentSubagentDatabases", "AgentTaskStepLogs"], "itemTitles": ["历史子智能体轨迹库", "历史任务与步骤输出日志"], "movedCount": 2, "restorable": true, "interrupted": false]
                     ],
                     "running": true,
+                    "browserBusy": false,
                     "scannedAt": Int(Date().timeIntervalSince1970)
                 ]
             case "account_switch_preflight": return ["ok":preflightState != "error","safe":preflightState == "safe","appRunning":preflightState == "busy","hasRunningTask":preflightState == "busy","error":"隔离预检失败"]
@@ -229,6 +243,9 @@ import Cocoa
             maintSheet.sheet.appearance = NSAppearance(named: appearance)
             maintSheet.cachePage.fetch(force: true); pump()
             maintSheet.sheet.contentView?.layoutSubtreeIfNeeded(); pump()
+            check(maintSheet.cachePage.retentionPopup.itemTitles == ["保留近 7 天", "保留近 30 天", "全部非活跃"], "Maintenance sheet must expose 3 retention window choices")
+            check(!maintSheet.cachePage.snapshotPopup.isHidden && maintSheet.cachePage.snapshotPopup.numberOfItems == 2, "Maintenance recovery footer must expose multi-snapshot selector when >=2 restorable snapshots exist")
+            check(maintSheet.cachePage.selectedNames == Set(["Cache", "AgentBrowserCache", "PartitionsCache", "OrphanAgentData"]), "Maintenance default selection must check safe items only and leave history slimming items unchecked")
             try capture(maintSheet.sheet.contentView!, output.appendingPathComponent("\(theme)-maintenance-sheet.png"))
             maintSheet.closeSheet(); pump()
             let card = MenuStatusCard(target:assistant,account:accounts[0],enabled:true)
@@ -521,6 +538,9 @@ import Cocoa
             return values
         }
         check(!allTextValues(stableSettings.view).contains { $0.localizedCaseInsensitiveContains("Insiders") || $0.contains("目标应用") }, "Settings UI must not display target application switcher or Insiders text")
+        check(stableSettings.manageCacheBtn.title == "管理存储…", "Storage settings row button must display 管理存储…")
+        stableSettings.refreshStorageRowState(force: true); pump()
+        check(!stableSettings.storageBadge.isHidden && stableSettings.storageBadge.title.hasPrefix("可释放 "), "Storage settings row must display reclaimable space pill badge")
         check(stableSettings.checkUpdateBtn.title == "检查更新", "About row must replace 关于 GravityBox with 检查更新 button")
         check(!allTextValues(stableSettings.view).contains("关于 GravityBox"), "Settings UI must not contain 关于 GravityBox button")
         check(stableSettings.aboutSubtitleLabel.isHidden && stableSettings.aboutSubtitleLabel.stringValue.isEmpty, "About row subtitle must stay hidden when no update is available")

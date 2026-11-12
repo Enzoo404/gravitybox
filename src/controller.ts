@@ -633,6 +633,8 @@ export class Controller {
   async maintenancePreflight(){
     if(!this.endpoint||!this.pages.size)return{ok:true,pid:0};
     const endpoint=await discover(this.options.appPath,this.options.profile);if(!endpoint||endpoint.pid!==this.endpoint.pid)return{ok:true,pid:endpoint?.pid??0};
+    const agentTask=await this.hasRunningAgentTask();
+    if(agentTask.busy)throw new Error(agentTask.reason?`${agentTask.reason}，请等待任务结束后再执行清理`:'检测到正在执行的 Agent 任务，请等待任务结束后再执行清理');
     for(const page of this.pages.values()){
       if(page.contextId===undefined)continue;
       const state=await page.cdp.evaluate('globalThis.__AGZH_ENGINE_V1__?.maintenanceState?.()',page.contextId);

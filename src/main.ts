@@ -86,6 +86,10 @@ const homeDir = option('--home-dir', process.env.GRAVITYBOX_HOME_DIR || homedir(
 const appSupportDir = option('--app-support-dir', process.env.GRAVITYBOX_APP_SUPPORT_DIR || join(homedir(), 'Library', 'Application Support'))!;
 const switchService = new AccountSwitchService(accountsManager, { stateDir, profile, channel, externalDir: join(homeDir, '.antigravity_tools') });
 const usageManager = new UsageStatsManager({ stateDir, geminiDir });
+cacheMaintenance.setHooks({
+  archiveDatabases: dbPaths => usageManager.archiveDatabasesBeforeClear(dbPaths),
+  onMutated: () => usageManager.invalidateCache(),
+});
   try { const pricePrefs=JSON.parse(await readFile(join(stateDir,'pricing-preferences.json'),'utf8'));usageManager.setAutoRemotePricingSync(pricePrefs.enabled===true); } catch {}
 const idempotencyStore = new IdempotencyStore();
 let backendLease: ProcessLease | undefined;
@@ -784,7 +788,7 @@ async function run() {
       const isReadOnlyAutoSwitch = command === 'auto_switch_best' && parsed.execute !== true;
       if (['maintenance_scan', 'maintenance_history', 'account_recovery_info', 'auto_switch_get', 'usage_snapshot_release', 'usage_events', 'usage_summary', 'api_pricing_get'].includes(command) || isReadOnlyAutoSwitch) {
         (async () => {
-          if (command === 'maintenance_scan') { reply(await cacheMaintenance.scan()); return; }
+          if (command === 'maintenance_scan') { reply(await cacheMaintenance.scan({ retentionDays: parsed.retentionDays })); return; }
           if (command === 'maintenance_history') { reply({ ok: true, snapshots: await cacheMaintenance.history() }); return; }
           if (command === 'account_recovery_info') { reply({ ok: true, ...await switchService.recoveryInfo() }); return; }
           if (command === 'auto_switch_get') { reply({ ok: true, config: await accountsManager.getAutoSwitchConfig() }); return; }
@@ -887,7 +891,7 @@ async function run() {
           if(command==='hud_set'){const nextHud=parsed.enabled!==false;await saveRuntimePreferences({hudEnabled:nextHud});await controller.configureHud(nextHud);await writeChain;reply({ok:true,status:controller.snapshot()});return;}
           if(command==='maintenance_clear'){reply(await cacheMaintenance.clear(parsed.token, parsed.selectedNames));return;}
           if(command==='maintenance_restore'){reply(await cacheMaintenance.restore(parsed.snapshotId ?? parsed.id));return;}
-          if(command==='maintenance_preflight'){if(tasks.list().some(t=>t.state==='running'))throw new Error('请先等待当前任务完成，再执行维护');reply(await controller.maintenancePreflight());return;}
+          if(command==='maintenance_preflight'){if(tasks.list().some(t=>t.state==='running'))throw new Error('请先等待当前任务完成，再执行维护');if(await cacheMaintenance.hasRunningConversation())throw new Error('检测到正在执行的 Agent 会话任务，请先等待任务结束');reply(await controller.maintenancePreflight());return;}
           if(command==='metadata_scan_start'){const taskId=tasks.begin('deep-scan','读取插件与菜单',async(signal,_progress,commit)=>controller.metadataScan(signal,parsed.nativeMenus,commit));reply({ok:true,taskId});return;}
           if (command === 'account_save_current') {
             const acc = await accountsManager.saveCurrentAccount({ homeDir, appSupportDir });
