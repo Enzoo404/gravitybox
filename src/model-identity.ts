@@ -1,6 +1,15 @@
 /** Normalize spelling only; this does not authorize a model to inherit a price. */
 export function normalizeModelId(name: string): string {
-  return name.trim().replace(/^models\//i, '').toLowerCase()
+  let cleaned = name.trim();
+  // Strip Vertex AI / GCP / Cloud publisher prefixes and RPC method suffixes
+  cleaned = cleaned
+    .replace(/^(?:projects\/[^/]+\/locations\/[^/]+\/)?(?:publishers\/[^/]+\/)?models\//i, '')
+    .replace(/^publishers\/[^/]+\/models\//i, '')
+    .replace(/^(?:vertex_ai|google|anthropic|openai)\//i, '')
+    .replace(/^models\//i, '')
+    .replace(/:(?:predict|generateContent|streamGenerateContent)$/i, '');
+
+  return cleaned.toLowerCase()
     .replace(/[^a-z0-9.]+/g, '-').replace(/^-+|-+$/g, '')
     .replace(/^claude-(opus|sonnet|haiku)-(\d+)\.(\d+)/, 'claude-$1-$2-$3')
     .replace(/^claude-3\.([57])-(sonnet|haiku)/, 'claude-3-$1-$2')

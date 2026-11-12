@@ -20,7 +20,10 @@ export interface ActivePaneSession {
   childConversationIds: string[];
   lastUpdatedAt: number;
   lastMetricsKey: string;
+  lastActivityAt: number;
 }
+
+const ACTIVITY_GRACE_WINDOW_MS = 15_000;
 
 /**
  * CDP HUD 双向通信与多窗口/多分栏会话协调桥
@@ -121,7 +124,7 @@ export class CdpHudBridge implements ICdpHudBridge {
     }
 
     const cascadeId = String(parsed.cascadeId || 'default-pane');
-    const paneSlotId = String((parsed as { paneSlotId?: string }).paneSlotId || cascadeId);
+    const paneSlotId = String(parsed.paneSlotId || cascadeId);
     const conversationId = String(parsed.conversationId || '');
     if (!conversationId) return;
 
@@ -180,6 +183,7 @@ export class CdpHudBridge implements ICdpHudBridge {
       ? 'executing'
       : 'generating';
 
+    const nowMs = Date.now();
     const session: ActivePaneSession = {
       targetId,
       paneSlotId,
@@ -197,8 +201,12 @@ export class CdpHudBridge implements ICdpHudBridge {
       isSubagentRunning,
       runningSubagentCount,
       childConversationIds,
-      lastUpdatedAt: Date.now(),
+      lastUpdatedAt: nowMs,
       lastMetricsKey: sameConv ? sameConv.lastMetricsKey : '',
+      lastActivityAt:
+        resolvedStreaming || parsed.type === 'STREAMING_CHANGED' || isSubagentRunning
+          ? nowMs
+          : sameConv?.lastActivityAt ?? nowMs,
     };
 
     this.activePanes.set(paneKey, session);
@@ -253,6 +261,7 @@ export class CdpHudBridge implements ICdpHudBridge {
     });
 
     if (!forcePush && latestSession.lastMetricsKey === fingerprint) {
+      latestSession.metricsSequence = Math.max(latestSession.metricsSequence, nextSeq);
       return;
     }
 
@@ -296,21 +305,27 @@ export class CdpHudBridge implements ICdpHudBridge {
   }
 
   /**
-   * 定时增量轮询所有活跃会话（活跃流式会话按 500ms 高频轮询，全空闲时自动降频至 2000ms）
+   * 定时增量轮询所有活跃会话（活跃或处于 15 秒宽限窗口时按 300ms 高频轮询，彻底沉寂后降频至 1000ms）
    */
   public async pollActiveSessions(force = true): Promise<void> {
     if (this.disposed || this.pollInFlight || this.activePanes.size === 0) return;
+    const now = Date.now();
     if (!force && this.basePollIntervalMs > 0) {
-      const anyStreaming = [...this.activePanes.values()].some((p) => p.isStreaming);
-      const effectiveInterval = anyStreaming
-        ? this.basePollIntervalMs
-        : Math.max(this.basePollIntervalMs, 2000);
-      if (Date.now() - this.lastPollStartedAt < effectiveInterval - 20) {
+      const anyActive = [...this.activePanes.values()].some(
+        (p) =>
+          p.isStreaming ||
+          p.isSubagentRunning ||
+          (p.lastActivityAt && now - p.lastActivityAt < ACTIVITY_GRACE_WINDOW_MS)
+      );
+      const effectiveInterval = anyActive
+        ? Math.min(this.basePollIntervalMs, 300)
+        : Math.max(this.basePollIntervalMs, 1000);
+      if (now - this.lastPollStartedAt < effectiveInterval - 20) {
         return;
       }
     }
     this.pollInFlight = true;
-    this.lastPollStartedAt = Date.now();
+    this.lastPollStartedAt = now;
     try {
       await Promise.allSettled(
         [...this.activePanes.keys()].map((paneKey) => this.refreshPaneMetrics(paneKey, false))

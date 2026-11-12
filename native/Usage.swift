@@ -6,6 +6,8 @@ final class UsagePage: NSObject {
     let view: NSView
 
     let periodSegment = DesignSegmentedControl(labels: ["今日", "近 7 天", "近 30 天", "全部"], trackingMode: .selectOne, target: nil, action: nil)
+    let accountPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    var selectedAccountId: String = "all"
     let refreshButton: InlineRefreshButton
     let exportButton = button("导出…", target: nil, action: #selector(exportUsage))
     let diagnosticsButton = button("统计详情…", target: nil, action: #selector(showDiagnostics))
@@ -59,13 +61,22 @@ final class UsagePage: NSObject {
     init(app: Assistant) {
         self.app = app
         refreshButton = InlineRefreshButton("刷新", width: 66, target: nil, action: #selector(refreshUsage))
+        accountPopup.controlSize = .regular
+        accountPopup.font = .systemFont(ofSize: 12)
+        accountPopup.translatesAutoresizingMaskIntoConstraints = false
+        accountPopup.heightAnchor.constraint(equalToConstant: 28).isActive = true
+        accountPopup.widthAnchor.constraint(lessThanOrEqualToConstant: 185).isActive = true
+        (accountPopup.cell as? NSPopUpButtonCell)?.lineBreakMode = .byTruncatingMiddle
+        accountPopup.setAccessibilityLabel("用量统计账号筛选")
+        accountPopup.addItem(withTitle: "全部账号")
+        accountPopup.lastItem?.representedObject = "all"
         periodSegment.selectedSegment = app.usageSelectedPeriod
         periodSegment.controlSize = .regular
         periodSegment.setAccessibilityLabel("用量统计时间范围")
         periodSegment.translatesAutoresizingMaskIntoConstraints = false
         periodSegment.heightAnchor.constraint(equalToConstant: 28).isActive = true
 
-        let headerActions = horizontal([periodSegment, refreshButton, exportButton], spacing: 8)
+        let headerActions = horizontal([accountPopup, periodSegment, refreshButton, exportButton], spacing: 8)
         headerActions.alignment = .centerY
         let root = pageStack(title: "用量", actions: headerActions)
         root.spacing = 14
@@ -128,6 +139,8 @@ final class UsagePage: NSObject {
         exportButton.target = self
         func connect(_ view: NSView) { if let control = view as? NSButton, control.target == nil { control.target = self }; for child in view.subviews { connect(child) } }; connect(view)
         refreshButton.target = self
+        accountPopup.target = self
+        accountPopup.action = #selector(accountChanged(_:))
         periodSegment.target = self
         periodSegment.action = #selector(periodChanged(_:))
 
@@ -137,6 +150,33 @@ final class UsagePage: NSObject {
     @objc func periodChanged(_ sender: DesignSegmentedControl) {
         app.usageSelectedPeriod = sender.selectedSegment
         fetch(force: false)
+    }
+
+    @objc func accountChanged(_ sender: NSPopUpButton) {
+        let newId = (sender.selectedItem?.representedObject as? String) ?? "all"
+        if newId != selectedAccountId {
+            selectedAccountId = newId
+            metricsKey = ""
+            fetch(force: false)
+        }
+    }
+
+    private func syncAccountPopup(accounts: [[String: Any]]) {
+        let current = selectedAccountId
+        accountPopup.removeAllItems()
+        for acc in accounts {
+            guard let id = acc["id"] as? String else { continue }
+            let label = acc["label"] as? String ?? id
+            let item = NSMenuItem(title: label, action: nil, keyEquivalent: "")
+            item.representedObject = id
+            accountPopup.menu?.addItem(item)
+        }
+        if let match = accountPopup.menu?.items.first(where: { ($0.representedObject as? String) == current }) {
+            accountPopup.select(match)
+        } else if let first = accountPopup.menu?.items.first {
+            accountPopup.select(first)
+            selectedAccountId = (first.representedObject as? String) ?? "all"
+        }
     }
 
     @objc func refreshUsage() {
@@ -155,7 +195,7 @@ final class UsagePage: NSObject {
 
     private func metricsKeyForCurrentPeriod() -> String {
         let segIdx = max(0, min(periods.count - 1, periodSegment.selectedSegment))
-        return "\(periods[segIdx])_\(app.statusValue.taskRevision)_\(app.statusValue.working)_\(app.statusValue.enabled)_\(app.statusValue.mode)_\(app.reachable)"
+        return "\(periods[segIdx])_\(selectedAccountId)_\(app.statusValue.taskRevision)_\(app.statusValue.working)_\(app.statusValue.enabled)_\(app.statusValue.mode)_\(app.reachable)"
     }
 
     private func formatCompactTokens(_ count: Int) -> String {
@@ -185,14 +225,18 @@ final class UsagePage: NSObject {
         let requestKey = metricsKeyForCurrentPeriod()
         let segIdx = max(0, min(periods.count - 1, periodSegment.selectedSegment))
         let period = periods[segIdx]
+        let requestedAccountId = selectedAccountId
         trendTitleLabel.stringValue = segIdx == 0 ? "今日用量" : (segIdx == 1 ? "近 7 天用量" : segIdx == 2 ? "近 30 天用量" : "每日用量")
 
-        app.fetchUsageSummary(period: period, force: force, allowCached: false) { [weak self] response in
+        app.fetchUsageSummary(period: period, force: force, allowCached: false, accountId: requestedAccountId) { [weak self] response in
             guard let self else { return }
             self.loading = false
             self.refreshButton.setBusy(false, available: self.app.reachable)
             self.lastFetchTime = Date()
-            if self.periods[max(0, self.periodSegment.selectedSegment)] != period { self.fetch(); return }
+            if self.periods[max(0, self.periodSegment.selectedSegment)] != period || self.selectedAccountId != requestedAccountId {
+                self.fetch(force: force)
+                return
+            }
             switch response {
             case .failure(let error):
                 // 失败同样进入 15s 退避，避免每个 3s tick 反复请求。
@@ -203,8 +247,11 @@ final class UsagePage: NSObject {
             case .success(let value):
                 self.metricsKey = requestKey
                 self.latestReport = value
+                if let accounts = value["availableAccounts"] as? [[String: Any]] {
+                    self.syncAccountPopup(accounts: accounts)
+                }
                 let summary = value["summary"] as? [String: Any] ?? [:]
-                let snapshotKey = "\(value["snapshotId"] ?? ""):\(period):\(summary["availability"] ?? ""):\(summary["failedDatabasesCount"] ?? 0):\(summary["skippedLargeRecords"] ?? 0):\(summary["unknownTimeRecords"] ?? 0)"
+                let snapshotKey = "\(value["snapshotId"] ?? ""):\(period):\(self.selectedAccountId):\(summary["availability"] ?? ""):\(summary["failedDatabasesCount"] ?? 0):\(summary["skippedLargeRecords"] ?? 0):\(summary["unknownTimeRecords"] ?? 0)"
                 if !snapshotKey.hasPrefix(":") && snapshotKey == self.renderedSnapshotKey { self.syncExportButtonState(for: period); return }
                 self.renderedSnapshotKey = snapshotKey
                 self.syncExportButtonState(for: period)
@@ -464,14 +511,15 @@ final class UsagePage: NSObject {
 
     @objc func showLog() {
         guard let window = app.window, window.activeSheetWindow == nil else { return }
-        let controller = UsageLogController(app: app, period: periods[max(0, periodSegment.selectedSegment)])
+        let controller = UsageLogController(app: app, period: periods[max(0, periodSegment.selectedSegment)], accountId: selectedAccountId)
         logController = controller; controller.show(in: window) { [weak self] in self?.logController = nil }
     }
     @objc func exportUsage() {
         let selected = periods[max(0, min(periods.count - 1, periodSegment.selectedSegment))]
         guard !loading, exportButton.isEnabled, latestReport["period"] as? String == selected, latestReport["snapshotId"] != nil, let window = app.window else { return }
         let snapshot = latestReport
-        saveUsageJSON(snapshot, name: "GravityBox-用量-\(selected).json", window: window, app: app)
+        let accTag = selectedAccountId == "all" ? "" : "-\(selectedAccountId)"
+        saveUsageJSON(snapshot, name: "GravityBox-用量-\(selected)\(accTag).json", window: window, app: app)
     }
     @objc func showDiagnostics() {
         guard let window = app.window else { return }

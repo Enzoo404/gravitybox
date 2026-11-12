@@ -66,6 +66,7 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     private var recoveryAttempts = 0
     private var autoRestartAttempts = 0
     private var lastAutoRestartAt = Date.distantPast
+    private var selfHealingPending = false
     /// 汉化开关命令在途时的乐观目标：期间到达的陈旧状态快照不得把开关弹回旧状态。
     private var pendingTranslationTarget: Bool?
     private var translationCommandGeneration = 0
@@ -539,57 +540,64 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         }
     }
 
-    func fetchUsageSummary(period: String, force: Bool = false, allowCached: Bool = true, completion: ((Result<[String: Any], Error>) -> Void)? = nil) {
+    func fetchUsageSummary(period: String, force: Bool = false, allowCached: Bool = true, accountId: String? = nil, completion: ((Result<[String: Any], Error>) -> Void)? = nil) {
+        let effectiveAccountId = (accountId?.isEmpty == true) ? nil : accountId
+        let cacheKey = (effectiveAccountId == nil || effectiveAccountId == "all") ? period : "\(period)|\(effectiveAccountId!)"
         if !force && allowCached,
-           let cached = cachedUsageReportsByPeriod[period],
-           let lastAt = usageLastFetchTimeByPeriod[period],
+           let cached = cachedUsageReportsByPeriod[cacheKey],
+           let lastAt = usageLastFetchTimeByPeriod[cacheKey],
            Date().timeIntervalSince(lastAt) < 15.0 {
             completion?(.success(cached))
             return
         }
         if let completion {
-            usageWaitersByPeriod[period, default: []].append(completion)
+            usageWaitersByPeriod[cacheKey, default: []].append(completion)
         }
-        if usageInFlightByPeriod[period] == true {
+        if usageInFlightByPeriod[cacheKey] == true {
             if force {
-                usagePendingForceByPeriod.insert(period)
-                usageManualRefreshPeriods.insert(period)
+                usagePendingForceByPeriod.insert(cacheKey)
+                usageManualRefreshPeriods.insert(cacheKey)
                 menuPanelController?.syncHeaderRefreshState()
             }
             return
         }
-        usageInFlightByPeriod[period] = true
-        let generation = (usageGenerationByPeriod[period] ?? 0) + 1
-        usageGenerationByPeriod[period] = generation
+        usageInFlightByPeriod[cacheKey] = true
+        let generation = (usageGenerationByPeriod[cacheKey] ?? 0) + 1
+        usageGenerationByPeriod[cacheKey] = generation
         if force {
-            usageManualRefreshPeriods.insert(period)
+            usageManualRefreshPeriods.insert(cacheKey)
             menuPanelController?.syncHeaderRefreshState()
         }
         var payload: [String: Any] = ["command": "usage_summary", "period": period]
         if force { payload["force"] = true }
+        if let acc = effectiveAccountId, acc != "all" {
+            payload["accountId"] = acc
+        }
         bridge.send(payload) { [weak self] response in
             guard let self else { return }
-            if self.usagePendingForceByPeriod.remove(period) != nil {
-                self.usageInFlightByPeriod[period] = false
-                self.fetchUsageSummary(period: period, force: true, allowCached: false)
+            if self.usagePendingForceByPeriod.remove(cacheKey) != nil {
+                self.usageInFlightByPeriod[cacheKey] = false
+                self.fetchUsageSummary(period: period, force: true, allowCached: false, accountId: effectiveAccountId)
                 return
             }
-            self.usageInFlightByPeriod[period] = false
-            self.usageManualRefreshPeriods.remove(period)
-            guard generation >= (self.usageGenerationByPeriod[period] ?? 0) else { return }
-            self.usageLastFetchTimeByPeriod[period] = Date()
-            let waiters = self.usageWaitersByPeriod.removeValue(forKey: period) ?? []
+            self.usageInFlightByPeriod[cacheKey] = false
+            self.usageManualRefreshPeriods.remove(cacheKey)
+            guard generation >= (self.usageGenerationByPeriod[cacheKey] ?? 0) else { return }
+            self.usageLastFetchTimeByPeriod[cacheKey] = Date()
+            let waiters = self.usageWaitersByPeriod.removeValue(forKey: cacheKey) ?? []
             switch response {
             case .failure(let error):
-                self.usageFetchErrorsByPeriod[period] = error.localizedDescription
+                self.usageFetchErrorsByPeriod[cacheKey] = error.localizedDescription
             case .success(let value):
-                self.usageFetchErrorsByPeriod[period] = nil
-                self.cachedUsageReportsByPeriod[period] = value
+                self.usageFetchErrorsByPeriod[cacheKey] = nil
+                self.cachedUsageReportsByPeriod[cacheKey] = value
                 if force && self.contentVisible && self.currentPage == 2 {
                     self.usagePage?.update(force: false)
                 }
             }
-            self.menuPanelController?.onUsageReportUpdated(period: period, result: response)
+            if effectiveAccountId == nil || effectiveAccountId == "all" {
+                self.menuPanelController?.onUsageReportUpdated(period: period, result: response)
+            }
             for waiter in waiters { waiter(response) }
         }
     }
@@ -1594,7 +1602,7 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             case .failure:
                 self.reachable = false
                 self.failPendingQuotaRefresh("本机服务连接中断，保留上次配额")
-                if !self.bridge.isOwnedProcessRunning && self.recoveryAttempts < 3 && Date() >= self.nextRecoveryAt {
+                if !self.bridge.isOwnedProcessRunning && !self.bridge.isRestarting && !self.selfHealingPending && self.recoveryAttempts < 3 && Date() >= self.nextRecoveryAt {
                     self.recoveryAttempts += 1; self.nextRecoveryAt = Date().addingTimeInterval(Double(self.recoveryAttempts * 10))
                     self.bridge.launch()
                 }
@@ -1608,7 +1616,7 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         quotaRefreshError = message; quotaRefreshPollTimer?.invalidate(); quotaRefreshPollTimer = nil
     }
     func scheduleSelfHealingRestart(reason: String) {
-        guard !quitting, !bridge.isRestarting else { return }
+        guard !quitting, !bridge.isRestarting, !selfHealingPending else { return }
         let now = Date()
         if now.timeIntervalSince(lastAutoRestartAt) > 60.0 {
             autoRestartAttempts = 0
@@ -1619,9 +1627,12 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         }
         autoRestartAttempts += 1
         lastAutoRestartAt = now
+        selfHealingPending = true
         NSLog("[GravityBox] 后台子进程异常退出 (%@)，将在 1 秒后尝试自动自愈重启 (第 %d/3 次)...", reason, autoRestartAttempts)
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-            guard let self, !self.quitting, !self.reachable, !self.bridge.isOwnedProcessRunning else { return }
+            guard let self else { return }
+            self.selfHealingPending = false
+            guard !self.quitting, !self.reachable, !self.bridge.isOwnedProcessRunning else { return }
             self.bridge.launch { [weak self] result in
                 guard let self else { return }
                 switch result {

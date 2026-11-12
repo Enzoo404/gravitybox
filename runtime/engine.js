@@ -66,6 +66,7 @@
       update(next) { dictionary = next; }, setShortcutEnabled() {},
       dispose() { delete globalThis[KEY]; delete globalThis.__AGZH_BOOT__; },
     };
+    globalThis.__GRAVITYBOX_ATTACH_HUD__?.();
     return;
   }
   if (globalThis[KEY]) { globalThis[KEY].setShortcutEnabled?.(options.shortcutEnabled !== false); globalThis[KEY].update(options.dictionary); return; }

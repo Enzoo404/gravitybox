@@ -1,9 +1,123 @@
 {
-  "version": "2026-11-02",
+  "version": "2026-11-12",
   "schema": 1,
-  "updatedAt": "2026-11-02T17:59:00Z",
+  "updatedAt": "2026-11-12T00:00:00Z",
   "source": "https://raw.githubusercontent.com/Enzoo404/gravitybox/main/assets/pricing-feed.json",
   "prices": {
+    "gemini-2.5-flash": [
+      {
+        "validFrom": null,
+        "validUntil": null,
+        "input": 0.1,
+        "output": 0.4,
+        "cached": 0.025,
+        "provenance": {
+          "sourceUrl": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
+          "platform": "Google Cloud 标准 Global API",
+          "conditions": "Google Cloud 官方 Gemini 2.5 Flash 标准文本基准 (<=128k Tokens)",
+          "checkedAt": "2026-11-12",
+          "verification": "confirmed"
+        }
+      }
+    ],
+    "gemini-2.5-pro": [
+      {
+        "validFrom": null,
+        "validUntil": null,
+        "input": 1.25,
+        "output": 5.0,
+        "cached": 0.3125,
+        "provenance": {
+          "sourceUrl": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
+          "platform": "Google Cloud 标准 Global API",
+          "conditions": "Google Cloud 官方 Gemini 2.5 Pro 标准文本基准 (<=128k Tokens)",
+          "checkedAt": "2026-11-12",
+          "verification": "confirmed"
+        }
+      }
+    ],
+    "gemini-3.1-pro": [
+      {
+        "validFrom": null,
+        "validUntil": null,
+        "input": 2.0,
+        "output": 12.0,
+        "cached": 0.2,
+        "provenance": {
+          "sourceUrl": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
+          "platform": "Google Cloud 标准 Global API",
+          "conditions": "Google Cloud 官方 Gemini 3.1 Pro 标准文本基准 (<=200k Tokens)",
+          "checkedAt": "2026-11-12",
+          "verification": "confirmed"
+        }
+      }
+    ],
+    "claude-3-5-sonnet": [
+      {
+        "validFrom": null,
+        "validUntil": null,
+        "input": 3.0,
+        "output": 15.0,
+        "cached": 0.3,
+        "cacheWrite": 3.75,
+        "provenance": {
+          "sourceUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
+          "platform": "Anthropic 标准 API",
+          "conditions": "Anthropic 官方 Claude 3.5 Sonnet 标准文本基准",
+          "checkedAt": "2026-11-12",
+          "verification": "confirmed"
+        }
+      }
+    ],
+    "claude-3-5-haiku": [
+      {
+        "validFrom": null,
+        "validUntil": null,
+        "input": 1.0,
+        "output": 5.0,
+        "cached": 0.1,
+        "cacheWrite": 1.25,
+        "provenance": {
+          "sourceUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
+          "platform": "Anthropic 标准 API",
+          "conditions": "Anthropic 官方 Claude 3.5 Haiku 标准文本基准",
+          "checkedAt": "2026-11-12",
+          "verification": "confirmed"
+        }
+      }
+    ],
+    "gpt-4o": [
+      {
+        "validFrom": null,
+        "validUntil": null,
+        "input": 2.5,
+        "output": 10.0,
+        "cached": 1.25,
+        "provenance": {
+          "sourceUrl": "https://openai.com/api/pricing",
+          "platform": "OpenAI 官方 API",
+          "conditions": "OpenAI 官方 GPT-4o 标准文本基准",
+          "checkedAt": "2026-11-12",
+          "verification": "confirmed"
+        }
+      }
+    ],
+    "gpt-4o-mini": [
+      {
+        "validFrom": null,
+        "validUntil": null,
+        "input": 0.15,
+        "output": 0.6,
+        "cached": 0.075,
+        "provenance": {
+          "sourceUrl": "https://openai.com/api/pricing",
+          "platform": "OpenAI 官方 API",
+          "conditions": "OpenAI 官方 GPT-4o mini 标准文本基准",
+          "checkedAt": "2026-11-12",
+          "verification": "confirmed"
+        }
+      }
+    ],
     "gemini-3.8-flash": [
       {
         "validFrom": null,

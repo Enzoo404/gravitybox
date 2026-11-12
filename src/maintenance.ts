@@ -1011,8 +1011,12 @@ export class CacheMaintenance {
         const cid = f.slice(0, -3);
         if (!UUID_REGEX.test(cid) || index.summaryMap.has(cid) || index.archivedTreeIds.has(cid) || orphanIds.has(cid)) continue;
         const dbFile = join(convDir, f);
-        const st = await lstat(dbFile).catch(() => null);
-        if (st && st.isFile() && !st.isSymbolicLink() && st.mtimeMs <= unindexedQuietMs) {
+        const [st, walSt] = await Promise.all([
+          lstat(dbFile).catch(() => null),
+          lstat(`${dbFile}-wal`).catch(() => null),
+        ]);
+        const latestMtime = Math.max(st?.mtimeMs ?? 0, walSt?.mtimeMs ?? 0);
+        if (st && st.isFile() && !st.isSymbolicLink() && latestMtime <= unindexedQuietMs) {
           orphanTargets.push({ path: dbFile, isUsageDb: true });
           orphanIds.add(cid);
         }
@@ -1114,7 +1118,11 @@ export class CacheMaintenance {
     };
   }
 
-  private async inspectNamedEntry(name: string, retentionDays: number): Promise<InspectedCacheEntry> {
+  private async inspectNamedEntry(
+    name: string,
+    retentionDays: number,
+    cachedAgentTargets?: Awaited<ReturnType<CacheMaintenance['collectAgentConversationTargets']>>
+  ): Promise<InspectedCacheEntry> {
     if (
       (CACHE_NAMES as readonly string[]).includes(name) ||
       (EXTENDED_CACHE_NAMES as readonly string[]).includes(name)
@@ -1129,7 +1137,7 @@ export class CacheMaintenance {
       const candidates = await this.collectBrowserProfileCandidates();
       return await this.inspectMultiTargetItem(name, candidates);
     }
-    const agentTargets = await this.collectAgentConversationTargets(retentionDays);
+    const agentTargets = cachedAgentTargets ?? await this.collectAgentConversationTargets(retentionDays);
     const windowDesc = retentionDays > 0 ? `${retentionDays} 天前` : '非活跃';
     if (name === 'OrphanAgentData') {
       const sub = agentTargets.orphanConvCount > 0
@@ -1514,9 +1522,15 @@ export class CacheMaintenance {
 
       const targetSet = new Set(targetNames);
       const current: InspectedCacheEntry[] = [];
+      const needsAgentTargets = targetNames.some(n =>
+        n === 'OrphanAgentData' || (HISTORY_SLIMMING_NAMES as readonly string[]).includes(n)
+      );
+      const sharedAgentTargets = needsAgentTargets
+        ? await this.collectAgentConversationTargets(saved.retentionDays)
+        : undefined;
       for (const savedEntry of saved.entries) {
         if (!targetSet.has(savedEntry.name)) continue;
-        const inspected = await this.inspectNamedEntry(savedEntry.name, saved.retentionDays);
+        const inspected = await this.inspectNamedEntry(savedEntry.name, saved.retentionDays, sharedAgentTargets);
         if (!inspected.clearable || inspected.fingerprint !== savedEntry.fingerprint) {
           throw Error('缓存内容或路径已变化，请重新扫描');
         }
@@ -1562,9 +1576,7 @@ export class CacheMaintenance {
               throw Error(`清理路径超出安全边界（${row.name}）`);
             }
             let to: string;
-            if (row.isSingleLegacyRoot && !usesMultiSchema) {
-              to = join(target, row.name);
-            } else if (row.isSingleLegacyRoot) {
+            if (row.isSingleLegacyRoot) {
               to = join(target, row.name);
             } else {
               const itemsDir = join(target, 'items', row.name);

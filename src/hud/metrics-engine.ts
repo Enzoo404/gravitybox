@@ -1,6 +1,5 @@
 import { compactNumber, durationText } from '../metric-format.js';
-import { lstat } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { lstat, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import type {
@@ -732,6 +731,46 @@ export function formatThousandsTokens(tokens: number): string {
  */
 export function formatDurationSeconds(seconds: number, lang: 'zh' | 'en' = 'zh'): string { return durationText(seconds, lang); }
 
+/**
+ * 格式化本轮用时展开卡片展示 (保留 1 位小数，如 18.4 秒，>=60s 进位为分，>=3600s 进位为小时)
+ */
+export function formatTurnDurationCard(seconds: number, lang: 'zh' | 'en' = 'zh'): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return '—';
+  const totalTenths = Math.max(0, Math.round(seconds * 10));
+  const totalWholeSeconds = Math.floor(totalTenths / 10);
+  const tenthsDigit = totalTenths % 10;
+  const hours = Math.floor(totalWholeSeconds / 3600);
+  const minutes = Math.floor((totalWholeSeconds % 3600) / 60);
+  const remSeconds = `${totalWholeSeconds % 60}.${tenthsDigit}`;
+  if (hours > 0) {
+    return lang === 'en'
+      ? `${hours}h ${minutes}m ${remSeconds}s`
+      : `${hours} 小时 ${minutes} 分 ${remSeconds} 秒`;
+  }
+  if (minutes > 0) {
+    return lang === 'en' ? `${minutes}m ${remSeconds}s` : `${minutes} 分 ${remSeconds} 秒`;
+  }
+  return lang === 'en' ? `${remSeconds}s` : `${remSeconds} 秒`;
+}
+
+/**
+ * 格式化本轮用时常驻栏紧凑展示 (先舍入再进位，如 "本轮 18s" / "本轮 1小时5分")
+ */
+export function formatTurnDurationCompact(seconds: number, lang: 'zh' | 'en' = 'zh'): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return lang === 'en' ? 'Turn 0s' : '本轮 0s';
+  const rounded = Math.max(0, Math.round(seconds));
+  if (rounded < 60) {
+    return lang === 'en' ? `Turn ${rounded}s` : `本轮 ${rounded}s`;
+  }
+  const hours = Math.floor(rounded / 3600);
+  const minutes = Math.floor((rounded % 3600) / 60);
+  const rest = rounded % 60;
+  if (hours > 0) {
+    return lang === 'en' ? `Turn ${hours}h${minutes}m` : `本轮 ${hours}小时${minutes}分`;
+  }
+  return lang === 'en' ? `Turn ${minutes}m${rest}s` : `本轮 ${minutes}分${rest}秒`;
+}
+
 export interface ComputeHudMetricsInput {
   conversationId?: string;
   paneSlotId?: string;
@@ -812,6 +851,7 @@ export function buildConversationHudMetrics(input: ComputeHudMetricsInput): Conv
   let outputTokens = 0;
   let reasoningTokens = 0;
   let candidateTokens = 0;
+  let usageSampleCount = 0;
 
   for (const step of steps) {
     const stepType = step.step_type ?? step.stepType ?? 0;
@@ -835,6 +875,7 @@ export function buildConversationHudMetrics(input: ComputeHudMetricsInput): Conv
     }
     if (stepType === 15) {
       modelSteps++;
+      if (step.hasUsage !== false) usageSampleCount++;
       const rawInput = safeTokens(step.rawInput ?? step.rawInputTokens);
       const cached = safeTokens(step.cachedTokens ?? step.cachedReadTokens);
       const written = safeTokens(step.cacheWriteTokens);
@@ -985,6 +1026,80 @@ export function buildConversationHudMetrics(input: ComputeHudMetricsInput): Conv
       ? '—'
       : genMeta?.modelDisplayName || modelSpec.displayName;
 
+  // 计算本轮起步点与当轮耗时 (Turn Duration)
+  let lastTurnStartIndex = -1;
+  for (let index = contextSteps.length - 1; index >= 0; index--) {
+    const candidate = contextSteps[index]!;
+    const candidateType = candidate.step_type ?? candidate.stepType ?? 0;
+    if (candidateType === 14) {
+      lastTurnStartIndex = index;
+      break;
+    }
+  }
+
+  const turnSteps = lastTurnStartIndex >= 0 ? contextSteps.slice(lastTurnStartIndex) : contextSteps;
+  let currentTurnModelDurationSeconds = 0;
+  let currentTurnToolDurationSeconds = 0;
+  const nowSeconds = nowMs / 1000;
+  const allowActiveInference = input.allowDbActiveStepInference !== false;
+
+  for (const step of turnSteps) {
+    const stepType = step.step_type ?? step.stepType ?? 0;
+    if (stepType === 14) continue;
+    const start = step.t_start ?? step.startTimeSeconds;
+    const end = step.t_end ?? step.endTimeSeconds;
+    const rawStatus = step.status ?? 3;
+    const complete =
+      rawStatus === 3 ||
+      (rawStatus === 5 &&
+        (step.generation !== undefined ||
+          step.finishedGeneratingSeconds != null ||
+          step.completedAtSeconds != null ||
+          step.t_end != null));
+    const hasInterval = validSeconds(start) && validSeconds(end) && end > start;
+
+    if (stepType === 15) {
+      const gen = step.generation;
+      const rawTtft = gen?.timeToFirstTokenSeconds;
+      const rawStreaming = gen?.streamingDurationSeconds;
+      const duration = validSeconds(rawTtft) && validSeconds(rawStreaming) && rawTtft + rawStreaming > 0
+        ? rawTtft + rawStreaming
+        : hasInterval ? end! - start! : null;
+      if (complete && duration !== null) {
+        currentTurnModelDurationSeconds += duration;
+      } else if (
+        validSeconds(start) &&
+        ((allowActiveInference && ACTIVE_STEP_STATUSES.has(rawStatus)) || (isStreaming && end == null))
+      ) {
+        currentTurnModelDurationSeconds += Math.max(0, nowSeconds - start);
+      }
+    } else if (!NON_TOOL_STEP_TYPES.has(stepType)) {
+      if (hasInterval && !ACTIVE_STEP_STATUSES.has(rawStatus)) {
+        currentTurnToolDurationSeconds += end! - start!;
+      } else if (
+        validSeconds(start) &&
+        ((allowActiveInference && ACTIVE_STEP_STATUSES.has(rawStatus)) || (isStreaming && end == null))
+      ) {
+        currentTurnToolDurationSeconds += Math.max(0, nowSeconds - start);
+      }
+    }
+  }
+
+  const currentTurnDurationSeconds = currentTurnModelDurationSeconds + currentTurnToolDurationSeconds;
+  const hasTurnDuration = turns > 0 || (turnSteps.length > 0 && currentTurnDurationSeconds > 0) || isStreaming;
+  const currentTurnDurationFormatted = hasTurnDuration
+    ? formatTurnDurationCard(currentTurnDurationSeconds, 'zh')
+    : '—';
+  const currentTurnDurationFormattedEn = hasTurnDuration
+    ? formatTurnDurationCard(currentTurnDurationSeconds, 'en')
+    : '—';
+  const currentTurnDurationCompactZh = hasTurnDuration
+    ? formatTurnDurationCompact(currentTurnDurationSeconds, 'zh')
+    : '本轮 0s';
+  const currentTurnDurationCompactEn = hasTurnDuration
+    ? formatTurnDurationCompact(currentTurnDurationSeconds, 'en')
+    : 'Turn 0s';
+
   return {
     conversationId: input.conversationId || 'default',
     ...(input.paneSlotId ? { paneSlotId: input.paneSlotId } : {}),
@@ -1005,7 +1120,7 @@ export function buildConversationHudMetrics(input: ComputeHudMetricsInput): Conv
       turns,
       steps: input.totalStepsOverride ?? steps.length + Math.max(0, input.subagentSteps ?? 0),
       modelSteps,
-      samples: { usage: steps.filter(s => (s.step_type ?? s.stepType) === 15 && s.hasUsage !== false).length,
+      samples: { usage: usageSampleCount,
         timed: timedOutputCount, ttft: validTtftCount },
       toolSteps,
       compactionCount,
@@ -1023,6 +1138,13 @@ export function buildConversationHudMetrics(input: ComputeHudMetricsInput): Conv
       averageTtftFormattedEn: validTtftCount > 0 ? `${averageTtftSeconds.toFixed(2)}s` : '—',
       outputTps: tpsInfo.outputTps,
       outputTpsFormatted,
+      currentTurnDurationSeconds,
+      currentTurnDurationFormatted,
+      currentTurnDurationFormattedEn,
+      currentTurnDurationCompactZh,
+      currentTurnDurationCompactEn,
+      currentTurnModelDurationSeconds,
+      currentTurnToolDurationSeconds,
     },
     tokens: {
       totalTokens,
@@ -1105,19 +1227,21 @@ interface CachedConversationState {
   referencedUuidsInMetaBlob: Set<string>;
   steps: ParsedConversationStep[];
   childConversationIds: Set<string>;
+  verifiedSniffedChildren: Set<string>;
   genMetadata?: ParsedGenMetadata;
   generations: Map<number, ParsedGenMetadata>;
   lastMetrics?: ConversationHudMetrics;
 }
 
 /**
- * 零阻塞、单语句自动提交 (Auto-Commit) 会话指标增量采集引擎
+ * 零阻塞、单语句自动提交 (Auto-Commit) 会话指标采集引擎
  * 通过只读 Worker 线程池执行短生命周期查询，严禁显式 BEGIN 事务，每条语句结束释放读取状态，避免长期持有 WAL 快照
  */
 export class ConversationMetricsEngine {
   private readonly conversationsDir: string;
   private readonly cache = new Map<string, CachedConversationState>();
   private readonly pendingReads = new Map<string, Promise<CachedConversationState | null>>();
+  private sniffDirCache: { at: number; recentIds: string[] } | null = null;
 
   constructor(options?: { geminiDir?: string; conversationsDir?: string }) {
     const baseGemini = options?.geminiDir ?? join(homedir(), '.gemini');
@@ -1164,8 +1288,6 @@ export class ConversationMetricsEngine {
     dbPath: string,
     selfConversationId: string
   ): Promise<CachedConversationState | null> {
-    if (!existsSync(dbPath)) return null;
-
     let dbStat: { mtimeMs: number; size: number; fileId: string } | null = null;
     let walStat: { mtimeMs: number; size: number } | null = null;
     try {
@@ -1201,49 +1323,6 @@ export class ConversationMetricsEngine {
     }
 
     try {
-      const recheckStepSet = new Set<number>();
-      let settledCnt = 0;
-      let settledTypeSum = 0;
-      let settledStatusSum = 0;
-      let settledLenSum = 0;
-
-      if (existing) {
-        const prevLastIdx = existing.lastStepIdx;
-        for (const s of existing.steps) {
-          const isIncompleteModelStep =
-            s.stepType === 15 &&
-            (!s.hasUsage || s.startTimeSeconds === null || s.endTimeSeconds === null);
-          if (
-            s.idx <= prevLastIdx &&
-            (ACTIVE_STEP_STATUSES.has(s.status) || s.idx >= prevLastIdx - 1 || isIncompleteModelStep)
-          ) {
-            recheckStepSet.add(s.idx);
-          } else if (s.idx <= prevLastIdx) {
-            settledCnt++;
-            settledTypeSum += (s.idx + 1) * s.stepType;
-            settledStatusSum += (s.idx + 1) * s.status;
-            const effectiveLen =
-              s.stepType === 14 || s.stepType === 23 || s.stepType === 101
-                ? 0
-                : (s.metadataByteLength ?? 0);
-            settledLenSum += (s.idx + 1) * effectiveLen;
-          }
-        }
-      }
-
-      const recheckGenSet = new Set<number>();
-      if (existing) {
-        for (const [genIdx, gen] of existing.generations.entries()) {
-          if (
-            !gen.usage ||
-            gen.timeToFirstTokenSeconds === undefined ||
-            gen.streamingDurationSeconds === undefined
-          ) {
-            recheckGenSet.add(genIdx);
-          }
-        }
-      }
-
       const workerRes = await runHudDbScanInWorker({
         dbPath,
         inlineBlobLimitBytes: INLINE_BLOB_LIMIT_BYTES,
@@ -1259,18 +1338,6 @@ export class ConversationMetricsEngine {
               }
             : undefined,
         cachedTrajectoryId: existing?.trajectoryId,
-        canIncremental: existing
-          ? {
-              prevLastStepIdx: existing.lastStepIdx,
-              prevStepsCount: existing.steps.length,
-              prevHeaderChecksum: existing.headerChecksum,
-              prevSettledChecksum: `${settledCnt}:${settledTypeSum}:${settledStatusSum}:${settledLenSum}`,
-              prevLastGenIdx: existing.lastGenIdx,
-              prevGenChecksum: existing.genChecksum,
-              recheckStepIndices: [...recheckStepSet],
-              recheckGenIndices: [...recheckGenSet],
-            }
-          : undefined,
       });
 
       const {
@@ -1286,10 +1353,7 @@ export class ConversationMetricsEngine {
         headerChecksum,
         lastGenIdx,
         genChecksum,
-        fullRescan,
-        fullGenRescan,
         appendedSteps,
-        recheckedSteps,
         genBlobs,
       } = workerRes;
 
@@ -1304,9 +1368,8 @@ export class ConversationMetricsEngine {
         }
       }
 
-      let baseSteps: ParsedConversationStep[] =
-        !fullRescan && existing ? [...existing.steps] : [];
-      let lastIdx = !fullRescan && existing ? existing.lastStepIdx : -1;
+      let baseSteps: ParsedConversationStep[] = [];
+      let lastIdx = -1;
       const childConversationIds = new Set<string>();
       const selfLower = selfConversationId.toLowerCase();
       const selfTrajLower = trajectoryId?.toLowerCase() ?? '';
@@ -1341,24 +1404,10 @@ export class ConversationMetricsEngine {
         lastIdx = maxIdx;
       }
 
-      for (const row of recheckedSteps) {
-        const updated = parseStepRow(row);
-        const pos = baseSteps.findIndex((s) => s.idx === updated.idx);
-        if (pos !== -1) baseSteps[pos] = updated;
-      }
-
-      const generations = new Map<number, ParsedGenMetadata>(
-        !fullGenRescan && existing ? existing.generations : []
-      );
-      if (fullGenRescan) {
-        generations.clear();
-      }
+      const generations = new Map<number, ParsedGenMetadata>();
       for (const item of genBlobs) {
         const parsed = parseLatestGenMetadataBlob(item.data);
         generations.set(item.idx, parsed);
-      }
-      for (const key of generations.keys()) {
-        if (key > lastGenIdx) generations.delete(key);
       }
 
       baseSteps = baseSteps.map(step => ({ ...step, generation: undefined }));
@@ -1375,12 +1424,21 @@ export class ConversationMetricsEngine {
         step.generation = generation;
       }
       const latestModelStep = [...baseSteps].reverse().find(step => step.stepType === 15 && step.hasUsage);
-      const genMetadata = latestModelStep?.generation;
+      let genMetadata = latestModelStep?.generation;
+      if (!genMetadata && generations.size > 0) {
+        const fallbackGens = [...generations.entries()].sort((a, b) => a[0] - b[0]);
+        genMetadata = fallbackGens[fallbackGens.length - 1]?.[1];
+      }
       for (const step of baseSteps) {
         for (const childId of step.childConversationIds ?? []) {
           if (childId !== selfLower && childId !== selfTrajLower) childConversationIds.add(childId);
         }
       }
+
+      const timelineShrunk = existing && baseSteps.length < existing.steps.length;
+      const verifiedSniffedChildren = new Set<string>(
+        timelineShrunk ? [] : existing?.verifiedSniffedChildren ?? []
+      );
 
       const nowMs = Date.now();
       const observedAt = Math.max(Math.round(dbStat.mtimeMs), Math.round(walMtimeMs)) || nowMs;
@@ -1407,6 +1465,7 @@ export class ConversationMetricsEngine {
         referencedUuidsInMetaBlob,
         steps: baseSteps,
         childConversationIds,
+        verifiedSniffedChildren,
         genMetadata,
         generations,
       };
@@ -1479,6 +1538,9 @@ export class ConversationMetricsEngine {
     const verifiedChildIds = new Set<string>();
 
     const candidateChildIds = new Set<string>(mainState.childConversationIds);
+    for (const persistedChild of mainState.verifiedSniffedChildren) {
+      candidateChildIds.add(persistedChild);
+    }
     if (Array.isArray(domHintChildIds)) {
       for (const rawHint of domHintChildIds) {
         if (typeof rawHint !== 'string') continue;
@@ -1489,9 +1551,58 @@ export class ConversationMetricsEngine {
       }
     }
 
+    // 反向子会话嗅探 (异步无阻塞，同时检查 .db 与 -wal 修改时间，1s 目录下钻缓存)
+    const hasActiveSubagentStep = mainState.steps.some(
+      (s) =>
+        (s.isSubagentStep || (s.toolCallName && SUBAGENT_TOOL_NAMES.has(s.toolCallName))) &&
+        ACTIVE_STEP_STATUSES.has(s.status)
+    );
+    if (!dbPathOverride && (isSubagentRunning || hasActiveSubagentStep)) {
+      try {
+        let recentIds: string[];
+        if (this.sniffDirCache && nowMs - this.sniffDirCache.at < 1000) {
+          recentIds = this.sniffDirCache.recentIds;
+        } else {
+          const files = await readdir(this.conversationsDir).catch(() => [] as string[]);
+          const found: string[] = [];
+          for (const file of files) {
+            if (!file.endsWith('.db') || file.length < 39) continue;
+            const potentialChildId = file.slice(0, -3).toLowerCase();
+            if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(potentialChildId)) {
+              continue;
+            }
+            const fullChildPath = join(this.conversationsDir, file);
+            const [st, walSt] = await Promise.all([
+              lstat(fullChildPath).catch(() => null),
+              lstat(`${fullChildPath}-wal`).catch(() => null),
+            ]);
+            if (!st || !st.isFile() || st.isSymbolicLink()) continue;
+            const latestMtime = Math.max(st.mtimeMs, walSt?.mtimeMs ?? 0);
+            if (nowMs - latestMtime <= 30_000) {
+              found.push(potentialChildId);
+            }
+          }
+          recentIds = found;
+          this.sniffDirCache = { at: nowMs, recentIds: found };
+        }
+        for (const potentialChildId of recentIds) {
+          if (
+            potentialChildId !== mainIdLower &&
+            potentialChildId !== mainTrajLower &&
+            !candidateChildIds.has(potentialChildId)
+          ) {
+            candidateChildIds.add(potentialChildId);
+          }
+        }
+      } catch {}
+    }
+
     if (!dbPathOverride) {
       const pendingChildren = [...candidateChildIds].map(childId => ({
-        childId, parentId: mainIdLower, explicit: mainState.childConversationIds.has(childId),
+        childId,
+        parentId: mainIdLower,
+        explicit: mainState.childConversationIds.has(childId),
+        sniffed: !mainState.childConversationIds.has(childId),
       }));
       const descendants: ParsedConversationStep[] = [];
       const processedEdges = new Set<string>();
@@ -1506,14 +1617,23 @@ export class ConversationMetricsEngine {
           const childDbPath = this.resolveDbPath(childId);
           const childState = await this.readSingleDbState(childDbPath, childId);
           if (!childState) {
-            if (edge.explicit) failedChildCount++;
+            if (edge.explicit) {
+              const fileExists = await lstat(childDbPath).then(() => true, () => false);
+              if (fileExists) failedChildCount++;
+            }
             continue;
           }
           if (childState.fromErrorFallback) {
             failedChildCount++;
           }
-          const belongsToParent = childState.referencedUuidsInMetaBlob.has(edge.parentId) ||
-            (edge.explicit && childState.referencedUuidsInMetaBlob.has(mainIdLower));
+          const belongsToParent =
+            childState.referencedUuidsInMetaBlob.has(edge.parentId) ||
+            (edge.explicit &&
+              (childState.referencedUuidsInMetaBlob.has(mainIdLower) ||
+                (mainTrajLower !== '' && childState.referencedUuidsInMetaBlob.has(mainTrajLower)))) ||
+            (edge.sniffed &&
+              mainTrajLower !== '' &&
+              childState.referencedUuidsInMetaBlob.has(mainTrajLower));
           if (childState.parentMetaReadError) {
             failedChildCount++;
             continue;
@@ -1524,6 +1644,9 @@ export class ConversationMetricsEngine {
             continue;
           }
           verifiedChildIds.add(childId);
+          if (edge.sniffed) {
+            mainState.verifiedSniffedChildren.add(childId);
+          }
           totalSubagentSteps += childState.steps.length;
           const recent = nowMs - Math.max(childState.mtimeMs, childState.walMtimeMs) <= ACTIVE_DB_RECENCY_MS;
           if (recent) {
@@ -1543,7 +1666,7 @@ export class ConversationMetricsEngine {
           }
           descendants.push(...childState.steps);
           for (const nested of childState.childConversationIds) {
-            pendingChildren.push({ childId: nested, parentId: childId, explicit: true });
+            pendingChildren.push({ childId: nested, parentId: childId, explicit: true, sniffed: false });
           }
         } catch {
           if (edge.explicit) failedChildCount++;
@@ -1604,20 +1727,8 @@ export class ConversationMetricsEngine {
     return metrics;
   }
 
-  public async readConversationMetrics(options: {
-    conversationId: string;
-    sessionRevision?: number;
-    modelId?: string;
-    isStreaming?: boolean;
-    isSubagentRunning?: boolean;
-    runningSubagentCount?: number;
-    childConversationIds?: string[];
-    dbPathOverride?: string;
-  }): Promise<ConversationHudMetrics> {
-    return this.getConversationMetrics(options);
-  }
-
   public clearCache(): void {
     this.cache.clear();
+    this.sniffDirCache = null;
   }
 }

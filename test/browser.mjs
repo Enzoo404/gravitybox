@@ -806,7 +806,14 @@ ${engine}`,auth.executionContextId);assert.equal(await cdp.evaluate('!!globalThi
           averageTtftFormatted: '19.7 秒',
           averageTtftFormattedEn: '19.7s',
           outputTps: 90.126,
-          outputTpsFormatted: '90.13 tok/s'
+          outputTpsFormatted: '90.13 tok/s',
+          currentTurnDurationSeconds: 18.4,
+          currentTurnDurationFormatted: '18.4 秒',
+          currentTurnDurationFormattedEn: '18.4s',
+          currentTurnDurationCompactZh: '本轮 18s',
+          currentTurnDurationCompactEn: 'Turn 18s',
+          currentTurnModelDurationSeconds: 14.2,
+          currentTurnToolDurationSeconds: 4.2
         },
         tokens: {
           totalTokens: 58593793,
@@ -844,7 +851,7 @@ ${engine}`,auth.executionContextId);assert.equal(await cdp.evaluate('!!globalThi
         }
       })`, ctx.executionContextId);
       const txt = await main.evaluate(`document.querySelector('#__gravitybox_hud_host__')?.shadowRoot?.querySelector('#hud-txt-session')?.textContent.replace(/\\s+/g, ' ').trim()`);
-      return txt === '1 轮 142 步 · 90 tok/s';
+      return txt === '1 轮 · 本轮 18s · 90 tok/s';
     });
 
     const rendered = await main.evaluate(`(() => {
@@ -857,7 +864,7 @@ ${engine}`,auth.executionContextId);assert.equal(await cdp.evaluate('!!globalThi
         sameRow: caps.every(c => c.offsetTop === caps[0].offsetTop)
       };
     })()`);
-    assert.equal(rendered.c1, '1 轮 142 步 · 90 tok/s');
+    assert.equal(rendered.c1, '1 轮 · 本轮 18s · 90 tok/s');
     assert.equal(rendered.c2, '59M tok · 缓存命中 97%');
     assert.equal(rendered.c3, '64%');
     assert.equal(rendered.sameRow, true);
@@ -869,6 +876,7 @@ ${engine}`,auth.executionContextId);assert.equal(await cdp.evaluate('!!globalThi
       cap3.click();
       return {
         speed: sr.querySelector('#val-tps').textContent,
+        turnDuration: sr.querySelector('#val-turn-dur').textContent,
         duration: sr.querySelector('#val-model-dur').textContent,
         toolDuration: sr.querySelector('#val-tool-dur').textContent,
         ttft: sr.querySelector('#val-ttft').textContent,
@@ -883,6 +891,7 @@ ${engine}`,auth.executionContextId);assert.equal(await cdp.evaluate('!!globalThi
       };
     })()`);
     assert.equal(precision.speed, '90.13 tok/s');
+    assert.equal(precision.turnDuration, '18.4 秒');
     assert.equal(precision.duration, '1 小时 5 分 59 秒');
     assert.equal(precision.toolDuration, '12 分 31 秒');
     assert.equal(precision.ttft, '19.70 秒');

@@ -1193,9 +1193,17 @@ final class CachePage: NSObject {
                     let freshToken = (scanPayload["token"] as? String) ?? token
                     self.busy = false
                     self.performClear(token: freshToken, selected: selected, restartAfter: true)
-                case .failure:
+                case .failure(let error):
                     self.busy = false
-                    self.performClear(token: token, selected: selected, restartAfter: true)
+                    self.scanButton.setBusy(false, available: self.app.reachable)
+                    self.retentionPopup.isEnabled = self.app.reachable
+                    let msg = "退出 Antigravity 后重扫存储清单失败（\(error.localizedDescription)），已取消清理以保护数据。"
+                    self.feedbackLabel.isHidden = false
+                    self.feedbackLabel.textColor = accessibleWarningColor()
+                    self.feedbackLabel.stringValue = msg
+                    self.app.showMessage(msg, error: true)
+                    self.fetch(force: true)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.app.openAntigravity() }
                 }
             }
         }

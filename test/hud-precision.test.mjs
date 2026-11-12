@@ -6,6 +6,8 @@ import path from 'node:path';
 import {
   buildConversationHudMetrics,
   computeTps,
+  formatTurnDurationCard,
+  formatTurnDurationCompact,
   parseLatestGenMetadataBlob,
   ConversationMetricsEngine,
 } from '../dist/hud.js';
@@ -524,4 +526,56 @@ test('activityPhase separates model generating (solid blue), script executing (b
     { isStreaming: true, allowDbActiveStepInference: true }
   );
   assert.equal(scriptExecuting.activityPhase, 'executing');
+});
+
+test('本轮用时 (Current Turn Duration) 精准切分与模型/工具耗时分解', () => {
+  // 第 1 轮：step 1 (USER_INPUT), step 2 (PLANNER_RESPONSE 耗时 10s)
+  // 第 2 轮：step 3 (USER_INPUT), step 4 (PLANNER_RESPONSE 思考/生成耗时 14.2s), step 5 (工具执行耗时 4.2s)
+  const result = metrics([
+    step({ idx: 1, stepType: 14, startTimeSeconds: 100, endTimeSeconds: 100 }),
+    step({ idx: 2, stepType: 15, status: 3, startTimeSeconds: 100, endTimeSeconds: 110, rawInputTokens: 50, outputTokens: 20 }),
+    step({ idx: 3, stepType: 14, startTimeSeconds: 200, endTimeSeconds: 200 }),
+    step({
+      idx: 4,
+      stepType: 15,
+      status: 3,
+      startTimeSeconds: 200,
+      endTimeSeconds: 214.2,
+      rawInputTokens: 100,
+      outputTokens: 50,
+      generation: { timeToFirstTokenSeconds: 2.2, streamingDurationSeconds: 12.0 },
+    }),
+    step({ idx: 5, stepType: 21, status: 3, startTimeSeconds: 214.2, endTimeSeconds: 218.4 }),
+  ]);
+
+  // 全会话累计
+  assert.equal(result.session.turns, 2);
+  assert.equal(Number(result.session.modelDurationSeconds.toFixed(1)), 24.2);
+  assert.equal(Number(result.session.toolDurationSeconds.toFixed(1)), 4.2);
+
+  // 本轮用时切分
+  assert.equal(Number(result.session.currentTurnModelDurationSeconds.toFixed(1)), 14.2);
+  assert.equal(Number(result.session.currentTurnToolDurationSeconds.toFixed(1)), 4.2);
+  assert.equal(Number(result.session.currentTurnDurationSeconds.toFixed(1)), 18.4);
+  assert.equal(result.session.currentTurnDurationFormatted, '18.4 秒');
+  assert.equal(result.session.currentTurnDurationFormattedEn, '18.4s');
+  assert.equal(result.session.currentTurnDurationCompactZh, '本轮 18s');
+  assert.equal(result.session.currentTurnDurationCompactEn, 'Turn 18s');
+});
+
+test('本轮用时进位不产生 60.0 秒，超 1 小时按小时显示，且非活跃旧库不推算 now-start', () => {
+  assert.equal(formatTurnDurationCard(59.96, 'zh'), '1 分 0.0 秒');
+  assert.equal(formatTurnDurationCard(119.96, 'en'), '2m 0.0s');
+  assert.equal(formatTurnDurationCard(3661.2, 'zh'), '1 小时 1 分 1.2 秒');
+  assert.equal(formatTurnDurationCompact(3661, 'zh'), '本轮 1小时1分');
+  assert.equal(formatTurnDurationCompact(3661, 'en'), 'Turn 1h1m');
+
+  const staleDbMetrics = metrics(
+    [
+      step({ idx: 1, stepType: 14 }),
+      step({ idx: 2, stepType: 15, status: 1, startTimeSeconds: 1000, endTimeSeconds: null }),
+    ],
+    { isStreaming: false, allowDbActiveStepInference: false }
+  );
+  assert.equal(staleDbMetrics.session.currentTurnDurationSeconds, 0);
 });

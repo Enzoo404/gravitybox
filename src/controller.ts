@@ -523,7 +523,13 @@ export class Controller {
     this.bootCache.clear();
     if (this.paused) {
       await this.disconnectPages();
-      if (enabled) await this.resumeHudOnly();
+      if (enabled) {
+        await this.resumeHudOnly();
+      } else {
+        this.hudBridge.clearActivePanes();
+        this.browser?.close();
+        this.browser = undefined;
+      }
       this.publish(); return;
     }
     if (!enabled) {

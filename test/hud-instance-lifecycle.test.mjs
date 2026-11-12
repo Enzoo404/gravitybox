@@ -224,7 +224,7 @@ class FakeShadowRoot {
 
     const selectors = [
       '#hud-txt-session .hud-turns',
-      '#hud-txt-session .hud-steps',
+      '#hud-txt-session .hud-turn-dur',
       '#hud-txt-session .hud-speed',
       '#hud-txt-session .hud-subagent-tag',
       '#hud-txt-tokens .hud-tok-total',
@@ -245,9 +245,13 @@ class FakeShadowRoot {
       '#val-ttft',
       '#lbl-tps',
       '#val-tps',
+      '#row-turn-dur',
+      '#lbl-turn-dur',
+      '#val-turn-dur',
       '#row-subagent-status',
       '#lbl-subagent-status',
       '#val-subagent-status',
+      '#hud-session-status-note',
       '#pop-tokens-title',
       '#pop-tokens-badge',
       '#lbl-cache-hit',
@@ -342,6 +346,13 @@ describe('HUD raw 数值精度与缺值展示', () => {
       modelDurationSeconds: 1348.126, modelDurationFormatted: '22 分 28 秒',
       toolDurationSeconds: 59.999, toolDurationFormatted: '1 分 0 秒',
       compactionCount: 2,
+      currentTurnDurationSeconds: 18.4,
+      currentTurnDurationFormatted: '18.4 秒',
+      currentTurnDurationFormattedEn: '18.4s',
+      currentTurnDurationCompactZh: '本轮 18s',
+      currentTurnDurationCompactEn: 'Turn 18s',
+      currentTurnModelDurationSeconds: 14.2,
+      currentTurnToolDurationSeconds: 4.2,
     },
     tokens: {
       totalTokens: 61234567, totalTokensCompact: '61.2M tok', totalTokensFormatted: 'rounded',
@@ -367,7 +378,7 @@ describe('HUD raw 数值精度与缺值展示', () => {
     it(`${languageMode}: 胶囊与展开卡片统一采用紧凑数字表示法（Compact Number Notation）与压缩徽章控制`, () => {
       const { instance, text } = render(metrics, languageMode);
       assert.equal(text('#hud-txt-session .hud-speed'), ' · 83 tok/s');
-      assert.equal(text('#hud-txt-session .hud-steps'), languageMode === 'en' ? '1.2KS' : '1.2K 步');
+      assert.equal(text('#hud-txt-session .hud-turn-dur'), languageMode === 'en' ? '· Turn 18s' : '· 本轮 18s');
       assert.equal(text('#pop-session-badge'), languageMode === 'en' ? '12 turns 1.23K steps' : '12 轮 1.23K 步');
       assert.equal(text('#hud-txt-tokens .hud-tok-total'), '61M tok');
       assert.equal(text('#hud-txt-tokens .hud-cache-val'), '97%');
@@ -376,6 +387,7 @@ describe('HUD raw 数值精度与缺值展示', () => {
       assert.equal(instance.shadow.querySelector('.capsule-context').classList.contains('has-compaction'), true);
       assert.equal(text('#hud-txt-context'), '~113%');
       assert.equal(text('#val-tps'), '82.74 tok/s');
+      assert.equal(text('#val-turn-dur'), languageMode === 'en' ? '18.4s' : '18.4 秒');
       assert.equal(text('#val-ttft'), languageMode === 'en' ? '3.85s' : '3.85 秒');
       assert.equal(text('#val-model-dur'), languageMode === 'en' ? '22m 28s' : '22 分 28 秒');
       assert.equal(text('#val-tool-dur'), languageMode === 'en' ? '1m 0s' : '1 分 0 秒');
@@ -400,7 +412,7 @@ describe('HUD raw 数值精度与缺值展示', () => {
       assert.match(instance.shadow.querySelector('#val-tps').getAttribute('aria-description'), /等待|waiting/);
       assert.match(instance.shadow.querySelector('#val-ttft').getAttribute('aria-description'), /原始|original/);
       const builtHtml = instance.buildHudHtml();
-      assert.equal((builtHtml.match(/class="hud-popover-row"/g) || []).length, 16);
+      assert.equal((builtHtml.match(/class="hud-popover-row"/g) || []).length, 17);
       assert.equal(builtHtml.includes('hud-data-state'), false, 'HUD 展开卡片不应包含时间与计时请求数行');
       assert.equal(builtHtml.includes('hud-copy-stats'), false, 'HUD 展开卡片不应包含复制精确统计按钮');
       assert.equal(builtHtml.includes('复制精确统计'), false);
@@ -415,7 +427,6 @@ describe('HUD raw 数值精度与缺值展示', () => {
       assert.equal(zeroComp.text('#hud-compaction-badge'), '');
       assert.equal(zeroComp.instance.shadow.querySelector('.capsule-context').classList.contains('has-compaction'), false);
       assert.equal(zeroComp.text('#hud-txt-session .hud-turns'), languageMode === 'en' ? '1.5KT ' : '1.5K 轮 ');
-      assert.equal(zeroComp.text('#hud-txt-session .hud-steps'), languageMode === 'en' ? '2.5MS' : '2.5M 步');
       assert.equal(zeroComp.text('#pop-session-badge'), languageMode === 'en' ? '1.5K turns 2.5M steps' : '1.5K 轮 2.5M 步');
       assert.equal(zeroComp.text('#val-subagent-status'), languageMode === 'en' ? '1.2K scheduled (3.45K steps)' : '已调度 1.2K 个（3.45K 步）');
     });
@@ -689,12 +700,12 @@ describe('HudInstance 与 AntigravityHudManager 生产模块生命周期、垂�
     // 验证双语切换
     manager.setLanguage('en');
     assert.equal(instA.shadow.querySelector('#hud-txt-session .hud-turns').textContent, '9T ');
-    assert.equal(instA.shadow.querySelector('#hud-txt-session .hud-steps').textContent, '425S');
+    assert.equal(instA.shadow.querySelector('#pop-session-badge').textContent, '9 turns 425 steps');
     assert.equal(instA.shadow.querySelector('#pop-session-title').textContent, 'Session Stats');
     assert.equal(instA.shadow.querySelector('#lbl-seg-sys').textContent, 'Cached Context');
     manager.setLanguage('zh');
     assert.equal(instA.shadow.querySelector('#hud-txt-session .hud-turns').textContent, '9 轮 ');
-    assert.equal(instA.shadow.querySelector('#hud-txt-session .hud-steps').textContent, '425 步');
+    assert.equal(instA.shadow.querySelector('#pop-session-badge').textContent, '9 轮 425 步');
     assert.equal(instA.shadow.querySelector('#pop-session-title').textContent, '会话统计');
     assert.equal(instA.shadow.querySelector('#lbl-seg-sys').textContent, '缓存复用上下文');
 
@@ -853,5 +864,38 @@ describe('HudInstance 与 AntigravityHudManager 生产模块生命周期、垂�
     assert.equal(manager.state().instanceCount, 0);
     assert.equal(windowListeners.size, 0, 'dispose() 后全局监听器清零');
     assert.equal(paneA.bottomDock.style.paddingBottom, '16px', 'dispose() 后必须无损还原外层容器原始 paddingBottom');
+  });
+
+  it('unavailable 态显示清晰中文/英文标签（不显示 ———），普通文本包含 subagent 不误触发子智能体运行态', () => {
+    const inst = new HudInstance('slot-empty');
+    const host = new FakeElement('div');
+    const sr = host.attachShadow({ mode: 'open' });
+    sr.innerHTML = inst.buildHudHtml();
+    inst.shadow = sr;
+    inst.applyMetricsToDom({
+      ...inst.lastMetrics,
+      conversationId: 'missing-conv',
+      availability: 'unavailable',
+    });
+    assert.equal(sr.querySelector('#hud-txt-session .hud-turns').textContent, '');
+    assert.equal(sr.querySelector('#hud-txt-session .hud-turn-dur').textContent, '暂无数据');
+    assert.equal(sr.querySelector('#hud-txt-session .hud-speed').textContent, '');
+
+    inst.applyMetricsToDom({
+      ...inst.lastMetrics,
+      conversationId: 'conv-partial',
+      availability: 'partial',
+      observedAt: 1731420000000,
+    });
+    assert.equal(sr.querySelector('#hud-session-status-note').hasAttribute('hidden'), false);
+    assert.match(sr.querySelector('#hud-session-status-note').textContent, /部分数据或子库未就绪/);
+
+    const mgr = new AntigravityHudManager();
+    const view = new FakeElement('div');
+    const toolNode = new FakeElement('div');
+    toolNode.setAttribute('data-testid', 'tool-call');
+    toolNode.textContent = 'run_command: grep subagent running';
+    view.appendChild(toolNode);
+    assert.equal(mgr.resolveSubagentState(view).isSubagentRunning, false);
   });
 });

@@ -60,8 +60,9 @@ final class UsageLogController: NSObject, NSTableViewDataSource, NSTableViewDele
     var rows: [[String: Any]] = []; var offset = 0; var total = 0; var requestRevision = 0
     var onDismiss: (() -> Void)?
     let periods = ["today", "7d", "30d", "all"]
-    init(app: Assistant, period selected: String) {
-        self.app = app; super.init()
+    let accountId: String?
+    init(app: Assistant, period selected: String, accountId: String? = nil) {
+        self.app = app; self.accountId = accountId; super.init()
         sheet.title = "请求明细"; sheet.isReleasedWhenClosed = false; table.rowHeight = 64; table.backgroundColor = .clear
         search.placeholderString = "搜索模型"; search.delegate = self; search.setAccessibilityLabel("搜索请求模型")
         period.selectedSegment = periods.firstIndex(of: selected) ?? 0; period.controlSize = .regular; period.target = self; period.action = #selector(periodChanged)
@@ -205,6 +206,9 @@ final class UsageLogController: NSObject, NSTableViewDataSource, NSTableViewDele
         status.stringValue = "正在读取…"; status.textColor = Design.secondary; updateEmptyState()
         requestRevision += 1; let revision = requestRevision
         var payload: [String:Any] = ["command": "usage_events", "period": periods[max(0, period.selectedSegment)], "query": search.stringValue, "offset": offset, "limit": 200]
+        if let acc = accountId, !acc.isEmpty && acc != "all" {
+            payload["accountId"] = acc
+        }
         if force {
             payload["force"] = true
             payload["pinSnapshot"] = true
@@ -299,6 +303,9 @@ final class UsageLogController: NSObject, NSTableViewDataSource, NSTableViewDele
         }
         func readPage() {
             var payload:[String:Any] = ["command":"usage_events","period":chosenPeriod,"query":query,"offset":collected.count,"limit":500]
+            if let acc = accountId, !acc.isEmpty && acc != "all" {
+                payload["accountId"] = acc
+            }
             if let snapshotID { payload["snapshotId"] = snapshotID }
             app.bridge.send(payload) { [weak self] result in
                 guard let self, !self.closed else { return }

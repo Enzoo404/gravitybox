@@ -12,7 +12,6 @@ const RESTRICTED_HUD_ROUTE = /^\/(?:onboarding|oauth|auth|login|sign-in)(?:\/|$)
 export class AntigravityHudManager {
   constructor(options = {}) {
     this.instances = new Map();
-    this.viewToInstance = typeof WeakMap === 'function' ? new WeakMap() : null;
     this.viewToSlotId = typeof WeakMap === 'function' ? new WeakMap() : null;
     this.nextSlotSeq = 1;
     this.nextRevisionCounter = Number(globalThis.__GRAVITYBOX_HUD_REVISION__) || 0;
@@ -54,7 +53,7 @@ export class AntigravityHudManager {
           if (this.enabled && !this.routeExcluded) {
             this.reconcileMounts();
           }
-        }, 60);
+        }, 20);
       });
       this.mutationObserver.observe(document.body, {
         childList: true,
@@ -67,6 +66,8 @@ export class AntigravityHudManager {
           'data-streaming',
           'data-testid',
           'data-theme',
+          'data-subagent-id',
+          'data-agent-state',
           'aria-label',
           'class',
         ],
@@ -125,7 +126,6 @@ export class AntigravityHudManager {
         instance.dispose();
       }
       this.instances.clear();
-      this.viewToInstance = new WeakMap();
     } else if (this.active && !this.routeExcluded) {
       this.reconcileMounts();
     }
@@ -154,7 +154,6 @@ export class AntigravityHudManager {
         instance.dispose();
       }
       this.instances.clear();
-      this.viewToInstance = new WeakMap();
     } else if (this.active && this.enabled) {
       this.reconcileMounts();
     }
@@ -236,8 +235,9 @@ export class AntigravityHudManager {
       } else instance.reconcile(composer);
       instance.isSubpane = isSubpane;
       if (!convId) {
-        if (instance.currentConvId) { instance.emitBridgeEvent('SESSION_DETACHED'); instance.currentConvId = null; }
-        instance.renderSkeleton(); continue;
+        if (instance.currentConvId) { instance.emitBridgeEvent('SESSION_DETACHED'); }
+        instance.resetToEmptyState ? instance.resetToEmptyState() : (instance.currentConvId = null, instance.renderSkeleton());
+        continue;
       }
       if (instance.getCurrentConvId() !== convId) {
         instance.switchConversation(convId, modelId, isStreaming, subagentState.isSubagentRunning,
@@ -524,6 +524,42 @@ export class AntigravityHudManager {
       });
     }
 
+    // 扫描正在执行中的子智能体调度工具卡片 (要求存在明确子智能体工具语义且具备正向加载指示器，杜绝正文文本误判)
+    const activeToolNodes = view.querySelectorAll(
+      '[data-testid="tool-call"], [data-testid="tool-invocation"], [data-testid*="subagent-card"], [data-testid="browser-subagent-row"]'
+    );
+    if (activeToolNodes && typeof activeToolNodes.forEach === 'function') {
+      activeToolNodes.forEach((node) => {
+        if (
+          node.getAttribute?.('data-testid') === 'subagent-permission-source' ||
+          node.closest?.('[data-testid="subagent-permission-source"]')
+        ) {
+          return;
+        }
+        const testId = (node.getAttribute?.('data-testid') || '').toLowerCase();
+        const headerEl = node.querySelector?.('[data-testid*="tool-name"], [data-testid*="header"], summary, header, button') || node;
+        const headerText = (headerEl.textContent || '').replace(/\s+/g, ' ').trim();
+        const isSubagentTool =
+          testId.includes('subagent') ||
+          /\b(?:invoke_subagent|browser_subagent|start_subagent|spawn_subagent)\b/i.test(headerText);
+        if (!isSubagentTool) return;
+        const finished = node.querySelector?.(
+          '[data-testid="agent-status-done"], [data-testid="agent-status-killed"], [data-testid="agent-status-canceled"], [data-testid="agent-status-error"], [data-testid="agent-status-failed"]'
+        );
+        if (finished) return;
+        const hasSpinner = Boolean(
+          node.getAttribute?.('data-state') === 'running' ||
+          node.querySelector?.(
+            '.animate-spin, .codicon-loading, .spinner, [data-testid="status-loading-spinner"], [data-testid="status-task-running"], [data-state="running"]'
+          )
+        );
+        if (hasSpinner) {
+          detected = true;
+          if (runningCount < 1) runningCount = 1;
+        }
+      });
+    }
+
     return {
       isSubagentRunning: detected,
       runningSubagentCount: detected ? Math.max(1, runningCount) : 0,
@@ -731,6 +767,7 @@ export class AntigravityHudManager {
       manager.dispose();
       delete globalThis.__gravityboxUpdateHudMetrics;
       delete globalThis.__GRAVITYBOX_HUD_V1__;
+      delete globalThis.__GRAVITYBOX_ATTACH_HUD__;
     },
   };
 

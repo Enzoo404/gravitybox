@@ -560,17 +560,17 @@
     },
     "gemini-2.5-flash": {
       "model": "gemini-2.5-flash",
-      "input": 0.3,
-      "output": 2.5,
-      "cached": 0.03,
+      "input": 0.1,
+      "output": 0.4,
+      "cached": 0.025,
       "provenance": {
         "sourceUrl": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "platform": "Google Cloud 标准 Global API",
-        "conditions": "沿用历史基准；不代表所有区域、长上下文或缓存写入单价；需按来源逐项核对",
-        "checkedAt": null,
+        "conditions": "Google Cloud 官方 Gemini 2.5 Flash 标准文本基准 (<=128k Tokens)",
+        "checkedAt": "2026-11-12",
         "validFrom": null,
         "validUntil": null,
-        "verification": "historical"
+        "verification": "confirmed"
       }
     },
     "gemini-2.5-pro": {
@@ -761,15 +761,15 @@
     },
     "claude-3-5-haiku": {
       "model": "claude-3-5-haiku",
-      "input": 0.8,
-      "output": 4,
-      "cached": 0.08,
-      "cacheWrite": 1.0,
+      "input": 1.0,
+      "output": 5.0,
+      "cached": 0.1,
+      "cacheWrite": 1.25,
       "provenance": {
         "sourceUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
         "platform": "Anthropic 标准 API",
-        "conditions": "沿用历史基准；不代表所有区域、长上下文或缓存写入单价；需按来源逐项核对",
-        "checkedAt": "2026-10-22",
+        "conditions": "Anthropic 官方 Claude 3.5 Haiku 标准文本基准",
+        "checkedAt": "2026-11-12",
         "validFrom": null,
         "validUntil": null,
         "verification": "confirmed"

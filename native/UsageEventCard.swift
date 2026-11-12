@@ -84,6 +84,13 @@ final class UsageEventCard: NSView {
         super.prepareForReuse()
         hovered = false
     }
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window == nil {
+            hoverMotion.cancel()
+            hovered = false
+        }
+    }
     func configure(_ event: [String:Any], highlight: String = "") {
         let rawModel = event["model"] as? String ?? "未知模型"
         let model = rawModel

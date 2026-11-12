@@ -314,6 +314,12 @@ export const HUD_STYLES_CSS = `
   max-width: 320px;
 }
 
+.hud-turn-dur {
+  color: var(--hud-text-primary);
+  font-feature-settings: 'tnum';
+  font-variant-numeric: tabular-nums;
+}
+
 .hud-subagent-tag {
   color: var(--hud-accent-blue);
   font-weight: 500;
@@ -704,6 +710,19 @@ export const HUD_STYLES_CSS = `
   height: 7px;
   border-radius: 9999px;
   flex-shrink: 0;
+}
+
+.hud-popover-status-note {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--hud-divider);
+  font-size: 10.5px;
+  color: var(--hud-warn-color);
+  line-height: 1.35;
+}
+
+.hud-popover-status-note[hidden] {
+  display: none !important;
 }
 `;
 

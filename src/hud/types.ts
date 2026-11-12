@@ -37,7 +37,7 @@ export interface ConversationHudMetrics {
 
   /** 模块 1 & Popover 1: 会话与执行耗时统计 (100% 源自 steps 表纳秒时间戳与步骤类型) */
   session: {
-    /** 用户输入轮次 (优先统计 step_type === 14 USER_INPUT，无则回退 101) */
+    /** 用户输入轮次 (仅统计主会话 step_type === 14 USER_INPUT) */
     turns: number;
     /** 执行总步数 (steps 表总行数，含已关联子智能体步数) */
     steps: number;
@@ -76,6 +76,20 @@ export interface ConversationHudMetrics {
     outputTps: number;
     /** 输出速度格式化展示 (如 "82 tok/s" 或 "—") */
     outputTpsFormatted: string;
+    /** 本轮总用时 (秒，含模型生成思考与工具调用) */
+    currentTurnDurationSeconds?: number;
+    /** 本轮总用时中文卡片格式化 (如 "18.4 秒" 或 "—") */
+    currentTurnDurationFormatted?: string;
+    /** 本轮总用时英文卡片格式化 (如 "18.4s" 或 "—") */
+    currentTurnDurationFormattedEn?: string;
+    /** 本轮用时常驻栏紧凑中文展示 (如 "本轮 18s") */
+    currentTurnDurationCompactZh?: string;
+    /** 本轮用时常驻栏紧凑英文展示 (如 "Turn 18s") */
+    currentTurnDurationCompactEn?: string;
+    /** 本轮模型思考与生成用时 (秒) */
+    currentTurnModelDurationSeconds?: number;
+    /** 本轮工具调用用时 (秒) */
+    currentTurnToolDurationSeconds?: number;
   };
 
   /** 模块 2 & Popover 2: 累计 Token 账本 (100% 源自 steps.metadata field 9 ModelUsageStats) */
@@ -262,6 +276,7 @@ export type HudClientEvent =
       type: 'SESSION_ATTACHED';
       conversationId: string;
       cascadeId: string;
+      paneSlotId?: string;
       sessionRevision?: number;
       modelId?: string;
       isStreaming?: boolean;
@@ -275,12 +290,14 @@ export type HudClientEvent =
       type: 'SESSION_DETACHED';
       conversationId: string;
       cascadeId: string;
+      paneSlotId?: string;
       timestamp: number;
     }
   | {
       type: 'REQUEST_REFRESH';
       conversationId: string;
       cascadeId: string;
+      paneSlotId?: string;
       sessionRevision?: number;
       modelId?: string;
       isStreaming?: boolean;
@@ -294,6 +311,7 @@ export type HudClientEvent =
       type: 'MODEL_CHANGED';
       conversationId: string;
       cascadeId: string;
+      paneSlotId?: string;
       sessionRevision?: number;
       modelId: string;
       isStreaming?: boolean;
@@ -307,6 +325,7 @@ export type HudClientEvent =
       type: 'STREAMING_CHANGED';
       conversationId: string;
       cascadeId: string;
+      paneSlotId?: string;
       sessionRevision?: number;
       modelId?: string;
       isStreaming: boolean;

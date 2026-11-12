@@ -26,73 +26,10 @@ export { canonicalPayload } from './ipc-idempotency.js';
 
 const execFileAsync = promisify(execFile);
 
-try {
-  process.loadEnvFile?.();
-} catch (error: any) {
-  if (error?.code !== 'ENOENT') {
-    // ignore
-  }
+function cliOption(argv: string[], name: string, fallback?: string) {
+  const index = argv.indexOf(name);
+  return index < 0 ? fallback : argv[index + 1];
 }
-
-const args = process.argv.slice(2);
-const option = (name: string, fallback?: string) => { const index = args.indexOf(name); return index < 0 ? fallback : args[index + 1]; };
-const stateDir = resolve(option('--state-dir', join(homedir(), 'Library', 'Application Support', 'GravityBox'))!);
-try {
-  process.loadEnvFile?.(join(stateDir, '.env'));
-} catch (error: any) {
-  if (error?.code !== 'ENOENT') {
-    // ignore
-  }
-}
-const socketPath = join(stateDir, 'control.sock');
-let configuredChannel: unknown;
-let configuredHudEnabled: unknown;
-try {
-  const parsedCfg = JSON.parse(readFileSync(join(stateDir, 'config.json'), 'utf8'));
-  configuredChannel = parsedCfg.applicationChannel;
-  configuredHudEnabled = parsedCfg.hudEnabled;
-}
-catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error('应用版本配置无法读取，原文件已保留'); }
-const explicitChannelArg = option('--channel');
-const explicitAppArg = option('--app');
-const explicitProfileArg = option('--profile');
-const requestedChannel = explicitChannelArg !== undefined ? applicationChannel(explicitChannelArg) : savedApplicationChannel(configuredChannel);
-const initialInstallInfo = detectInstalledChannels(requestedChannel);
-let channel: ApplicationChannel = (explicitChannelArg || explicitAppArg || explicitProfileArg)
-  ? requestedChannel
-  : initialInstallInfo.effectiveChannel;
-let selectedTarget = applicationTarget(channel);
-let appPath = explicitAppArg ?? selectedTarget.appPath;
-let profile = explicitProfileArg ?? selectedTarget.profile;
-let target: ApplicationTarget = applicationTarget(channel, undefined, { appPath, profile });
-let channelStateDir = channelStateDirectory(stateDir, channel);
-const geminiDir = option('--gemini-dir', process.env.GRAVITYBOX_GEMINI_DIR || process.env.GEMINI_DIR || join(homedir(), '.gemini'))!;
-const cacheMaintenance = new CacheMaintenance(profile, join(homedir(), '.Trash'), undefined, { stateDir: channelStateDir, geminiDir, appPath });
-const accountsManager = new AccountsManager(stateDir, { target });
-let liveProbeInFlight: Promise<any> | null = null;
-let liveProbeCachedAt = 0;
-let liveProbeCachedValue: any = null;
-function probeLiveCached() {
-  const now = Date.now();
-  if (now - liveProbeCachedAt < 4500) return Promise.resolve(liveProbeCachedValue);
-  if (liveProbeInFlight) return liveProbeInFlight;
-  liveProbeInFlight = accountsManager.probeLiveLanguageServer()
-    .then(val => { liveProbeCachedValue = val; liveProbeCachedAt = Date.now(); return val; })
-    .finally(() => { liveProbeInFlight = null; });
-  return liveProbeInFlight;
-}
-const accountLogin = new GoogleAccountLogin((token, signal) => accountsManager.addAccountFromOAuth(token, signal));
-const homeDir = option('--home-dir', process.env.GRAVITYBOX_HOME_DIR || homedir())!;
-const appSupportDir = option('--app-support-dir', process.env.GRAVITYBOX_APP_SUPPORT_DIR || join(homedir(), 'Library', 'Application Support'))!;
-const switchService = new AccountSwitchService(accountsManager, { stateDir, profile, channel, externalDir: join(homeDir, '.antigravity_tools') });
-const usageManager = new UsageStatsManager({ stateDir, geminiDir });
-cacheMaintenance.setHooks({
-  archiveDatabases: dbPaths => usageManager.archiveDatabasesBeforeClear(dbPaths),
-  onMutated: () => usageManager.invalidateCache(),
-});
-  try { const pricePrefs=JSON.parse(await readFile(join(stateDir,'pricing-preferences.json'),'utf8'));usageManager.setAutoRemotePricingSync(pricePrefs.enabled===true); } catch {}
-const idempotencyStore = new IdempotencyStore();
-let backendLease: ProcessLease | undefined;
 
 function sanitizeErrorMessage(err: unknown): string {
   if (!(err instanceof Error)) return '操作未完成';
@@ -139,20 +76,6 @@ function mergeLiveQuotaWithSaved(savedQuota: any, liveQuota: any): any {
       ? liveQuota.subscription_tier
       : (savedQuota.subscription_tier || liveQuota.subscription_tier),
   };
-}
-
-/** 账号 IPC 投影后统一套餐字段，避免 accounts.ts 的空串/未知值穿透到 UI。 */
-function projectAccountForIpcNormalized(account: any): Record<string, any> | null {
-  const projected = projectAccountForIpc(account);
-  if (!projected) return projected;
-  const normalized: Record<string, any> = { ...projected, subscription_tier: normalizeSubscriptionTier(projected.subscription_tier) };
-  if (projected.quota && typeof projected.quota === 'object') {
-    normalized.quota = { ...projected.quota, subscription_tier: normalizeSubscriptionTier((projected.quota as any).subscription_tier) };
-  }
-  const contract = projectQuotaContract(accountsManager.getAccountQuotaOverview(account));
-  Object.assign(normalized, contract);
-  if (normalized.quota) Object.assign(normalized.quota, contract);
-  return normalized;
 }
 
 /** Single contract for dashboard, account cards, menu and refresh replies. No credentials. */
@@ -325,8 +248,11 @@ export async function buildDashboardAggregate(deps: DashboardAggregateDeps): Pro
 }
 
 export async function request(command: string): Promise<any> {
+  const argv = process.argv.slice(2);
+  const targetStateDir = resolve(cliOption(argv, '--state-dir', join(homedir(), 'Library', 'Application Support', 'GravityBox'))!);
+  const targetSocketPath = join(targetStateDir, 'control.sock');
   return new Promise((resolveReply, reject) => {
-    const client = createConnection(socketPath); let buffer = ''; let received = 0;
+    const client = createConnection(targetSocketPath); let buffer = ''; let received = 0;
     const decoder = new StringDecoder('utf8');
     client.setTimeout(['status', 'ping', 'task_list'].includes(command) ? 8000 : 120000, () => { client.destroy(); reject(new Error('等待响应超时，后台结果尚未确认；请查询任务状态，勿直接重试写入操作')); });
     client.on('connect', () => client.write(JSON.stringify({ command }) + '\n'));
@@ -342,13 +268,128 @@ export async function request(command: string): Promise<any> {
   });
 }
 async function run() {
+  try {
+    process.loadEnvFile?.();
+  } catch (error: any) {
+    if (error?.code !== 'ENOENT') {
+      // ignore
+    }
+  }
+  const args = process.argv.slice(2);
+  const option = (name: string, fallback?: string) => cliOption(args, name, fallback);
   const command = option('--command');
   if (command) { console.log(JSON.stringify(await request(command))); return; }
   if (args.includes('--heal')) throw new Error('在线补译请在应用内预览词条与目的地址后确认发送');
+  const stateDir = resolve(option('--state-dir', join(homedir(), 'Library', 'Application Support', 'GravityBox'))!);
+  try {
+    process.loadEnvFile?.(join(stateDir, '.env'));
+  } catch (error: any) {
+    if (error?.code !== 'ENOENT') {
+      // ignore
+    }
+  }
+  const socketPath = join(stateDir, 'control.sock');
+  let configuredChannel: unknown;
+  let configuredHudEnabled: unknown;
+  try {
+    const parsedCfg = JSON.parse(readFileSync(join(stateDir, 'config.json'), 'utf8'));
+    configuredChannel = parsedCfg.applicationChannel;
+    configuredHudEnabled = parsedCfg.hudEnabled;
+  }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error('应用版本配置无法读取，原文件已保留'); }
+  const explicitChannelArg = option('--channel');
+  const explicitAppArg = option('--app');
+  const explicitProfileArg = option('--profile');
+  const requestedChannel = explicitChannelArg !== undefined ? applicationChannel(explicitChannelArg) : savedApplicationChannel(configuredChannel);
+  const initialInstallInfo = detectInstalledChannels(requestedChannel);
+  let channel: ApplicationChannel = (explicitChannelArg || explicitAppArg || explicitProfileArg)
+    ? requestedChannel
+    : initialInstallInfo.effectiveChannel;
+  let selectedTarget = applicationTarget(channel);
+  let appPath = explicitAppArg ?? selectedTarget.appPath;
+  let profile = explicitProfileArg ?? selectedTarget.profile;
+  let target: ApplicationTarget = applicationTarget(channel, undefined, { appPath, profile });
+  let channelStateDir = channelStateDirectory(stateDir, channel);
   if (args.includes('--diagnose')) {
     const endpoint = await discover(appPath, profile);
     console.log(JSON.stringify(endpoint ? { found: true, pid: endpoint.pid, appVersion: endpoint.appVersion, legacyPatch: endpoint.legacyPatch, loopback: true } : { found: false })); return;
   }
+  const geminiDir = option('--gemini-dir', process.env.GRAVITYBOX_GEMINI_DIR || process.env.GEMINI_DIR || join(homedir(), '.gemini'))!;
+  const cacheMaintenance = new CacheMaintenance(profile, join(homedir(), '.Trash'), undefined, { stateDir: channelStateDir, geminiDir, appPath });
+  const accountsManager = new AccountsManager(stateDir, { target });
+  let liveProbeInFlight: Promise<any> | null = null;
+  let liveProbeCachedAt = 0;
+  let liveProbeCachedValue: any = null;
+  function probeLiveCached() {
+    const now = Date.now();
+    if (now - liveProbeCachedAt < 4500) return Promise.resolve(liveProbeCachedValue);
+    if (liveProbeInFlight) return liveProbeInFlight;
+    liveProbeInFlight = accountsManager.probeLiveLanguageServer()
+      .then(val => { liveProbeCachedValue = val; liveProbeCachedAt = Date.now(); return val; })
+      .finally(() => { liveProbeInFlight = null; });
+    return liveProbeInFlight;
+  }
+  const accountLogin = new GoogleAccountLogin((token, signal) => accountsManager.addAccountFromOAuth(token, signal));
+  const homeDir = option('--home-dir', process.env.GRAVITYBOX_HOME_DIR || homedir())!;
+  const appSupportDir = option('--app-support-dir', process.env.GRAVITYBOX_APP_SUPPORT_DIR || join(homedir(), 'Library', 'Application Support'))!;
+  const switchService = new AccountSwitchService(accountsManager, { stateDir, profile, channel, externalDir: join(homeDir, '.antigravity_tools') });
+  const usageManager = new UsageStatsManager({ stateDir, geminiDir });
+  cacheMaintenance.setHooks({
+    archiveDatabases: dbPaths => usageManager.archiveDatabasesBeforeClear(dbPaths),
+    onMutated: () => usageManager.invalidateCache(),
+  });
+  let accountSyncInFlight: Promise<void> | null = null;
+  let accountSyncedAt = 0;
+  async function syncActiveAccountToUsageManager(forceSync = false): Promise<void> {
+    const now = Date.now();
+    if (!forceSync && now - accountSyncedAt < 4500) return;
+    if (accountSyncInFlight) return accountSyncInFlight;
+    accountSyncInFlight = (async () => {
+      try {
+        const listRes = await accountsManager.listAccounts().catch(() => null);
+        if (listRes?.accounts) {
+          usageManager.setKnownAccounts(listRes.accounts.map(a => ({
+            id: a.id,
+            email: a.email,
+            name: a.name ?? null,
+          })));
+        }
+        const live = await probeLiveCached().catch(() => null);
+        const detectedEmail = live?.email ?? await accountsManager.detectCurrentAntigravityEmail().catch(() => null);
+        const active = listRes?.active_account;
+        if (active) {
+          usageManager.setCurrentAccountContext({
+            id: active.id,
+            email: active.email || detectedEmail || undefined,
+          });
+        } else if (detectedEmail) {
+          usageManager.setCurrentAccountContext({
+            id: detectedEmail,
+            email: detectedEmail,
+          });
+        }
+        accountSyncedAt = Date.now();
+      } catch {}
+    })().finally(() => { accountSyncInFlight = null; });
+    return accountSyncInFlight;
+  }
+  try { const pricePrefs=JSON.parse(await readFile(join(stateDir,'pricing-preferences.json'),'utf8'));usageManager.setAutoRemotePricingSync(pricePrefs.enabled===true); } catch {}
+  const idempotencyStore = new IdempotencyStore();
+  let backendLease: ProcessLease | undefined;
+
+  function projectAccountForIpcNormalized(account: any): Record<string, any> | null {
+    const projected = projectAccountForIpc(account);
+    if (!projected) return projected;
+    const normalized: Record<string, any> = { ...projected, subscription_tier: normalizeSubscriptionTier(projected.subscription_tier) };
+    if (projected.quota && typeof projected.quota === 'object') {
+      normalized.quota = { ...projected.quota, subscription_tier: normalizeSubscriptionTier((projected.quota as any).subscription_tier) };
+    }
+    const contract = projectQuotaContract(accountsManager.getAccountQuotaOverview(account));
+    Object.assign(normalized, contract);
+    if (normalized.quota) Object.assign(normalized.quota, contract);
+    return normalized;
+  }
+
   await mkdir(stateDir, { recursive: true, mode: 0o700 });
   const stateInfo = await lstat(stateDir);
   if (!stateInfo.isDirectory() || stateInfo.isSymbolicLink() || stateInfo.uid !== process.getuid?.()) throw new Error('助手数据目录身份不匹配');
@@ -358,6 +399,7 @@ async function run() {
   process.once('exit', () => backendLease?.releaseSync());
   process.once('SIGTERM', earlySignalExit);
   process.once('SIGINT', earlySignalExit);
+  try {
   // Preserve the original config once before migrating the retired channel.
   if (configuredChannel === 'insiders') {
     const configPath = join(stateDir, 'config.json');
@@ -419,17 +461,28 @@ async function run() {
   let applyChain = Promise.resolve();
   const shortcutEnabled = !!fixture;
   let initiallyPaused = false;
-  let hudEnabled = configuredHudEnabled !== false;
+  let hudEnabled = typeof configuredHudEnabled === 'boolean' ? configuredHudEnabled : true;
   try {
     const runtimePrefs = JSON.parse(await readFile(join(stateDir, 'runtime-preferences.json'), 'utf8'));
     initiallyPaused = runtimePrefs.translationEnabled === false;
-    if (typeof runtimePrefs.hudEnabled === 'boolean') hudEnabled = runtimePrefs.hudEnabled;
+    if (typeof configuredHudEnabled !== 'boolean' && typeof runtimePrefs.hudEnabled === 'boolean') {
+      hudEnabled = runtimePrefs.hudEnabled;
+    }
   } catch {}
   const saveRuntimePreferences = async (patch: { translationEnabled?: boolean; hudEnabled?: boolean }) => {
     let currentPrefs: Record<string, unknown> = {};
     try { currentPrefs = JSON.parse(await readFile(join(stateDir, 'runtime-preferences.json'), 'utf8')); } catch {}
     const nextPrefs = { ...currentPrefs, translationEnabled: controller.snapshot().translationEnabled !== false, hudEnabled, ...patch };
-    if (typeof patch.hudEnabled === 'boolean') hudEnabled = patch.hudEnabled;
+    if (typeof patch.hudEnabled === 'boolean') {
+      hudEnabled = patch.hudEnabled;
+      const configPath = join(stateDir, 'config.json');
+      try {
+        const cfg = JSON.parse(await readFile(configPath, 'utf8'));
+        if (cfg && typeof cfg === 'object' && !Array.isArray(cfg) && (cfg.schema === undefined || cfg.schema === 2)) {
+          await atomicJson(configPath, { ...cfg, hudEnabled });
+        }
+      } catch {}
+    }
     await atomicJson(join(stateDir, 'runtime-preferences.json'), nextPrefs);
   };
   const controller = new Controller({ initiallyPaused, shortcutEnabled, hudEnabled, appPath, profile, fixture, geminiDir, dictionary: store.current!, stateDir: channelStateDir, selectDictionary:async version=>{const dictionary=await store.selectVersion(version);await applyChain;return dictionary;}, reloadDictionary: async () => { await store.reload(); await applyChain; if (store.lastError) throw new Error(store.lastError); }, onStatus });
@@ -806,13 +859,17 @@ async function run() {
           }
           if (command === 'usage_snapshot_release') { usageManager.releaseSnapshot(String(parsed.snapshotId ?? '')); reply({ ok: true }); return; }
           if (command === 'usage_events') {
+            await syncActiveAccountToUsageManager().catch(() => {});
             const period = ['today', '7d', '30d', 'all'].includes(String(parsed.period)) ? String(parsed.period) : 'today';
-            reply({ ok: true, ...await usageManager.getUsageEvents(period, String(parsed.query ?? ''), Number(parsed.offset), Number(parsed.limit), typeof parsed.snapshotId === 'string' ? parsed.snapshotId : undefined, parsed.pinSnapshot === true, Boolean(parsed.force)) });
+            const targetAccountId = typeof parsed.accountId === 'string' && parsed.accountId ? parsed.accountId : undefined;
+            reply({ ok: true, ...await usageManager.getUsageEvents(period, String(parsed.query ?? ''), Number(parsed.offset), Number(parsed.limit), typeof parsed.snapshotId === 'string' ? parsed.snapshotId : undefined, parsed.pinSnapshot === true, Boolean(parsed.force), targetAccountId) });
             return;
           }
           if (command === 'usage_summary') {
+            await syncActiveAccountToUsageManager().catch(() => {});
             const force = Boolean(parsed.force);
-            const usage = await usageManager.getUsageSummary(force);
+            const targetAccountId = typeof parsed.accountId === 'string' && parsed.accountId ? parsed.accountId : undefined;
+            const usage = await usageManager.getUsageSummary(force, targetAccountId);
             const periodKey = parsed.period === 'today' ? 'today' : parsed.period === '7d' ? 'last_7_days' : parsed.period === '30d' ? 'last_30_days' : 'all_time';
             const p = (usage as any)[periodKey] ?? usage.all_time;
             const byModel = p.by_model.map((m: any) => ({
@@ -867,11 +924,17 @@ async function run() {
               unknownTimeRecords: usage.unknown_time_records ?? 0,
               unknownTimeTokens: usage.unknown_time_tokens ?? 0,
               databaseDiagnostics: usage.database_diagnostics ?? [],
+              selectedAccountId: usage.selected_account_id ?? 'all',
+              selected_account_id: usage.selected_account_id ?? 'all',
+              availableAccounts: usage.available_accounts ?? [],
+              available_accounts: usage.available_accounts ?? [],
             };
             const { today, last_7_days, last_30_days, all_time, daily_trends, today_hourly, ...selectedSummary } = periodSummary;
             const days = parsed.period === 'today' ? 1 : parsed.period === '7d' ? 7 : parsed.period === '30d' ? 30 : null;
             const selectedTrends = days ? usage.daily_trends.slice(-days) : usage.daily_trends;
             reply({ ok: true, period: parsed.period ?? 'all', snapshotId: usage.snapshot_id,
+              selectedAccountId: usage.selected_account_id ?? 'all',
+              availableAccounts: usage.available_accounts ?? [],
               summary: selectedSummary, byModel, models: byModel, dailyTrends: selectedTrends, todayHourly: parsed.period === 'today' ? usage.today_hourly : [] });
             return;
           }
@@ -886,8 +949,10 @@ async function run() {
       commandChain = commandChain.catch(() => {}).then(async () => {
         try {
           if(command==='shortcut_set'){if(!fixture)throw new Error('中英对照已移除');await controller.configureShortcut(parsed.enabled===true);reply({ok:true});return;}
-          if(command==='api_pricing_revalue'){reply({ok:true,...await usageManager.revalueHistory(parsed.confirm===true)});return;}
+          if(command==='api_pricing_revalue'){const mode = parsed.mode === 'unpriced_only' ? 'unpriced_only' : 'force_all';reply({ok:true,...await usageManager.revalueHistory(parsed.confirm===true, { mode })});return;}
           if(command==='pricing_sync_set'){await atomicJson(join(stateDir, 'pricing-preferences.json'), {enabled:parsed.enabled===true});usageManager.setAutoRemotePricingSync(parsed.enabled===true);reply({ok:true});return;}
+          if(command==='pricing_sync_status'){reply({ok:true,status:await usageManager.getPricingSyncStatus()});return;}
+          if(command==='pricing_sync_check'){const res=await usageManager.syncRemotePricing(parsed.feedUrl,true);reply({ok:res.synced,...res,status:await usageManager.getPricingSyncStatus()});return;}
           if(command==='hud_set'){const nextHud=parsed.enabled!==false;await saveRuntimePreferences({hudEnabled:nextHud});await controller.configureHud(nextHud);await writeChain;reply({ok:true,status:controller.snapshot()});return;}
           if(command==='maintenance_clear'){reply(await cacheMaintenance.clear(parsed.token, parsed.selectedNames));return;}
           if(command==='maintenance_restore'){reply(await cacheMaintenance.restore(parsed.snapshotId ?? parsed.id));return;}
@@ -948,7 +1013,10 @@ async function run() {
                 }
               }
             }
+            await usageManager.captureCurrentActiveSessions().catch(() => {});
             const result = await switchService.switchAccount(targetId, parsed.target || 'all');
+            await syncActiveAccountToUsageManager(true).catch(() => {});
+            usageManager.invalidateCache();
             reply({ ok: true, ...result }); return;
           }
           if(command==='account_recovery_clear'){if(parsed.confirm!==true)throw new Error('请先确认清除恢复凭据');reply({ok:true,...await switchService.clearRecovery(String(parsed.digest))});return;}
@@ -1005,7 +1073,10 @@ async function run() {
               reason: best.reason,
             };
             if (wantsExecute && best.shouldSwitch && best.bestCandidate) {
+              await usageManager.captureCurrentActiveSessions().catch(() => {});
               const result = await switchService.switchAccount(best.bestCandidate.id, 'all');
+              await syncActiveAccountToUsageManager(true).catch(() => {});
+              usageManager.invalidateCache();
               reply({ ok: true, ...projected, account: projected.bestCandidate, executed: true, preview: false,
                 switchResult: { switchedTo: result.switchedTo, message: result.message }, message: best.reason });
               return;
@@ -1057,6 +1128,11 @@ async function run() {
   process.on('uncaughtException', error => { console.error(`[GravityBox] ${error.stack ?? error.message}`); if (stopping) void stop(1); });
   process.on('unhandledRejection', reason => { console.error(`[GravityBox] ${reason instanceof Error ? reason.message : '后台任务异常'}`); });
   await controller.start();
+  void syncActiveAccountToUsageManager(true).catch(() => {});
+  } catch (error) {
+    await backendLease?.release().catch(() => {});
+    throw error;
+  }
 }
 // 仅作为入口脚本直接运行时启动助手；被测试/工具 import 时只暴露纯函数，避免误启动真实 socket。
 // 同路径与 realpath 双判定：经由符号链接路径启动（npm start/打包安装目录）也必须正常运行。
@@ -1068,5 +1144,5 @@ function isDirectEntry(): boolean {
   try { return realpathSync(entry) === realpathSync(modulePath); } catch { return false; }
 }
 if (process.env.GRAVITYBOX_IMPORT_ONLY !== '1' && isDirectEntry()) {
-  run().catch(async error => { await backendLease?.release(); console.error(`[GravityBox] ${(error as Error).message}`); process.exitCode = 1; });
+  run().catch(error => { console.error(`[GravityBox] ${(error as Error).message}`); process.exitCode = 1; });
 }

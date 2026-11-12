@@ -1126,6 +1126,7 @@ final class PreferencesController: NSObject {
     let translationSwitch = DesignSwitch()
     let hudSwitch = DesignSwitch()
     let pricingSyncSwitch = DesignSwitch()
+    var pricingSyncCheckBtn: NSButton!
     let refresh = NSPopUpButton(frame: .zero, pullsDown: false)
     let login = DesignSwitch()
     let syncLifecycleSwitch = DesignSwitch()
@@ -1167,9 +1168,17 @@ final class PreferencesController: NSObject {
         refresh.translatesAutoresizingMaskIntoConstraints = false
         refresh.widthAnchor.constraint(equalToConstant: 118).isActive = true
 
+        pricingSyncSwitch.controlSize = .small
         pricingSyncSwitch.state = app.configuration.value.autoPricingSyncEnabled ? .on : .off
         pricingSyncSwitch.target = self; pricingSyncSwitch.action = #selector(togglePricingSync)
         pricingSyncSwitch.setAccessibilityLabel("自动更新价格基准")
+        pricingSyncCheckBtn = button("立即检查", target: self, action: #selector(checkPricingSync))
+        pricingSyncCheckBtn.controlSize = .small
+        pricingSyncCheckBtn.translatesAutoresizingMaskIntoConstraints = false
+        pricingSyncCheckBtn.widthAnchor.constraint(greaterThanOrEqualToConstant: 76).isActive = true
+        pricingSyncCheckBtn.setAccessibilityLabel("检查价格更新")
+        let pricingControlGroup = horizontal([pricingSyncCheckBtn, pricingSyncSwitch], spacing: 8)
+        pricingControlGroup.alignment = .centerY
         let general = vertical([
             settingRow(icon: "power", tint: .systemGray, title: "登录时启动", subtitle: "登录 macOS 时自动在菜单栏启动 GravityBox", control: login),
             divider(),
@@ -1181,9 +1190,7 @@ final class PreferencesController: NSObject {
             divider(),
             settingRow(icon: "arrow.clockwise", tint: Design.blue, title: "配额刷新间隔", subtitle: "定时在后台同步已保存账号的最新剩余配额", control: refresh),
             divider(),
-            settingRow(icon: "dollarsign.circle", tint: Design.blue, title: "自动更新价格基准", subtitle: "允许从 GitHub 更新参考单价；历史已锁定费用保持不变", control: pricingSyncSwitch),
-            divider(),
-            settingRow(icon: "clock.arrow.circlepath", tint: .systemGray, title: "历史费用估算", subtitle: "按当前参考价重新估算，并保留原费率和前后对照", control: button("重新估算历史…", target: self, action: #selector(revalueHistory)))
+            settingRow(icon: "dollarsign.circle", tint: Design.blue, title: "自动更新价格基准", subtitle: "定期从官方同步最新模型定价，并自动补齐历史未计价账目", control: pricingControlGroup)
         ], spacing: 12)
         for child in general.arrangedSubviews { fillWidth(child, in: general) }
 
@@ -1348,27 +1355,15 @@ final class PreferencesController: NSObject {
         refresh.selectItem(at: Self.refreshIntervals.firstIndex(of: app.configuration.value.quotaRefreshMinutes) ?? 0)
         refreshUpdateRowState()
         refreshStorageRowState()
+        pricingSyncSwitch.state = app.configuration.value.autoPricingSyncEnabled ? .on : .off
+        pricingSyncSwitch.isEnabled = app.reachable
+        pricingSyncCheckBtn?.isEnabled = app.reachable
         updateSheet?.autoUpdateSwitch.state = app.configuration.value.autoUpdateEnabled ? .on : .off
     }
 
     @objc func toggleTranslation() {
         let target = translationSwitch.state == .on
         app.setTranslationEnabled(target)
-    }
-
-    @objc func revalueHistory() {
-        guard let window = app.window else { return }
-        let alert = NSAlert()
-        alert.messageText = "按当前参考价重新估算历史费用？"
-        alert.informativeText = "历史费用估算将更新，原费率和前后金额对照会保留在本机。实际服务账单不受影响。"
-        alert.addButton(withTitle: "取消")
-        alert.addButton(withTitle: "重新估算")
-        alert.beginSheetModal(for: window) { [weak self] response in
-            guard response == .alertSecondButtonReturn, let self else { return }
-            self.app.perform(["command": "api_pricing_revalue", "confirm": true]) { [weak self] _ in
-                self?.app.overview?.fetch(); self?.app.usagePage?.fetch(force: true)
-            }
-        }
     }
 
     @objc func togglePricingSync() {
@@ -1380,7 +1375,41 @@ final class PreferencesController: NSObject {
             if case .success = result {
                 self.app.configuration.value.autoPricingSyncEnabled = enabled
                 try? self.app.configuration.save()
+                self.feedback.stringValue = enabled ? "自动更新已开启：将定期从官方拉取最新模型定价" : "自动更新已关闭：仅使用本地参考单价"
+                self.feedback.textColor = Design.secondary
+                self.feedback.isHidden = false
             } else { self.pricingSyncSwitch.state = self.app.configuration.value.autoPricingSyncEnabled ? .on : .off }
+        }
+    }
+
+    @objc func checkPricingSync() {
+        pricingSyncCheckBtn?.isEnabled = false
+        pricingSyncCheckBtn?.title = "检查中…"
+        app.bridge.send(["command": "pricing_sync_check"]) { [weak self] result in
+            guard let self else { return }
+            self.pricingSyncCheckBtn?.isEnabled = self.app.reachable
+            self.pricingSyncCheckBtn?.title = "立即检查"
+            if case .success(let payload) = result {
+                if let count = payload["count"] as? Int {
+                    self.feedback.stringValue = "价格基准已同步最新官方数据（覆盖 \(count) 款主流模型）"
+                    self.feedback.textColor = .systemGreen
+                    self.feedback.isHidden = false
+                    self.app.overview?.fetch()
+                    self.app.usagePage?.fetch(force: true)
+                } else if let err = payload["error"] as? String {
+                    self.feedback.stringValue = "检查提示：\(err)"
+                    self.feedback.textColor = Design.secondary
+                    self.feedback.isHidden = false
+                } else {
+                    self.feedback.stringValue = "价格基准已是最新"
+                    self.feedback.textColor = .systemGreen
+                    self.feedback.isHidden = false
+                }
+            } else if case .failure(let err) = result {
+                self.feedback.stringValue = "同步失败：\(err.localizedDescription)"
+                self.feedback.textColor = .systemRed
+                self.feedback.isHidden = false
+            }
         }
     }
 

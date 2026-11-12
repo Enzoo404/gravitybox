@@ -99,3 +99,101 @@ test('远程价格同步：请求头报告当前构建版本，测试缓存与�
     await rm(temp, { recursive: true, force: true });
   }
 });
+
+test('多源容灾：主源失败时自动无感故障切换至备用源，并完整沉淀元数据', async () => {
+  const temp = await mkdtemp(join(tmpdir(), 'gravitybox-pricing-fallback-'));
+  let serverHits = 0;
+  const mockServer = createServer((req, res) => {
+    serverHits++;
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      version: '2026-11-12-test',
+      prices: {
+        'gemini-2.5-flash': {
+          model: 'gemini-2.5-flash',
+          input: 0.10,
+          output: 0.40,
+          cached: 0.025,
+        }
+      }
+    }));
+  });
+  await new Promise(resolve => mockServer.listen(0, '127.0.0.1', resolve));
+  const port = mockServer.address().port;
+
+  try {
+    // 构造主源为一个不可达的死端口，备用源指向 mockServer
+    const unreachableUrl = 'http://127.0.0.1:59999/bad-feed.json';
+    const fallbackUrl = `http://127.0.0.1:${port}/cdn-feed.json`;
+
+    const manager = new UsageStatsManager({
+      stateDir: temp,
+      geminiDir: join(temp, 'gemini'),
+      remotePricingUrl: unreachableUrl, // 优先尝试的主源（模拟断网或阻断）
+      fallbackPricingUrls: [fallbackUrl], // 备用 CDN 镜像源
+    });
+
+    const syncRes = await manager.syncRemotePricing(undefined, true);
+    assert.equal(syncRes.synced, true, '主源失败后必须自动无感切换至备用源');
+    assert.equal(syncRes.sourceUrl, fallbackUrl, '命中源必须为备用源');
+    assert.equal(serverHits, 1, '备用 mockServer 必须被成功请求');
+
+    // 验证 getPricingSyncStatus 状态可观测
+    const status = await manager.getPricingSyncStatus();
+    assert.ok(typeof status.autoSyncEnabled === 'boolean');
+    assert.equal(status.lastSyncSuccess, true);
+    assert.equal(status.sourceUrl, fallbackUrl);
+    assert.ok(status.modelCount > 0);
+  } finally {
+    await new Promise(resolve => mockServer.close(resolve));
+    await rm(temp, { recursive: true, force: true });
+  }
+});
+
+test('时序交替临界点 1 秒微小缝隙容错（Gap Tolerance）保护', () => {
+  const flash = MODEL_PRICES['gemini-3.8-flash'];
+  // 恰好落在 2026-12-31 23:59:59 最后一秒边界
+  const boundaryStamp = Math.floor(Date.parse('2026-12-31T23:59:59Z') / 1000);
+  const resolved = resolvePricingForTimestamp(flash, boundaryStamp, 'gemini-3.8-flash');
+  assert.ok(resolved, '临界边界时间戳必须成功匹配');
+  assert.equal(resolved.input, 0.75, '应正确继承 2026 年底有效费率');
+});
+
+test('安全防投毒校验：单价超过 $500/MTok 时严密拦截', async () => {
+  const temp = await mkdtemp(join(tmpdir(), 'gravitybox-pricing-poison-'));
+  const manager = new UsageStatsManager({ stateDir: temp, geminiDir: join(temp, 'gemini') });
+  await assert.rejects(
+    manager.savePricingTable({
+      'poisoned-model': { model: 'poisoned-model', input: 501.0, output: 1.0, cached: 0.1 }
+    }),
+    /超出合理范围/
+  );
+  await rm(temp, { recursive: true, force: true });
+});
+
+test('全自动智能补齐未计价（零按钮、用户无感）：仅补齐未计价历史，已锁定账本绝不动摇', async () => {
+  const temp = await mkdtemp(join(tmpdir(), 'gravitybox-autoheal-'));
+  const manager = new UsageStatsManager({ stateDir: temp, geminiDir: join(temp, 'gemini') });
+  manager.setAutoRemotePricingSync(true);
+
+  // 1. 手动注入账本：1 条已锁定的正常计价记录 ($5.00) + 1 条历史未计价记录 ($0.00)
+  const lockedKey = 'a'.repeat(64);
+  const unpricedKey = 'b'.repeat(64);
+  const now = Math.floor(Date.now() / 1000);
+  
+  // 模拟 rateLocks
+  manager.rateLocks = {
+    [lockedKey]: { usd: 5.0, price: { model: 'locked-model', input: 5, output: 5, cached: 1 } },
+    [unpricedKey]: { usd: 0, price: { model: 'unpriced-model', input: 0, output: 0, cached: 0 } },
+  };
+  manager.rateLocksDirty = true;
+  await manager.saveRateLocks();
+
+  // 2. 模拟自动补齐自愈
+  const healed = await manager.autoHealUnpricedHistory();
+  assert.equal(healed, 1, '应精准识别并清理 1 条未计价条目');
+  assert.equal(manager.rateLocks[lockedKey].usd, 5.0, '原本正常锁定的记录金额绝不受影响');
+  assert.equal(manager.rateLocks[unpricedKey], undefined, '未计价记录旧锁已被释放以允许重新匹配新价');
+
+  await rm(temp, { recursive: true, force: true });
+});
