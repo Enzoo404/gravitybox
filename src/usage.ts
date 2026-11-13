@@ -1145,9 +1145,10 @@ export class UsageStatsManager {
     for (const rawId of source) {
       const trimmed = String(rawId).trim();
       if (!trimmed) continue;
-      const matched = matchPricingKeys(trimmed);
+      const baseId = trimmed.replace(/(?:^|[-_])disabled$/i, '').trim() || trimmed;
+      const matched = matchPricingKeys(baseId);
       if (matched) keys.add(matched);
-      keys.add(normalizeModelId(trimmed));
+      keys.add(normalizeModelId(baseId));
     }
     if (keys.size === 0) {
       for (const key of FEED_MODEL_KEYS) keys.add(key);

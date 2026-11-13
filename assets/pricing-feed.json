@@ -70,6 +70,40 @@
         }
       }
     ],
+    "gemini-4-carbon": [
+      {
+        "model": "gemini-4-carbon",
+        "input": 2,
+        "output": 10,
+        "cached": 0.1,
+        "provenance": {
+          "sourceUrl": "https://cloud.google.com/model-garden/pricing?hl=en",
+          "platform": "Google Cloud 标准 Global API",
+          "conditions": "Google Cloud 官方推广期标准 Global API 文本基准（优惠截至2026-11-30）",
+          "checkedAt": "2026-11-13",
+          "validUntil": "2026-11-30T23:59:59Z",
+          "verification": "confirmed"
+        },
+        "validFrom": null,
+        "validUntil": "2026-11-30T23:59:59Z"
+      },
+      {
+        "model": "gemini-4-carbon",
+        "input": 4,
+        "output": 20,
+        "cached": 0.2,
+        "provenance": {
+          "sourceUrl": "https://cloud.google.com/model-garden/pricing?hl=en",
+          "platform": "Google Cloud 标准 Global API",
+          "conditions": "Google Cloud 官方 Carbon 标准定价（2026-12-01生效）",
+          "checkedAt": "2026-11-13",
+          "validUntil": null,
+          "verification": "confirmed"
+        },
+        "validFrom": "2026-12-01T00:00:00Z",
+        "validUntil": null
+      }
+    ],
     "gemini-4-hydrogen": [
       {
         "model": "gemini-4-hydrogen",

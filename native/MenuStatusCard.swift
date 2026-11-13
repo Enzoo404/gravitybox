@@ -2498,8 +2498,7 @@ final class MenuPanelController: NSViewController {
 
     @objc private func morePressed() {
         let menu = app.buildMoreMenu()
-        let yOffset = moreButton.isFlipped ? (moreButton.bounds.maxY + 6) : -6
-        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: yOffset), in: moreButton)
+        Design.popUpMenu(menu, below: moreButton)
     }
 
     @objc private func openAntigravityFromFooter() {
@@ -2572,7 +2571,7 @@ final class MenuPanelController: NSViewController {
     private func syncUsageTabFromCache() {
         let periodKey = Self.periods[selectedPeriod]
         let periodLabel = Self.periodLabels[selectedPeriod]
-        trendTitleLabel.stringValue = selectedPeriod == 0 ? "今日趋势" : (selectedPeriod == 3 ? "历史趋势" : "\(periodLabel)趋势")
+        trendTitleLabel.stringValue = selectedPeriod == 0 ? "今日趋势" : (selectedPeriod == 3 ? "全部趋势" : "\(periodLabel)趋势")
 
         guard let report = app.cachedUsageReportsByPeriod[periodKey] else {
             if let err = app.usageFetchErrorsByPeriod[periodKey], !err.isEmpty {
@@ -2708,10 +2707,6 @@ final class MenuPanelController: NSViewController {
             targetSlice = daily[...]
         }
 
-        let firstDate = (targetSlice.first?["date"] as? String) ?? ""
-        let lastDate = (targetSlice.last?["date"] as? String) ?? ""
-        let unknownCount = intVal(summary, "unknownTimeRecords")
-
         if selectedPeriod == 3 && targetSlice.count > 90 {
             // 按自然月 (yyyy-MM) 聚合
             var monthOrder: [String] = []
@@ -2730,11 +2725,6 @@ final class MenuPanelController: NSViewController {
                 let shortLbl = m.count >= 7 ? String(m.suffix(5)) : m
                 return .init(label: shortLbl, tooltipLabel: "\(m) 月汇总", value: monthTotals[m] ?? 0, isFuture: false)
             }
-            var note = "按月汇总（\(firstDate) 至 \(lastDate)）"
-            if unknownCount > 0 { note += " · 不含 \(unknownCount) 条时间未知记录" }
-            activePeriodTrendNote = note
-            trendCoverageLabel.stringValue = note
-            trendCoverageLabel.alphaValue = 1.0
         } else if selectedPeriod == 3 && targetSlice.count > 31 {
             // 按 7 天周桶聚合
             let items = Array(targetSlice)
@@ -2756,11 +2746,6 @@ final class MenuPanelController: NSViewController {
                 idx = endIdx
             }
             trendChart.buckets = buckets
-            var note = "按周汇总（\(firstDate) 至 \(lastDate)）"
-            if unknownCount > 0 { note += " · 不含 \(unknownCount) 条时间未知记录" }
-            activePeriodTrendNote = note
-            trendCoverageLabel.stringValue = note
-            trendCoverageLabel.alphaValue = 1.0
         } else {
             trendChart.buckets = targetSlice.map { d in
                 let dateStr = (d["date"] as? String) ?? ""
@@ -2770,18 +2755,10 @@ final class MenuPanelController: NSViewController {
                     : intVal(d, "request_count", fallback: intVal(d, "requestCount"))
                 return .init(label: shortDate, tooltipLabel: dateStr, value: v, isFuture: false)
             }
-            if selectedPeriod == 3 && !firstDate.isEmpty && !lastDate.isEmpty {
-                var note = "覆盖 \(firstDate) 至 \(lastDate)"
-                if unknownCount > 0 { note += " · 不含 \(unknownCount) 条时间未知记录" }
-                activePeriodTrendNote = note
-                trendCoverageLabel.stringValue = note
-                trendCoverageLabel.alphaValue = 1.0
-            } else {
-                activePeriodTrendNote = ""
-                trendCoverageLabel.stringValue = ""
-                trendCoverageLabel.alphaValue = 0.0
-            }
         }
+        activePeriodTrendNote = ""
+        trendCoverageLabel.stringValue = ""
+        trendCoverageLabel.alphaValue = 0.0
     }
 
     private func rebuildMenuModelList(models: [[String: Any]], totalTokens: Int) {

@@ -236,6 +236,18 @@ enum Design {
         cachedBrandMark = result
         return result
     }
+    static func popUpOrigin(below anchor: NSView, spacing: CGFloat = 6) -> NSPoint {
+        let yOffset = anchor.isFlipped ? (anchor.bounds.maxY + spacing) : (anchor.bounds.minY - spacing)
+        return NSPoint(x: 0, y: yOffset)
+    }
+
+    static func popUpMenu(_ menu: NSMenu, below anchor: NSView, spacing: CGFloat = 6, matchAnchorWidth: Bool = false) {
+        if matchAnchorWidth {
+            menu.minimumWidth = max(menu.minimumWidth, anchor.bounds.width)
+        }
+        menu.popUp(positioning: nil, at: popUpOrigin(below: anchor, spacing: spacing), in: anchor)
+    }
+
     static func applyControls(_ view: NSView) {
         if let popup = view as? NSPopUpButton {
             if !(popup.cell is DesignPopUpCell) {
@@ -1166,6 +1178,26 @@ final class MenuQuotaView: NSView {
 }
 
 final class DesignPopUpCell: NSPopUpButtonCell {
+    private func presentMenuBelow(_ controlView: NSView) {
+        guard isEnabled, let menu, !menu.items.isEmpty else { return }
+        synchronizeTitleAndSelectedItem()
+        isHighlighted = true
+        controlView.needsDisplay = true
+        Design.popUpMenu(menu, below: controlView, matchAnchorWidth: true)
+        isHighlighted = false
+        controlView.needsDisplay = true
+    }
+
+    override func trackMouse(with event: NSEvent, in cellFrame: NSRect, of controlView: NSView, untilMouseUp flag: Bool) -> Bool {
+        guard isEnabled else { return false }
+        presentMenuBelow(controlView)
+        return true
+    }
+
+    override func performClick(withFrame cellFrame: NSRect, in controlView: NSView) {
+        presentMenuBelow(controlView)
+    }
+
     override func draw(withFrame cellFrame: NSRect, in controlView: NSView) {
         let focused = controlView.window?.firstResponder === controlView
         let insetRect = cellFrame.insetBy(dx: 0.5, dy: 0.5)

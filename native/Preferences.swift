@@ -835,6 +835,7 @@ final class UpdateSheetController: NSObject, NSWindowDelegate {
     let autoUpdateSwitch = DesignSwitch()
     let closeBtn = button("完成", target: nil, action: #selector(closeSheet))
     let primaryBtn = DesignButton(title: "重新检查", target: nil, action: #selector(primaryAction))
+    private let trailingFooter = horizontal([], spacing: 8)
     var spinner: NSProgressIndicator { primaryBtn.activitySpinner }
 
     init(app: Assistant) {
@@ -937,12 +938,16 @@ final class UpdateSheetController: NSObject, NSWindowDelegate {
         autoUpdateLeft.alignment = .centerY
 
         closeBtn.target = self
-        closeBtn.keyEquivalent = "\u{1b}"
+        closeBtn.keyEquivalent = "\r"
+        closeBtn.bezelColor = Design.blue
         primaryBtn.target = self
         primaryBtn.bezelColor = Design.blue
         primaryBtn.keyEquivalent = "\r"
 
-        let footerRow = horizontal([autoUpdateLeft, flexibleSpace(), closeBtn, primaryBtn], spacing: 8)
+        trailingFooter.alignment = .centerY
+        trailingFooter.addArrangedSubview(primaryBtn)
+        trailingFooter.addArrangedSubview(closeBtn)
+        let footerRow = horizontal([autoUpdateLeft, flexibleSpace(), trailingFooter], spacing: 8)
         footerRow.alignment = .centerY
 
         let root = vertical([
@@ -1002,6 +1007,26 @@ final class UpdateSheetController: NSObject, NSWindowDelegate {
         }
     }
 
+    private func setFooterActionPrimaryRight(_ primaryIsRight: Bool) {
+        let desired: [NSView] = primaryIsRight ? [closeBtn, primaryBtn] : [primaryBtn, closeBtn]
+        if trailingFooter.arrangedSubviews.count != desired.count
+            || !zip(trailingFooter.arrangedSubviews, desired).allSatisfy({ $0 === $1 }) {
+            trailingFooter.arrangedSubviews.forEach { trailingFooter.removeArrangedSubview($0) }
+            for v in desired { trailingFooter.addArrangedSubview(v) }
+        }
+        if primaryIsRight {
+            primaryBtn.bezelColor = Design.blue
+            primaryBtn.keyEquivalent = "\r"
+            closeBtn.bezelColor = nil
+            closeBtn.keyEquivalent = "\u{1b}"
+        } else {
+            primaryBtn.bezelColor = nil
+            primaryBtn.keyEquivalent = ""
+            closeBtn.bezelColor = Design.blue
+            closeBtn.keyEquivalent = "\r"
+        }
+    }
+
     func renderState() {
         let ver = app.updateManager.currentVersion
         let buildStr = app.updateManager.currentBuildDisplay
@@ -1011,11 +1036,12 @@ final class UpdateSheetController: NSObject, NSWindowDelegate {
             setStatusIcon("arrow.triangle.2.circlepath", tint: Design.blue)
             changelogHeading.stringValue = "版本说明"
             setNotesContent("• 当前运行版本：GravityBox v\(ver)（构建 \(buildStr)）\n• 正在同步 GitHub Release 最新版本信息，请稍候…")
-            closeBtn.title = "关闭"
+            closeBtn.title = "完成"
             closeBtn.isEnabled = true
             primaryBtn.title = "检查中…"
             primaryBtn.showsSpinner = true
             primaryBtn.isEnabled = false
+            setFooterActionPrimaryRight(false)
         case .upToDate:
             setStatusIcon("checkmark.seal.fill", tint: .systemGreen)
             changelogHeading.stringValue = "当前版本状态"
@@ -1025,6 +1051,7 @@ final class UpdateSheetController: NSObject, NSWindowDelegate {
             primaryBtn.title = "重新检查"
             primaryBtn.showsSpinner = false
             primaryBtn.isEnabled = true
+            setFooterActionPrimaryRight(false)
         case .updateAvailable(let release):
             setStatusIcon("sparkles", tint: Design.blue)
             changelogHeading.stringValue = "\(release.tagName) 更新日志"
@@ -1034,6 +1061,7 @@ final class UpdateSheetController: NSObject, NSWindowDelegate {
             primaryBtn.title = "立即更新"
             primaryBtn.showsSpinner = false
             primaryBtn.isEnabled = true
+            setFooterActionPrimaryRight(true)
         case .downloading(let release):
             setStatusIcon("arrow.down.circle.fill", tint: Design.blue)
             changelogHeading.stringValue = "\(release.tagName) 更新日志"
@@ -1043,6 +1071,7 @@ final class UpdateSheetController: NSObject, NSWindowDelegate {
             primaryBtn.title = "取消下载"
             primaryBtn.showsSpinner = true
             primaryBtn.isEnabled = true
+            setFooterActionPrimaryRight(true)
         case .readyToInstall(let release, _):
             setStatusIcon("checkmark.shield.fill", tint: .systemGreen)
             changelogHeading.stringValue = "\(release.tagName) 更新日志"
@@ -1052,6 +1081,7 @@ final class UpdateSheetController: NSObject, NSWindowDelegate {
             primaryBtn.title = "立即更新"
             primaryBtn.showsSpinner = false
             primaryBtn.isEnabled = true
+            setFooterActionPrimaryRight(true)
         case .installing(let release):
             setStatusIcon("gearshape.2.fill", tint: Design.blue)
             changelogHeading.stringValue = "\(release.tagName) 更新日志"
@@ -1061,15 +1091,17 @@ final class UpdateSheetController: NSObject, NSWindowDelegate {
             primaryBtn.title = "正在安装…"
             primaryBtn.showsSpinner = true
             primaryBtn.isEnabled = false
+            setFooterActionPrimaryRight(true)
         case .failed(let message):
             setStatusIcon("exclamationmark.triangle.fill", tint: accessibleWarningColor())
             changelogHeading.stringValue = "检查结果"
             setNotesContent("• 未能完成在线更新：\(message)\n• 您可以点击右上角「GitHub ↗」直接查看或下载最新 Release 安装包。")
-            closeBtn.title = "关闭"
+            closeBtn.title = "完成"
             closeBtn.isEnabled = true
             primaryBtn.title = "重试"
             primaryBtn.showsSpinner = false
             primaryBtn.isEnabled = true
+            setFooterActionPrimaryRight(false)
         }
         primaryBtn.setAccessibilityLabel(primaryBtn.title)
     }
@@ -1142,7 +1174,7 @@ final class PricingSyncSheetController: NSObject, NSWindowDelegate {
     private let listScroll = NSScrollView()
     private let copyBtn = button("复制价格表", target: nil, action: #selector(copyPricingText))
     private let recheckBtn = button("重新检查", target: nil, action: #selector(recheck))
-    private let closeBtn = button("关闭", target: nil, action: #selector(closeSheet))
+    let closeBtn = button("完成", target: nil, action: #selector(closeSheet))
     var latestTextSummary = ""
     private var checking = false
 
@@ -1463,7 +1495,6 @@ final class PreferencesController: NSObject {
     var manageCacheBtn: NSButton!
     let aboutSubtitleLabel = text("", size: 11, color: Design.blue, wrap: true)
     var checkUpdateBtn: NSButton!
-    let feedback = text("", size: 11, color: Design.secondary, wrap: true)
     var updateSheet: UpdateSheetController?
     var pricingSheet: PricingSyncSheetController?
     private var lastStorageScanAt: Date = .distantPast
@@ -1508,20 +1539,20 @@ final class PreferencesController: NSObject {
         pricingSyncCheckBtn.setAccessibilityLabel("检查价格更新")
         let pricingControlGroup = horizontal([pricingSyncCheckBtn, pricingSyncSwitch], spacing: 8)
         pricingControlGroup.alignment = .centerY
-        let general = vertical([
-            settingRow(icon: "power", tint: .systemGray, title: "登录时启动", subtitle: "登录 macOS 时自动在菜单栏启动 GravityBox", control: login),
-            divider(),
+
+        let enhanceGroup = vertical([
             settingRow(icon: "character.book.closed", tint: .systemGreen, title: "界面汉化", subtitle: "基于外置词典实时汉化 Antigravity 界面，不改动官方应用包", control: translationSwitch),
             divider(),
-            settingRow(icon: "chart.bar.xaxis", tint: .systemIndigo, title: "对话状态栏", subtitle: "可独立开启；关闭汉化时以英文显示轮次、Token 与上下文", control: hudSwitch),
-            divider(),
-            settingRow(icon: "link", tint: .systemTeal, title: "跟随 Antigravity 启停", subtitle: "打开 Antigravity 时自动在菜单栏启动，关闭时一并退出", control: syncLifecycleSwitch),
-            divider(),
+            settingRow(icon: "chart.bar.xaxis", tint: .systemIndigo, title: "对话状态栏", subtitle: "可独立开启；关闭汉化时以英文显示轮次、Token 与上下文", control: hudSwitch)
+        ], spacing: 12)
+        for child in enhanceGroup.arrangedSubviews { fillWidth(child, in: enhanceGroup) }
+
+        let dataSyncGroup = vertical([
             settingRow(icon: "arrow.clockwise", tint: Design.blue, title: "配额刷新间隔", subtitle: "定时在后台同步已保存账号的最新剩余配额", control: refresh),
             divider(),
             settingRow(icon: "dollarsign.circle", tint: Design.blue, title: "自动更新价格基准", subtitle: "同步 GravityBox 维护的公开价格表，保留官方来源与计价条件", control: pricingControlGroup)
         ], spacing: 12)
-        for child in general.arrangedSubviews { fillWidth(child, in: general) }
+        for child in dataSyncGroup.arrangedSubviews { fillWidth(child, in: dataSyncGroup) }
 
         storageBadge.isHidden = true
         storageBadge.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -1541,10 +1572,14 @@ final class PreferencesController: NSObject {
            let captionsStack = rowStack.arrangedSubviews.dropFirst().first as? NSStackView {
             captionsStack.addArrangedSubview(storageSubtitleLabel)
         }
-        let maintenance = vertical([
+        let systemAndStorageGroup = vertical([
+            settingRow(icon: "power", tint: .systemGray, title: "登录时启动", subtitle: "登录 macOS 时自动在菜单栏启动 GravityBox", control: login),
+            divider(),
+            settingRow(icon: "link", tint: .systemTeal, title: "跟随 Antigravity 启停", subtitle: "打开 Antigravity 时自动在菜单栏启动，关闭时一并退出", control: syncLifecycleSwitch),
+            divider(),
             storageRow
         ], spacing: 12)
-        for child in maintenance.arrangedSubviews { fillWidth(child, in: maintenance) }
+        for child in systemAndStorageGroup.arrangedSubviews { fillWidth(child, in: systemAndStorageGroup) }
 
         let version = app.updateManager.currentVersion
         let verPill = pillBadge("v\(version)", color: Design.blue)
@@ -1567,10 +1602,12 @@ final class PreferencesController: NSObject {
         let details = vertical([aboutRow], spacing: 12)
         for child in details.arrangedSubviews { fillWidth(child, in: details) }
 
-        let generalCard = group([general], inset: 16)
-        generalCard.cornerRadius = 14
-        let maintenanceCard = group([maintenance], inset: 16)
-        maintenanceCard.cornerRadius = 14
+        let enhanceCard = group([enhanceGroup], inset: 16)
+        enhanceCard.cornerRadius = 14
+        let dataSyncCard = group([dataSyncGroup], inset: 16)
+        dataSyncCard.cornerRadius = 14
+        let systemAndStorageCard = group([systemAndStorageGroup], inset: 16)
+        systemAndStorageCard.cornerRadius = 14
         let aboutCard = group([details], inset: 16)
         aboutCard.cornerRadius = 14
 
@@ -1584,11 +1621,10 @@ final class PreferencesController: NSObject {
 
         let root = pageStack(title: "设置")
         root.spacing = 14
-        root.addArrangedSubview(sectionGroup("运行与联动", card: generalCard))
-        root.addArrangedSubview(sectionGroup("存储", card: maintenanceCard))
+        root.addArrangedSubview(sectionGroup("Antigravity 增强", card: enhanceCard))
+        root.addArrangedSubview(sectionGroup("配额与计价", card: dataSyncCard))
+        root.addArrangedSubview(sectionGroup("系统与存储", card: systemAndStorageCard))
         root.addArrangedSubview(sectionGroup("关于", card: aboutCard))
-        feedback.isHidden = true
-        root.addArrangedSubview(feedback)
         view = scrollPage(root); Design.applyControls(view)
         refreshUpdateRowState()
     }
@@ -1704,10 +1740,10 @@ final class PreferencesController: NSObject {
             if case .success = result {
                 self.app.configuration.value.autoPricingSyncEnabled = enabled
                 try? self.app.configuration.save()
-                self.feedback.stringValue = enabled ? "自动更新已开启：将同步 GravityBox 维护的公开价格表" : "自动更新已关闭：仅使用本地参考单价"
-                self.feedback.textColor = Design.secondary
-                self.feedback.isHidden = false
-            } else { self.pricingSyncSwitch.state = self.app.configuration.value.autoPricingSyncEnabled ? .on : .off }
+            } else {
+                self.pricingSyncSwitch.state = self.app.configuration.value.autoPricingSyncEnabled ? .on : .off
+                self.app.showMessage("未能更新自动价格同步设置", error: true)
+            }
         }
     }
 
@@ -1720,8 +1756,6 @@ final class PreferencesController: NSObject {
             self.pricingSyncCheckBtn?.title = "立即检查"
             switch result {
             case .success(let payload):
-                self.feedback.stringValue = ""
-                self.feedback.isHidden = true
                 if payload["synced"] as? Bool == true {
                     self.app.overview?.fetch()
                     self.app.usagePage?.fetch(force: true)
@@ -1733,16 +1767,11 @@ final class PreferencesController: NSObject {
                     self.pricingSheet?.show(in: window, payload: payload)
                 } else {
                     let count = (payload["prices"] as? [String: Any])?.count ?? (payload["count"] as? Int ?? 0)
-                    self.feedback.stringValue = payload["synced"] as? Bool == true
-                        ? "价格基准已同步（生效 \(count) 款模型）"
-                        : "检查提示：\(payload["error"] as? String ?? "未能同步远端价格")"
-                    self.feedback.textColor = payload["synced"] as? Bool == true ? .systemGreen : Design.secondary
-                    self.feedback.isHidden = false
+                    let ok = payload["synced"] as? Bool == true
+                    self.app.showMessage(ok ? "价格基准已同步（生效 \(count) 款模型）" : "检查提示：\(payload["error"] as? String ?? "未能同步远端价格")", error: !ok)
                 }
             case .failure(let err):
-                self.feedback.stringValue = "同步失败：\(err.localizedDescription)"
-                self.feedback.textColor = .systemRed
-                self.feedback.isHidden = false
+                self.app.showMessage("同步失败：\(err.localizedDescription)", error: true)
             }
         }
     }
@@ -1758,7 +1787,6 @@ final class PreferencesController: NSObject {
         app.configuration.value.syncAntigravityLifecycle = next
         do {
             try app.configuration.save()
-            feedback.stringValue = ""; feedback.isHidden = true
             app.syncLifecycleAgentRegistration()
         } catch {
             app.configuration.value.syncAntigravityLifecycle = previous
@@ -1771,7 +1799,7 @@ final class PreferencesController: NSObject {
         let previous = app.configuration.value.quotaRefreshMinutes
         let idx = max(0, min(Self.refreshIntervals.count - 1, refresh.indexOfSelectedItem))
         app.configuration.value.quotaRefreshMinutes = Self.refreshIntervals[idx]
-        do { try app.configuration.save(); app.configureQuotaRefreshTimer(); feedback.stringValue = ""; feedback.isHidden = true }
+        do { try app.configuration.save(); app.configureQuotaRefreshTimer() }
         catch {
             app.configuration.value.quotaRefreshMinutes = previous
             refresh.selectItem(at: Self.refreshIntervals.firstIndex(of: previous) ?? 0)
@@ -1789,8 +1817,6 @@ final class PreferencesController: NSObject {
             if SMAppService.mainApp.status == .requiresApproval {
                 SMAppService.openSystemSettingsLoginItems()
             }
-            feedback.stringValue = ""
-            feedback.isHidden = true
         } catch {
             showError(error)
         }

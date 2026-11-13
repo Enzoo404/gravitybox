@@ -211,7 +211,12 @@ import Cocoa
             assistant.cachedAccounts = accounts
             for popup in [policy.strategyPopup, policy.modelPopup] {
                 check(popup.focusRingType == .none && popup.cell?.focusRingType == NSFocusRingType.none, "Installed popup cell must not restore the square focus bezel")
+                check(popup.cell is DesignPopUpCell, "PopUp buttons must use DesignPopUpCell so menus drop cleanly below the control")
+                let origin = Design.popUpOrigin(below: popup)
+                check(origin.x == 0 && origin.y == popup.bounds.maxY + 6, "Flipped popup origin must place menu 6pt below control bottom")
             }
+            let unflippedProbe = NSView(frame: NSRect(x: 0, y: 0, width: 80, height: 28))
+            check(Design.popUpOrigin(below: unflippedProbe) == NSPoint(x: 0, y: -6), "Unflipped anchor origin must place menu 6pt below control bottom")
             policy.window.makeFirstResponder(policy.strategyPopup); pump()
             try capture(policy.window.contentView!,output.appendingPathComponent("\(theme)-policy-popup-focused.png"))
             policy.window.makeFirstResponder(policy.reserve); pump()
@@ -248,6 +253,9 @@ import Cocoa
             check(maintSheet.cachePage.retentionPopup.itemTitles == ["保留近 7 天", "保留近 30 天", "全部非活跃"], "Maintenance sheet must expose 3 retention window choices")
             check(!maintSheet.cachePage.snapshotPopup.isHidden && maintSheet.cachePage.snapshotPopup.numberOfItems == 2, "Maintenance recovery footer must expose multi-snapshot selector when >=2 restorable snapshots exist")
             check(maintSheet.cachePage.selectedNames == Set(["Cache", "AgentBrowserCache", "PartitionsCache", "OrphanAgentData"]), "Maintenance default selection must check safe items only and leave history slimming items unchecked")
+            check(!maintSheet.cachePage.sheetDoneButton.isHidden && maintSheet.cachePage.sheetDoneButton.title == "完成", "Maintenance sheet must display 完成 button")
+            check(maintSheet.cachePage.sheetDoneButton.frame.minY < maintSheet.cachePage.view.frame.minY, "Maintenance 完成 button must sit in pinned bottom footer below scroll area")
+            check(maintSheet.cachePage.sheetDoneButton.frame.maxX > maintSheet.cachePage.clearButton.frame.minX, "Maintenance 完成 button must align at bottom-right")
             try capture(maintSheet.sheet.contentView!, output.appendingPathComponent("\(theme)-maintenance-sheet.png"))
             maintSheet.closeSheet(); pump()
             let card = MenuStatusCard(target:assistant,account:accounts[0],enabled:true)
@@ -666,10 +674,12 @@ import Cocoa
                 updateSheet.sheet.contentView?.layoutSubtreeIfNeeded(); pump()
                 try capture(updateSheet.sheet.contentView!, output.appendingPathComponent("\(theme)-update-sheet-available.png"))
             }
-            // Verify checking state spinner is embedded inside primaryBtn and button stays bright blue (no dark navy blue flash)
+            // Verify checking state spinner is embedded inside primaryBtn and exit button is 完成 at bottom-right
             let savedRelease = assistant.updateManager.availableRelease
             assistant.updateManager.simulateChecking()
-            check(updateSheet.primaryBtn.title == "检查中…" && updateSheet.closeBtn.title == "关闭" && updateSheet.changelogHeading.stringValue == "版本说明", "Checking state must render 版本说明 heading, 关闭 button and 检查中… primary button")
+            updateSheet.sheet.contentView?.layoutSubtreeIfNeeded()
+            check(updateSheet.primaryBtn.title == "检查中…" && updateSheet.closeBtn.title == "完成" && updateSheet.changelogHeading.stringValue == "版本说明", "Checking state must render 版本说明 heading, 完成 button and 检查中… primary button")
+            check(updateSheet.closeBtn.frame.minX > updateSheet.primaryBtn.frame.maxX, "Checking state must place 完成 button at far bottom-right")
             check(updateSheet.spinner.superview === updateSheet.primaryBtn && !updateSheet.spinner.isHidden, "Checking spinner must be embedded inside primaryBtn")
             for (theme, appearance) in [("light", NSAppearance.Name.aqua), ("dark", NSAppearance.Name.darkAqua)] {
                 updateSheet.sheet.appearance = NSAppearance(named: appearance)
@@ -677,6 +687,8 @@ import Cocoa
                 try capture(updateSheet.sheet.contentView!, output.appendingPathComponent("\(theme)-update-sheet-checking.png"))
             }
             assistant.updateManager.simulateRelease(savedRelease)
+            updateSheet.sheet.contentView?.layoutSubtreeIfNeeded()
+            check(updateSheet.primaryBtn.frame.minX > updateSheet.closeBtn.frame.maxX, "Update available state must place primary update action at far bottom-right")
 
             check(updateSheet.autoUpdateSwitch.state == .off, "Auto update switch in sheet footer must default to off")
             updateSheet.autoUpdateSwitch.state = .off
@@ -986,6 +998,7 @@ import Cocoa
                 "pricingStatus": ["gemini-3.8-flash": "confirmed", "gemini-4-hydrogen": "confirmed"],
             ])
             check(pricingSheet.sheet.contentView != nil, "PricingSyncSheetController must populate native sheet view")
+            check(pricingSheet.closeBtn.title == "完成", "PricingSyncSheetController exit button must be titled 完成")
             check(pricingSheet.subtitleLabel.isHidden && pricingSheet.subtitleLabel.stringValue.isEmpty, "PricingSyncSheetController must hide header subtitle on normal synced state")
             check(pricingSheet.summaryPill.title.hasPrefix("已同步 ") && pricingSheet.summaryPill.title.hasSuffix("· 2 款"), "PricingSyncSheetController pill must display latest sync time and active count: \(pricingSheet.summaryPill.title)")
             check(!pricingSheet.historicalNoteLabel.isHidden && pricingSheet.historicalNoteLabel.stringValue.contains("已下架模型"), "PricingSyncSheetController must explain historical pricing retention")

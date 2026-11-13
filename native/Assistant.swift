@@ -679,7 +679,7 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     }
     func popUpAccountSwitchMenu(from anchorView: NSView) {
         let submenu = buildAccountSwitchMenu()
-        submenu.popUp(positioning: nil, at: NSPoint(x: 0, y: -4), in: anchorView)
+        Design.popUpMenu(submenu, below: anchorView)
     }
     @objc func showAccountsFromMenuCard() {
         closeMenuPopover()

@@ -237,15 +237,16 @@ test('Hydrogen 定价、xhigh 后缀匹配与 Antigravity 动态模型过滤（�
     fallbackPricingUrls: [],
   });
 
-  // 模拟 Antigravity 当前官方仅提供 3 个非禁用系列
+  // 模拟 Antigravity 当前官方包含禁用状态变体（如 Pro 账号未解锁的 gemini-4-carbon-disabled）
   manager.setActiveOfficialModels([
     'gemini-4-hydrogen-xhigh',
     'gemini-4-hydrogen-high',
     'gemini-4-argon-medium',
+    'gemini-4-carbon-disabled',
     'claude-opus-5-5-medium',
   ]);
   const active = await manager.getActivePricingTable();
-  assert.deepEqual(Object.keys(active).sort(), ['claude-opus-5-5', 'gemini-4-argon', 'gemini-4-hydrogen']);
+  assert.deepEqual(Object.keys(active).sort(), ['claude-opus-5-5', 'gemini-4-argon', 'gemini-4-carbon', 'gemini-4-hydrogen']);
 
   // 已移除的模型（如 gpt-4o / claude-3-5-sonnet）不出现在当前价格基准，但历史计价仍可解析
   assert.equal(active['gpt-4o'], undefined);
@@ -260,7 +261,7 @@ test('Hydrogen 定价、xhigh 后缀匹配与 Antigravity 动态模型过滤（�
   const status = await manager.getPricingSyncStatus();
   assert.equal(status.lastCheckSuccess, false);
   assert.ok(status.lastCheckAt >= before, '失败检查后 lastCheckAt 仍需更新为当前检查时间');
-  assert.equal(status.modelCount, 3, 'modelCount 必须与当前官方包含模型基准数量一致');
+  assert.equal(status.modelCount, 4, 'modelCount 必须与当前官方包含模型基准数量一致（含未解锁模型）');
 });
 
 test('已下架历史模型从价格基准过滤后，历史 SQLite 用量费用仍准确核算且无未计价告警', async t => {

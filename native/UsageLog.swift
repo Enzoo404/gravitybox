@@ -105,7 +105,7 @@ final class UsageLogController: NSObject, NSTableViewDataSource, NSTableViewDele
             pageNumber.widthAnchor.constraint(equalToConstant: 46),
             pageNumber.heightAnchor.constraint(equalToConstant: 28)
         ])
-        let close = button("完成", target: self, action: #selector(closeSheet)); close.keyEquivalent = "\u{1b}"
+        let close = button("完成", target: self, action: #selector(closeSheet)); close.bezelColor = Design.blue; close.keyEquivalent = "\u{1b}"
         searchSpinner.style = .spinning; searchSpinner.controlSize = .small; searchSpinner.isDisplayedWhenStopped = false
         searchSpinner.translatesAutoresizingMaskIntoConstraints = false; searchSpinner.isHidden = true
         NSLayoutConstraint.activate([searchSpinner.widthAnchor.constraint(equalToConstant: 16), searchSpinner.heightAnchor.constraint(equalToConstant: 16)])

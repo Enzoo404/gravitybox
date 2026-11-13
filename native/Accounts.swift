@@ -1265,8 +1265,7 @@ final class AccountsPage: NSObject {
         add("上移", #selector(moveAccount(_:)), enabled: id != activeId && row > (accounts.contains { $0["id"] as? String == activeId } ? 1 : 0), tag: -1)
         add("下移", #selector(moveAccount(_:)), enabled: id != activeId && row + 1 < accounts.count, tag: 1)
         menu.addItem(.separator()); add("移除账号…", #selector(deleteCardAccountByIdItem(_:)), enabled: id != activeId)
-        let yOffset = sender.isFlipped ? (sender.bounds.maxY + 4) : -4
-        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: yOffset), in: sender)
+        Design.popUpMenu(menu, below: sender)
     }
     @objc func moveAccount(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? String, let old = accounts.firstIndex(where: { $0["id"] as? String == id }) else { return }
@@ -1440,7 +1439,7 @@ final class AccountsPage: NSObject {
             item.target = self
             menu.addItem(item)
         }
-        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.minY), in: sender)
+        Design.popUpMenu(menu, below: sender)
     }
 
     @objc func importAccounts() {

@@ -226,11 +226,12 @@ final class CachePage: NSObject {
         openTrashButton = button("打开废纸篓", target: nil, action: #selector(openTrashFolder))
         openTrashButton.controlSize = .small
         sheetDoneButton = button("完成", target: nil, action: #selector(MaintenanceSheetController.closeSheet))
-        sheetDoneButton.controlSize = .small
-        sheetDoneButton.keyEquivalent = "\u{1b}"
+        sheetDoneButton.controlSize = .regular
+        sheetDoneButton.bezelColor = Design.blue
+        sheetDoneButton.keyEquivalent = "\r"
         sheetDoneButton.isHidden = true
 
-        let headerActions = horizontal([scanButton, clearButton, sheetDoneButton], spacing: 8)
+        let headerActions = horizontal([scanButton, clearButton], spacing: 8)
         headerActions.detachesHiddenViews = true
         let root = pageStack(title: "存储与维护", actions: headerActions)
         root.spacing = 10
@@ -1284,7 +1285,7 @@ final class CachePage: NSObject {
 // MARK: - Maintenance Sheet Window Controller (方案 A: 设置面板内嵌弹窗)
 final class MaintenanceSheetController: NSObject, NSWindowDelegate {
     unowned let app: Assistant
-    let sheet = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 740, height: 616), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+    let sheet = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 740, height: 660), styleMask: [.titled, .closable], backing: .buffered, defer: false)
     var cachePage: CachePage
     var onDismiss: (() -> Void)?
 
@@ -1303,8 +1304,29 @@ final class MaintenanceSheetController: NSObject, NSWindowDelegate {
         page.sheetDoneButton.isHidden = false
 
         let surface = SheetVisualEffectView()
+        let footerDivider = divider()
+        let footerRow = horizontal([flexibleSpace(), page.sheetDoneButton], spacing: 8)
+        footerRow.alignment = .centerY
+
+        page.view.translatesAutoresizingMaskIntoConstraints = false
+        footerDivider.translatesAutoresizingMaskIntoConstraints = false
+        footerRow.translatesAutoresizingMaskIntoConstraints = false
+
         surface.addSubview(page.view)
-        pin(page.view, to: surface, inset: 0)
+        surface.addSubview(footerDivider)
+        surface.addSubview(footerRow)
+        NSLayoutConstraint.activate([
+            page.view.leadingAnchor.constraint(equalTo: surface.leadingAnchor),
+            page.view.trailingAnchor.constraint(equalTo: surface.trailingAnchor),
+            page.view.topAnchor.constraint(equalTo: surface.topAnchor),
+            page.view.bottomAnchor.constraint(equalTo: footerDivider.topAnchor),
+            footerDivider.leadingAnchor.constraint(equalTo: surface.leadingAnchor, constant: 22),
+            footerDivider.trailingAnchor.constraint(equalTo: surface.trailingAnchor, constant: -22),
+            footerDivider.bottomAnchor.constraint(equalTo: footerRow.topAnchor, constant: -10),
+            footerRow.leadingAnchor.constraint(equalTo: surface.leadingAnchor, constant: 22),
+            footerRow.trailingAnchor.constraint(equalTo: surface.trailingAnchor, constant: -22),
+            footerRow.bottomAnchor.constraint(equalTo: surface.bottomAnchor, constant: -12),
+        ])
         sheet.isOpaque = false
         sheet.backgroundColor = .clear
         sheet.contentView = surface

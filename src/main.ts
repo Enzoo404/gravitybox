@@ -3,6 +3,7 @@ import { GoogleAccountLogin } from './account-oauth.js';
 import { AccountSwitchService } from './account-switch.js';
 import { AccountsManager, computeAccountRevision, projectAccountForIpc } from './accounts.js';
 import { UsageStatsManager, priceStatus } from './usage.js';
+import { FEED_MODEL_KEYS } from './model-catalog.js';
 import { CacheMaintenance } from './maintenance.js';
 import { mkdir, lstat, chmod, unlink, readFile, readdir, writeFile } from 'node:fs/promises';
 import { realpathSync, readFileSync } from 'node:fs';
@@ -378,28 +379,30 @@ async function run() {
       const extractModelIds = (models: any): string[] => {
         if (!Array.isArray(models)) return [];
         return models
-          .filter(m => m && typeof m === 'object' && m.disabled !== true)
+          .filter(m => m && typeof m === 'object')
           .map(m => String(m.model_id ?? m.name ?? '').trim())
           .filter(Boolean);
       };
+      const union = new Set<string>(FEED_MODEL_KEYS);
       const live = await probeLiveCached().catch(() => null);
-      const liveModels = extractModelIds(live?.quota?.models);
-      if (liveModels.length > 0) {
-        usageManager.setActiveOfficialModels(liveModels);
-        return;
+      for (const id of extractModelIds(live?.quota?.models)) {
+        union.add(id);
       }
-      const listRes = await accountsManager.listAccounts().catch(() => null);
-      if (listRes?.accounts?.length) {
-        const preferred = listRes.active_account
-          ?? [...listRes.accounts].sort((a, b) => (b.quota_last_updated ?? 0) - (a.quota_last_updated ?? 0))[0];
-        const saved = preferred ? await accountsManager.getAccount(preferred.id).catch(() => null) : null;
-        const savedModels = extractModelIds(saved?.quota?.models ?? preferred?.quota?.models);
-        if (savedModels.length > 0) {
-          usageManager.setActiveOfficialModels(savedModels);
-          return;
+      if (union.size === FEED_MODEL_KEYS.length) {
+        const listRes = await accountsManager.listAccounts().catch(() => null);
+        if (listRes?.accounts?.length) {
+          const preferred = listRes.active_account
+            ?? [...listRes.accounts].sort((a, b) => (b.quota_last_updated ?? 0) - (a.quota_last_updated ?? 0))[0];
+          const saved = preferred ? await accountsManager.getAccount(preferred.id).catch(() => null) : null;
+          const savedQuota = saved?.quota ?? preferred?.quota;
+          if (savedQuota?.source === 'live') {
+            for (const id of extractModelIds(savedQuota.models)) {
+              union.add(id);
+            }
+          }
         }
       }
-      usageManager.setActiveOfficialModels(null);
+      usageManager.setActiveOfficialModels([...union]);
     } catch {}
   }
   try { const pricePrefs=JSON.parse(await readFile(join(stateDir,'pricing-preferences.json'),'utf8'));usageManager.setAutoRemotePricingSync(pricePrefs.enabled===true); } catch {}

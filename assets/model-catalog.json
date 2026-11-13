@@ -38,10 +38,10 @@
       "provenance": {
         "sourceUrl": "https://cloud.google.com/model-garden/pricing?hl=en",
         "platform": "Google Cloud 标准 Global API",
-        "conditions": "参考 Gemini 4 系列标准 Global API 文本基准估算",
-        "checkedAt": "2026-11-02",
-        "validUntil": null,
-        "verification": "historical"
+        "conditions": "Google Cloud 官方推广期标准 Global API 文本基准（优惠截至2026-11-30）",
+        "checkedAt": "2026-11-13",
+        "validUntil": "2026-11-30T23:59:59Z",
+        "verification": "confirmed"
       },
       "intervals": [
         {
@@ -52,13 +52,13 @@
           "provenance": {
             "sourceUrl": "https://cloud.google.com/model-garden/pricing?hl=en",
             "platform": "Google Cloud 标准 Global API",
-            "conditions": "参考 Gemini 4 系列标准 Global API 文本基准估算",
-            "checkedAt": "2026-11-02",
-            "validUntil": "2026-12-01T00:00:00Z",
-            "verification": "historical"
+            "conditions": "Google Cloud 官方推广期标准 Global API 文本基准（优惠截至2026-11-30）",
+            "checkedAt": "2026-11-13",
+            "validUntil": "2026-11-30T23:59:59Z",
+            "verification": "confirmed"
           },
           "validFrom": null,
-          "validUntil": "2026-12-01T00:00:00Z"
+          "validUntil": "2026-11-30T23:59:59Z"
         },
         {
           "model": "gemini-4-carbon",
@@ -68,10 +68,10 @@
           "provenance": {
             "sourceUrl": "https://cloud.google.com/model-garden/pricing?hl=en",
             "platform": "Google Cloud 标准 Global API",
-            "conditions": "参考 Gemini 4 系列标准 Global API 文本基准估算",
-            "checkedAt": "2026-11-02",
+            "conditions": "Google Cloud 官方 Carbon 标准定价（2026-12-01生效）",
+            "checkedAt": "2026-11-13",
             "validUntil": null,
-            "verification": "historical"
+            "verification": "confirmed"
           },
           "validFrom": "2026-12-01T00:00:00Z",
           "validUntil": null
@@ -1076,6 +1076,7 @@
   "feedModels": [
     "gemini-3.8-flash",
     "gemini-4-argon",
+    "gemini-4-carbon",
     "gemini-4-hydrogen",
     "claude-opus-5-5",
     "claude-sonnet-5-5",
