@@ -26,7 +26,7 @@ extension NSWindow {
 }
 
 final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDelegate, NSPopoverDelegate, NSTableViewDataSource, NSTableViewDelegate {
-    let names = ["总览", "账号", "用量", "设置"]
+    let names = ["总览", "账号", "用量", "设置", "关于"]
     var bridge: BackendBridge!
     var configuration: ConfigurationStore!
     var item: NSStatusItem!
@@ -46,6 +46,8 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     var usagePage: UsagePage?
     var cachePage: CachePage?
     var preferencesController: PreferencesController?
+    var aboutPage: AboutPage?
+    var updateSheet: UpdateSheetController?
     var cachedAccounts: [[String: Any]] = []
     var activeAccountId: String = ""
     var pendingAccountTaskId: String?
@@ -508,11 +510,6 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     @objc func showSettingsFromMenuPanel() {
         closeMenuPopover()
         showSettings()
-    }
-
-    @objc func showAboutFromMenuPanel() {
-        closeMenuPopover()
-        about()
     }
 
     @objc func quitFromMenuPanel() {
@@ -1122,8 +1119,8 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         }
     }
     private func navSymbolName(row: Int, selected: Bool) -> String {
-        let outline = ["square.grid.2x2", "person.2", "chart.bar", "gearshape"][row]
-        let filled = ["square.grid.2x2.fill", "person.2.fill", "chart.bar.fill", "gearshape.fill"][row]
+        let outline = ["square.grid.2x2", "person.2", "chart.bar", "gearshape", "info.circle"][row]
+        let filled = ["square.grid.2x2.fill", "person.2.fill", "chart.bar.fill", "gearshape.fill", "info.circle.fill"][row]
         return selected ? filled : outline
     }
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
@@ -1182,6 +1179,7 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         case 1: return accountsPage?.view
         case 2: return usagePage?.view
         case 3: return preferencesController?.view
+        case 4: return aboutPage?.view
         default: return overview?.view
         }
     }
@@ -1225,6 +1223,12 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             isNewPage = preferencesController == nil
             let page = preferencesController ?? PreferencesController(app: self)
             preferencesController = page
+            page.update()
+            content = page.view
+        case 4:
+            isNewPage = aboutPage == nil
+            let page = aboutPage ?? AboutPage(app: self)
+            aboutPage = page
             page.update()
             content = page.view
         default:
@@ -1312,6 +1316,7 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     @objc func showAccounts() { selectPage(1) }
     @objc func showUsage() { selectPage(2) }
     @objc func showSettings() { selectPage(3) }
+    @objc func showAbout() { selectPage(4) }
     func setTranslationEnabled(_ enable: Bool) {
         let previousStatus = statusValue
         translationCommandGeneration += 1
@@ -1582,69 +1587,7 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     }
 
     @objc func about() {
-        let version = updateManager.currentVersion
-        var buildStr = (Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if buildStr.lowercased().hasPrefix("build ") {
-            buildStr = String(buildStr.dropFirst(6)).trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        if let infoURL = Bundle.main.resourceURL?.appendingPathComponent("build-info.json"),
-           let data = try? Data(contentsOf: infoURL),
-           let info = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let rev = (info["revision"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !rev.isEmpty, buildStr != rev {
-            buildStr = buildStr.isEmpty ? rev : "\(buildStr) · \(rev)"
-        }
-        let resolvedBuild = buildStr.isEmpty ? updateManager.currentBuildDisplay : buildStr
-        guard let window, window.isVisible, window.activeSheetWindow == nil else {
-            let alert = NSAlert(); alert.messageText = "GravityBox"; alert.informativeText = "版本 \(version)\n构建 \(resolvedBuild)"; alert.addButton(withTitle: "关闭")
-            NSApp.activate(ignoringOtherApps: true)
-            alert.runModal()
-            return
-        }
-        let sheet = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 320, height: 236), styleMask: [.titled], backing: .buffered, defer: false)
-        sheet.isReleasedWhenClosed = false
-        sheet.backgroundColor = .clear
-        sheet.isOpaque = false
-        let surface = SheetVisualEffectView()
-        sheet.contentView = surface
-
-        let iconView = NSImageView(image: Design.appIconImage() ?? NSImage())
-        iconView.imageScaling = .scaleProportionallyUpOrDown
-        iconView.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            iconView.widthAnchor.constraint(equalToConstant: 64),
-            iconView.heightAnchor.constraint(equalToConstant: 64)
-        ])
-
-        let nameLabel = text("GravityBox", size: 18, weight: .bold, color: .labelColor)
-        let versionBadge = pillBadge("版本 \(version) · 构建 \(resolvedBuild)", color: Design.blue)
-        let descLabel = text("原生 macOS Antigravity 账号配额与汉化工作台", size: 11.5, color: Design.secondary)
-
-        final class AboutSheetDismiss: NSObject {
-            let host: NSWindow
-            let sheet: NSWindow
-            init(host: NSWindow, sheet: NSWindow) { self.host = host; self.sheet = sheet }
-            @objc func close() { host.endSheet(sheet) }
-        }
-        let dismiss = AboutSheetDismiss(host: window, sheet: sheet)
-        let closeBtn = button("完成", target: dismiss, action: #selector(AboutSheetDismiss.close))
-        closeBtn.bezelColor = .controlAccentColor
-        closeBtn.keyEquivalent = "\r"
-        closeBtn.widthAnchor.constraint(greaterThanOrEqualToConstant: 88).isActive = true
-
-        let stack = vertical([iconView, nameLabel, versionBadge, descLabel, closeBtn], spacing: 10)
-        stack.alignment = .centerX
-        stack.setCustomSpacing(6, after: nameLabel)
-        stack.setCustomSpacing(16, after: descLabel)
-        surface.addSubview(stack)
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            stack.centerXAnchor.constraint(equalTo: surface.centerXAnchor),
-            stack.centerYAnchor.constraint(equalTo: surface.centerYAnchor),
-            stack.leadingAnchor.constraint(greaterThanOrEqualTo: surface.leadingAnchor, constant: 20),
-            stack.trailingAnchor.constraint(lessThanOrEqualTo: surface.trailingAnchor, constant: -20)
-        ])
-        window.beginSheet(sheet) { _ in withExtendedLifetime(dismiss) {} }
+        showAbout()
     }
     func perform(_ payload: [String: Any], completion: (([String: Any]) -> Void)? = nil) {
         bridge.send(payload) { [weak self] result in switch result { case .success(let value): completion?(value); case .failure(let error): self?.showMessage(error.localizedDescription, error: true) } }
@@ -1801,6 +1744,8 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
                 if preferencesController?.maintenanceSheet?.sheet.isVisible == true {
                     cachePage?.update()
                 }
+            case 4:
+                aboutPage?.update()
             default: break
             }
         }
@@ -1887,7 +1832,7 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         return merged
     }
     func syncUpdatePromptControls() {
-        preferencesController?.refreshUpdateRowState()
+        aboutPage?.refreshUpdateState()
         if let release = updateManager.availableRelease {
             installUpdateButton?.badgeText = "v\(release.version)"
             installUpdateButton?.toolTip = nil
@@ -1898,24 +1843,26 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             installUpdateButton?.isHidden = true
         }
     }
+
+    @objc func showUpdateSheet() {
+        showPanel()
+        guard let window else { return }
+        if let active = window.activeSheetWindow, active !== updateSheet?.sheet { return }
+        if updateSheet == nil {
+            updateSheet = UpdateSheetController(app: self)
+        }
+        updateSheet?.show(in: window)
+    }
+
     @objc func installUpdateFromSidebar() {
         guard let release = updateManager.availableRelease else {
             checkForUpdatesFromMenu()
             return
         }
-        if let active = window?.activeSheetWindow, active !== preferencesController?.updateSheet?.sheet {
+        if let active = window?.activeSheetWindow, active !== updateSheet?.sheet {
             dismissAllSheetsAndPopovers()
         }
-        showPanel()
-        if let window {
-            if preferencesController == nil {
-                preferencesController = PreferencesController(app: self)
-            }
-            if preferencesController?.updateSheet == nil {
-                preferencesController?.updateSheet = UpdateSheetController(app: self)
-            }
-            preferencesController?.updateSheet?.show(in: window)
-        }
+        showUpdateSheet()
         updateManager.installRelease(release)
     }
     func configureAutoUpdateTimer() {
@@ -1943,11 +1890,11 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         }
     }
     @objc func checkForUpdatesFromMenu() {
-        if let active = window?.activeSheetWindow, active !== preferencesController?.updateSheet?.sheet {
+        if let active = window?.activeSheetWindow, active !== updateSheet?.sheet {
             dismissAllSheetsAndPopovers()
         }
-        showSettings()
-        preferencesController?.showUpdateSheet()
+        showAbout()
+        showUpdateSheet()
     }
     @objc func quit() {
         performQuit()

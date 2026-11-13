@@ -353,12 +353,6 @@ test('Main IPC 集成测试: 0.9.0 账号管理、额度策略、Token 用量与
     assert.equal(typeof listRes.accounts[0].resetTime, 'string');
     assert.equal(listRes.accounts[0].quota.five_hour_remaining, null);
 
-    // 2.1 测试 account_export 兼容 data 与 export
-    const exportRes = await rpc(directory, { command: 'account_export' });
-    assert.equal(exportRes.ok, true);
-    assert.ok(exportRes.export);
-    assert.ok(exportRes.data);
-
     // 3. 测试 auto_switch_get 与 auto_switch_set
     const setCfgRes = await rpc(directory, {
       command: 'auto_switch_set',

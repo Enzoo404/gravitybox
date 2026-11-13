@@ -9,7 +9,7 @@ import {fileURLToPath} from 'node:url';
 import {nativeBuildArgs} from '../tools/native-build.mjs';
 const run=promisify(execFile),root=fileURLToPath(new URL('../',import.meta.url));
 const timeout = process.env.CI ? 360000 : 120000;
-test('当前四页原生布局、菜单完整身份、部分计价与真实切号控制流隔离检查',{timeout},async t=>{
+test('当前五页原生布局、菜单完整身份、部分计价与真实切号控制流隔离检查',{timeout},async t=>{
  const temp=await mkdtemp(join(tmpdir(),'gb-native-ui-'));
  const binary=join(temp,'GravityBox-layout-preview');
  const version=JSON.parse(await readFile(join(root,'package.json'),'utf8')).version;
@@ -25,7 +25,7 @@ test('当前四页原生布局、菜单完整身份、部分计价与真实切�
   t.diagnostic(`Swift compile ${(timings.compileMs/1000).toFixed(2)}s; AppKit checks and captures ${(timings.renderMs/1000).toFixed(2)}s`);
   await writeFile(join(output,'render.log'),result.stdout+result.stderr);
   const report=JSON.parse(await readFile(join(output,'native-ui-results.json')));
-  assert.equal(report.stableOnlySelectionPassed,true);assert.equal(report.nativeLayouts,24);assert.equal(report.menuCaptures,4);assert.equal(report.safeSwitchSharedFlowPassed,true);assert.equal(report.emailWidthPassed,true);
+  assert.equal(report.stableOnlySelectionPassed,true);assert.equal(report.nativeLayouts,30);assert.equal(report.menuCaptures,4);assert.equal(report.safeSwitchSharedFlowPassed,true);assert.equal(report.emailWidthPassed,true);
   for(const name of report.captures){const data=await readFile(join(output,name));assert.equal(data.subarray(1,4).toString(),'PNG');assert.ok(data.length>10000);}
   for(const sheet of ['light-maintenance-sheet.png','dark-maintenance-sheet.png']){const data=await readFile(join(output,sheet));assert.equal(data.subarray(1,4).toString(),'PNG');assert.ok(data.length>10000);}
   await rm(join(output,'failure.log'),{force:true});

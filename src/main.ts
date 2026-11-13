@@ -1,8 +1,15 @@
-import { ALLOWED_DATA_DIRECTORY_NAMES, applicationChannel, savedApplicationChannel, applicationTarget, channelStateDirectory, detectInstalledChannels, type ApplicationChannel, type ApplicationTarget } from './application-target.js';
+import { ALLOWED_DATA_DIRECTORY_NAMES, applicationChannel, savedApplicationChannel, applicationTarget, detectInstalledChannels, type ApplicationChannel, type ApplicationTarget } from './application-target.js';
 import { GoogleAccountLogin } from './account-oauth.js';
 import { AccountSwitchService } from './account-switch.js';
-import { AccountsManager, computeAccountRevision, projectAccountForIpc } from './accounts.js';
+import { AccountsManager, computeAccountRevision } from './accounts.js';
 import { UsageStatsManager, priceStatus } from './usage.js';
+import {
+  normalizeSubscriptionTier,
+  projectAccountForIpcNormalized as projectAccountNormalizedWithManager,
+  projectQuotaContract,
+  projectUsagePeriodSummary,
+} from './ipc-projections.js';
+export { normalizeSubscriptionTier, projectQuotaContract };
 import { FEED_MODEL_KEYS } from './model-catalog.js';
 import { CacheMaintenance } from './maintenance.js';
 import { mkdir, lstat, chmod, unlink, readFile, readdir, writeFile } from 'node:fs/promises';
@@ -17,7 +24,7 @@ import { fileURLToPath } from 'node:url';
 import { DictionaryStore, loadDictionary, dictionaryFromEntries, validateEntries } from './dictionary.js';
 import { Controller, type AssistantStatus } from './controller.js';
 import { coverageMetricSnapshot } from './coverage.js';
-import { atomicJson, sanitizeError } from './files.js';
+import { atomicJson, readOptionalJson, sanitizeError } from './files.js';
 import { discover } from './discovery.js';
 import { Tasks } from './tasks.js';
 import { acquireProcessLease, type ProcessLease } from './process-lock.js';
@@ -47,22 +54,6 @@ function formatResetTime(resetTime: number | null | undefined): string {
   return !isNaN(date.getTime()) ? `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}` : String(resetTime);
 }
 
-/** 套餐枚举统一收口；空值/未知值一律回落到“待确认”，空串不得穿透 IPC。 */
-export function normalizeSubscriptionTier(value: unknown): 'FREE' | 'PRO' | 'ULTRA' | '待确认' {
-  if (typeof value !== 'string') return '待确认';
-  const raw = value.trim();
-  if (!raw) return '待确认';
-  const upper = raw.toUpperCase();
-  if (upper === 'FREE') return 'FREE';
-  if (upper === 'PRO') return 'PRO';
-  if (upper === 'ULTRA') return 'ULTRA';
-  // 兼容 live 语言服务返回的描述型套餐名（如 "Google AI Pro" / "Gemini Ultra"）。
-  if (/\bULTRA\b/i.test(raw)) return 'ULTRA';
-  if (/\bPRO\b/i.test(raw)) return 'PRO';
-  if (/\bFREE\b/i.test(raw) || /starter/i.test(raw)) return 'FREE';
-  return '待确认';
-}
-
 /** 合并本机实时语言服务配额与已保存账号配额：当实时探测未返回分组/已知配额（如企业 Vertex AI）或套餐回退 FREE 时，保留已存分组、模型配额与真实高级套餐。 */
 function mergeLiveQuotaWithSaved(savedQuota: any, liveQuota: any): any {
   if (!liveQuota) return savedQuota;
@@ -79,20 +70,6 @@ function mergeLiveQuotaWithSaved(savedQuota: any, liveQuota: any): any {
     subscription_tier: (liveQuota.subscription_tier && liveQuota.subscription_tier !== 'FREE')
       ? liveQuota.subscription_tier
       : (savedQuota.subscription_tier || liveQuota.subscription_tier),
-  };
-}
-
-/** Single contract for dashboard, account cards, menu and refresh replies. No credentials. */
-export function projectQuotaContract(overview: any): Record<string, any> {
-  return {
-    familyWindows: overview.familyWindows,
-    familyModelQuota: overview.familyModelQuota,
-    argonStatus: overview.argonStatus,
-    carbonStatus: overview.carbonStatus ?? null,
-    standaloneModels: overview.standaloneModels ?? [],
-    refreshState: overview.refreshState,
-    quotaWarnings: overview.quotaWarnings,
-    quotaWarningCodes: overview.quotaWarningCodes,
   };
 }
 
@@ -313,7 +290,7 @@ async function run() {
   let appPath = explicitAppArg ?? selectedTarget.appPath;
   let profile = explicitProfileArg ?? selectedTarget.profile;
   let target: ApplicationTarget = applicationTarget(channel, undefined, { appPath, profile });
-  let channelStateDir = channelStateDirectory(stateDir, channel);
+  let channelStateDir = stateDir;
   if (args.includes('--diagnose')) {
     const endpoint = await discover(appPath, profile);
     console.log(JSON.stringify(endpoint ? { found: true, pid: endpoint.pid, appVersion: endpoint.appVersion, legacyPatch: endpoint.legacyPatch, loopback: true } : { found: false })); return;
@@ -350,7 +327,8 @@ async function run() {
     if (accountSyncInFlight) return accountSyncInFlight;
     accountSyncInFlight = (async () => {
       try {
-        const listRes = await accountsManager.listAccounts().catch(() => null);
+        const live = await probeLiveCached().catch(() => null);
+        const listRes = await accountsManager.listAccounts({ liveEmailHint: live?.email ?? null }).catch(() => null);
         if (listRes?.accounts) {
           usageManager.setKnownAccounts(listRes.accounts.map(a => ({
             id: a.id,
@@ -358,7 +336,6 @@ async function run() {
             name: a.name ?? null,
           })));
         }
-        const live = await probeLiveCached().catch(() => null);
         const observedEmail = typeof live?.email === 'string' && /^[^\s@]+@[^\s@]+$/.test(live.email) ? live.email : null;
         if (observedEmail) {
           const matched = listRes?.accounts.find(account => account.email.toLowerCase() === observedEmail.toLowerCase());
@@ -405,21 +382,13 @@ async function run() {
       usageManager.setActiveOfficialModels([...union]);
     } catch {}
   }
-  try { const pricePrefs=JSON.parse(await readFile(join(stateDir,'pricing-preferences.json'),'utf8'));usageManager.setAutoRemotePricingSync(pricePrefs.enabled===true); } catch {}
+  const pricePrefs = await readOptionalJson<{ enabled?: boolean }>(join(stateDir, 'pricing-preferences.json'), 'pricing-preferences.json');
+  if (pricePrefs) usageManager.setAutoRemotePricingSync(pricePrefs.enabled === true);
   const idempotencyStore = new IdempotencyStore();
   let backendLease: ProcessLease | undefined;
 
-  function projectAccountForIpcNormalized(account: any): Record<string, any> | null {
-    const projected = projectAccountForIpc(account);
-    if (!projected) return projected;
-    const normalized: Record<string, any> = { ...projected, subscription_tier: normalizeSubscriptionTier(projected.subscription_tier) };
-    if (projected.quota && typeof projected.quota === 'object') {
-      normalized.quota = { ...projected.quota, subscription_tier: normalizeSubscriptionTier((projected.quota as any).subscription_tier) };
-    }
-    const contract = projectQuotaContract(accountsManager.getAccountQuotaOverview(account));
-    Object.assign(normalized, contract);
-    if (normalized.quota) Object.assign(normalized.quota, contract);
-    return normalized;
+  function projectAccountForIpcNormalized(account: Parameters<typeof projectAccountNormalizedWithManager>[0]): Record<string, unknown> | null {
+    return projectAccountNormalizedWithManager(account, accountsManager);
   }
 
   await mkdir(stateDir, { recursive: true, mode: 0o700 });
@@ -494,16 +463,15 @@ async function run() {
   const shortcutEnabled = !!fixture;
   let initiallyPaused = false;
   let hudEnabled = typeof configuredHudEnabled === 'boolean' ? configuredHudEnabled : true;
-  try {
-    const runtimePrefs = JSON.parse(await readFile(join(stateDir, 'runtime-preferences.json'), 'utf8'));
+  const runtimePrefs = await readOptionalJson<{ translationEnabled?: boolean; hudEnabled?: boolean }>(join(stateDir, 'runtime-preferences.json'), 'runtime-preferences.json');
+  if (runtimePrefs) {
     initiallyPaused = runtimePrefs.translationEnabled === false;
     if (typeof configuredHudEnabled !== 'boolean' && typeof runtimePrefs.hudEnabled === 'boolean') {
       hudEnabled = runtimePrefs.hudEnabled;
     }
-  } catch {}
+  }
   const saveRuntimePreferences = async (patch: { translationEnabled?: boolean; hudEnabled?: boolean }) => {
-    let currentPrefs: Record<string, unknown> = {};
-    try { currentPrefs = JSON.parse(await readFile(join(stateDir, 'runtime-preferences.json'), 'utf8')); } catch {}
+    const currentPrefs = (await readOptionalJson<Record<string, unknown>>(join(stateDir, 'runtime-preferences.json'), 'runtime-preferences.json')) ?? {};
     const nextPrefs = { ...currentPrefs, translationEnabled: controller.snapshot().translationEnabled !== false, hudEnabled, ...patch };
     if (typeof patch.hudEnabled === 'boolean') {
       hudEnabled = patch.hudEnabled;
@@ -529,7 +497,7 @@ async function run() {
   let commandChain = Promise.resolve(); let stopping = false; const ipcMetrics = { statusRequests: 0, taskPayloadReplies: 0 };
   async function recommendationPreview(config: any, cached: boolean) {
     const live = await (cached ? probeLiveCached() : accountsManager.probeLiveLanguageServer()).catch(() => null);
-    const detectedEmail = live?.email ?? await accountsManager.detectCurrentAntigravityEmail().catch(() => null);
+    const detectedEmail = live?.email ?? await accountsManager.detectCurrentAntigravityEmail({ liveEmailHint: null }).catch(() => null);
     const index = await accountsManager.loadIndex();
     const currentId = detectedEmail ? index.accounts.find(a => a.email.toLowerCase() === detectedEmail.toLowerCase())?.id : undefined;
     if (live?.email && !currentId) return null;
@@ -587,11 +555,11 @@ async function run() {
           let accountsRevision = '';
           try {
             if (parsed.includeAccounts === false) throw new Error('lightweight status');
-            const listRes = await accountsManager.listAccounts();
+            const liveLs = await probeLiveCached().catch(() => null);
+            const listRes = await accountsManager.listAccounts({ liveEmailHint: liveLs?.email ?? null });
             accountsRevision = listRes.revision;
             usageManager.setKnownAccounts(listRes.accounts.map(a => ({ id: a.id, email: a.email, name: a.name ?? null })));
-            const liveLs = await probeLiveCached().catch(() => null);
-            const detectedEmail = liveLs?.email ?? await accountsManager.detectCurrentAntigravityEmail().catch(() => null);
+            const detectedEmail = liveLs?.email ?? await accountsManager.detectCurrentAntigravityEmail({ liveEmailHint: null }).catch(() => null);
             if (detectedEmail) {
               liveAccountEmail = liveLs?.email ?? null;
               const matchedSummary = listRes.accounts.find(a => a.email.toLowerCase() === detectedEmail.toLowerCase());
@@ -649,12 +617,13 @@ async function run() {
         const counts = store.layerCounts;
         const dictTotal = (counts?.builtin ?? 0) + (counts?.incremental ?? 0) + (counts?.personal ?? 0);
         await syncActiveOfficialModelsToUsageManager();
+        const liveForDashboard = await probeLiveCached().catch(() => null);
         const [report, aggregate] = await Promise.all([
           controller.coverageReport(),
           buildDashboardAggregate({
-            listAccounts: () => accountsManager.listAccounts(),
+            listAccounts: () => accountsManager.listAccounts({ liveEmailHint: liveForDashboard?.email ?? null }),
             getAutoSwitchConfig: () => accountsManager.getAutoSwitchConfig(),
-            probeLiveLanguageServer: () => probeLiveCached(),
+            probeLiveLanguageServer: () => Promise.resolve(liveForDashboard),
             getAccount: (id: string) => accountsManager.getAccount(id),
             getAccountQuotaOverview: (account: any, options?: any) => accountsManager.getAccountQuotaOverview(account, options),
             getUsageSummary: () => usageManager.getUsageSummary(),
@@ -700,7 +669,7 @@ async function run() {
             const index = await accountsManager.loadIndex();
             const listNowMs = Date.now();
             const live = await probeLiveCached().catch(() => null);
-            const detectedEmail = live?.email ?? await accountsManager.detectCurrentAntigravityEmail().catch(() => null);
+            const detectedEmail = live?.email ?? await accountsManager.detectCurrentAntigravityEmail({ liveEmailHint: null }).catch(() => null);
             let effectiveActiveId = index.current_account_id;
             if (detectedEmail) {
               const matched = index.accounts.find(a => a.email.toLowerCase() === detectedEmail.toLowerCase());
@@ -912,72 +881,7 @@ async function run() {
             const targetAccountId = typeof parsed.accountId === 'string' && parsed.accountId ? parsed.accountId : undefined;
             if (targetAccountId) await syncActiveAccountToUsageManager().catch(() => {});
             const usage = await usageManager.getUsageSummary(force, targetAccountId);
-            const periodKey = parsed.period === 'today' ? 'today' : parsed.period === '7d' ? 'last_7_days' : parsed.period === '30d' ? 'last_30_days' : 'all_time';
-            const p = (usage as any)[periodKey] ?? usage.all_time;
-            const byModel = p.by_model.map((m: any) => ({
-              model: m.model,
-              promptTokens: m.input_tokens,
-              candidatesTokens: m.output_tokens,
-              cachedTokens: m.cached_tokens,
-              cacheWriteTokens: m.cache_write_tokens ?? 0,
-              totalTokens: m.total_tokens,
-              requestCount: m.request_count,
-              estimatedUsd: m.estimated_usd,
-              priced: m.priced === true,
-              partiallyPriced: m.partiallyPriced === true, unpricedTokens: m.unpriced_tokens ?? 0,
-              pricingKey: m.pricingKey, pricingStatus: m.pricingStatus, pricingProvenance: m.pricingProvenance,
-              input_tokens: m.input_tokens,
-              output_tokens: m.output_tokens,
-              cached_tokens: m.cached_tokens,
-              cache_write_tokens: m.cache_write_tokens ?? 0,
-              total_tokens: m.total_tokens,
-              request_count: m.request_count,
-              estimated_usd: m.estimated_usd,
-            }));
-            const cacheDenom = p.totals.input_tokens + p.totals.cached_tokens + (p.totals.cache_write_tokens ?? 0);
-            const cacheHitRate = cacheDenom > 0 ? Math.round((p.totals.cached_tokens / cacheDenom) * 1000) / 10 : 0;
-            const periodSummary = {
-              ...usage,
-              totalTokens: p.totals.total_tokens,
-              promptTokens: p.totals.input_tokens,
-              candidatesTokens: p.totals.output_tokens,
-              cachedTokens: p.totals.cached_tokens,
-              cacheWriteTokens: p.totals.cache_write_tokens ?? 0,
-              requestCount: p.totals.request_count,
-              estimatedUsd: p.estimated_usd,
-              cacheHitRate,
-              total_tokens: p.totals.total_tokens,
-              input_tokens: p.totals.input_tokens,
-              output_tokens: p.totals.output_tokens,
-              cached_tokens: p.totals.cached_tokens,
-              cache_write_tokens: p.totals.cache_write_tokens ?? 0,
-              request_count: p.totals.request_count,
-              estimated_usd: p.estimated_usd,
-              databasesScanned: usage.databases_scanned,
-              databasesDiscovered: usage.databases_discovered,
-              scanScopeDescription: usage.scan_scope_description,
-              pricedModels: p.priced_models ?? usage.priced_models ?? 0,
-              unpricedModels: p.unpriced_models ?? usage.unpriced_models ?? 0,
-              failedDatabasesCount: usage.failed_databases_count ?? 0,
-              skippedLargeRecords: usage.skipped_large_records ?? 0,
-              lastScannedAt: usage.generated_at ?? 0,
-              hasError: usage.has_error === true,
-              availability: usage.availability ?? 'complete',
-              unknownTimeRecords: usage.unknown_time_records ?? 0,
-              unknownTimeTokens: usage.unknown_time_tokens ?? 0,
-              databaseDiagnostics: usage.database_diagnostics ?? [],
-              selectedAccountId: usage.selected_account_id ?? 'all',
-              selected_account_id: usage.selected_account_id ?? 'all',
-              availableAccounts: usage.available_accounts ?? [],
-              available_accounts: usage.available_accounts ?? [],
-            };
-            const { today, last_7_days, last_30_days, all_time, daily_trends, today_hourly, ...selectedSummary } = periodSummary;
-            const days = parsed.period === 'today' ? 1 : parsed.period === '7d' ? 7 : parsed.period === '30d' ? 30 : null;
-            const selectedTrends = days ? usage.daily_trends.slice(-days) : usage.daily_trends;
-            reply({ ok: true, period: parsed.period ?? 'all', snapshotId: usage.snapshot_id,
-              selectedAccountId: usage.selected_account_id ?? 'all',
-              availableAccounts: usage.available_accounts ?? [],
-              summary: selectedSummary, byModel, models: byModel, dailyTrends: selectedTrends, todayHourly: parsed.period === 'today' ? usage.today_hourly : [] });
+            reply(projectUsagePeriodSummary(usage, parsed.period));
             return;
           }
           if (command === 'api_pricing_get') {
@@ -1036,21 +940,6 @@ async function run() {
               quota: account.quota ? { ...account.quota, subscription_tier: normalizeSubscriptionTier((account.quota as any).subscription_tier) } : account.quota,
             }));
             reply({ ok: true, accounts: reordered });
-            return;
-          }
-          if (command === 'account_export') {
-            // 默认脱敏；只有用户在原生端明确确认“包含长期凭据”后才导出 refresh_token。
-            const exp = await accountsManager.exportAccounts(parsed.ids, { confirm: parsed.confirm === true });
-            reply({ ok: true, export: exp, data: exp });
-            return;
-          }
-          if (command === 'account_import') {
-            const payload = parsed.data ?? parsed.export;
-            if (payload && typeof payload === 'object' && payload.tokens_included === false) {
-              throw new Error('该备份为脱敏摘要，不含登录凭据，无法恢复账号；请重新导出并选择“包含凭据导出”');
-            }
-            const res = await accountsManager.importAccounts(payload);
-            reply({ ok: true, ...res });
             return;
           }
           if (command === 'account_switch') {

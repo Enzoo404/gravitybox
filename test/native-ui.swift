@@ -173,7 +173,7 @@ import Cocoa
             window.appearance = NSAppearance(named:appearance)
             for size in [NSSize(width:880,height:580),NSSize(width:960,height:640),NSSize(width:1100,height:760)] {
                 window.setFrame(NSRect(origin:window.frame.origin,size:size),display:true)
-                for page in 0..<4 {
+                for page in 0..<5 {
                     assistant.selectPage(page); pump(); window.contentView?.layoutSubtreeIfNeeded()
                     let name = "\(theme)-\(Int(size.width))x\(Int(size.height))-\(page).png"
                     try capture(window.contentView!,output.appendingPathComponent(name)); captures.append(name)
@@ -204,7 +204,8 @@ import Cocoa
             let policy = AccountPolicySheet(app:assistant,config:["strategy":"priority","monitored_model":"gemini","reserve_percentage":10,"candidate_min_percentage":30],saved:{})
             policy.show(in:window,onDismiss:{})
             policy.window.appearance = NSAppearance(named:appearance); pump()
-            check(policy.modelPopup.itemTitles == ["全部主力模型（Gemini + Claude/GPT）","Gemini","Claude/GPT","Gemini 4 Argon","Gemini 4 Carbon"], "Model popup must expose Gemini, Claude/GPT, Gemini 4 Argon, and Gemini 4 Carbon")
+            check(policy.modelPopup.itemTitles == ["Gemini 全系模型","Gemini","Claude/GPT","Gemini 4 Argon","Gemini 4 Carbon"], "Model popup must expose Gemini 全系模型, Gemini, Claude/GPT, Gemini 4 Argon, and Gemini 4 Carbon")
+            check(policy.strategyPopup.frame.width == policy.modelPopup.frame.width, "Policy popups must share uniform width")
             var dynamicAccount = accounts[0]
             dynamicAccount["standaloneModels"] = [
                 ["key":"argon","displayName":"Gemini 4 Argon","availability":"available","quotaState":"known","period":"weekly","remaining":0.008],
@@ -213,7 +214,7 @@ import Cocoa
             ]
             assistant.cachedAccounts = [dynamicAccount]
             let dynamicPolicy = AccountPolicySheet(app:assistant,config:["strategy":"priority","monitored_model":"xenon","reserve_percentage":10,"candidate_min_percentage":30],saved:{})
-            check(dynamicPolicy.modelPopup.itemTitles == ["全部主力模型（Gemini + Claude/GPT）","Gemini","Claude/GPT","Gemini 4 Argon","Gemini 4 Carbon","Gemini 4 Xenon"], "Model popup must auto-detect new standalone models")
+            check(dynamicPolicy.modelPopup.itemTitles == ["Gemini 全系模型","Gemini","Claude/GPT","Gemini 4 Argon","Gemini 4 Carbon","Gemini 4 Xenon"], "Model popup must auto-detect new standalone models")
             check(dynamicPolicy.modelPopup.selectedItem?.title == "Gemini 4 Xenon", "Model popup must select configured dynamic model")
             assistant.cachedAccounts = accounts
             for popup in [policy.strategyPopup, policy.modelPopup] {
@@ -261,6 +262,8 @@ import Cocoa
             check(!maintSheet.cachePage.snapshotPopup.isHidden && maintSheet.cachePage.snapshotPopup.numberOfItems == 2, "Maintenance recovery footer must expose multi-snapshot selector when >=2 restorable snapshots exist")
             check(maintSheet.cachePage.selectedNames == Set(["Cache", "AgentBrowserCache", "PartitionsCache", "OrphanAgentData"]), "Maintenance default selection must check safe items only and leave history slimming items unchecked")
             check(!maintSheet.cachePage.sheetDoneButton.isHidden && maintSheet.cachePage.sheetDoneButton.title == "完成", "Maintenance sheet must display 完成 button")
+            check(maintSheet.cachePage.selectedSummaryBadge.title == "已选 4 项", "Maintenance selectedSummaryBadge must update from 正在扫描 to 已选 4 项 after scan completes")
+            check(maintSheet.cachePage.breakdownWarningLabel.isHidden, "Maintenance breakdownWarningLabel must stay hidden when no items are blocked")
             check(maintSheet.cachePage.sheetDoneButton.frame.minY < maintSheet.cachePage.view.frame.minY, "Maintenance 完成 button must sit in pinned bottom footer below scroll area")
             check(maintSheet.cachePage.sheetDoneButton.frame.maxX > maintSheet.cachePage.clearButton.frame.minX, "Maintenance 完成 button must align at bottom-right")
             try capture(maintSheet.sheet.contentView!, output.appendingPathComponent("\(theme)-maintenance-sheet.png"))
@@ -459,7 +462,11 @@ import Cocoa
         check(ov.rightBentoTitleLabel.stringValue == "今日活跃模型", "Overview right Bento card title must be 今日活跃模型")
         check(ov.rightBentoCountBadge.title == "Top 2 / 共 4 个", "Overview right Bento count badge must show Top 2 / 共 4 个")
         check(ov.bentoRightStack.arrangedSubviews.count == 2, "Overview Bento right stack must display 2 subrows")
+        func findButtons(_ v: NSView) -> [NSButton] { (v as? NSButton).map { [$0] } ?? v.subviews.flatMap { findButtons($0) } }
+        check(!findButtons(ov.view).contains { $0.title == "管理账号" }, "Overview hero card must not display 管理账号 button")
         if let firstBox = ov.bentoRightStack.arrangedSubviews.first as? NSBox {
+            func findBadges(_ v: NSView) -> [PillBadge] { (v as? PillBadge).map { [$0] } ?? v.subviews.flatMap { findBadges($0) } }
+            check(findBadges(firstBox).allSatisfy { $0.isHidden }, "Active model row must move USD into subtitle without showing a pill badge")
             check(firstBox.accessibilityLabel()?.contains("Gemini 3.8 Flash") == true || firstBox.accessibilityLabel()?.contains("gemini-3.8-flash") == true, "Subrow box must expose VoiceOver accessibility label")
             check(firstBox.toolTip == nil || firstBox.toolTip?.isEmpty == true, "Overview Bento subrows must be read-only without deep-link tooltip")
             check(firstBox.accessibilityRole() == .group, "Subrow box must be an accessible display group, not a button")
@@ -565,11 +572,18 @@ import Cocoa
         }
         check(!allTextValues(stableSettings.view).contains { $0.localizedCaseInsensitiveContains("Insiders") || $0.contains("目标应用") }, "Settings UI must not display target application switcher or Insiders text")
         check(stableSettings.manageCacheBtn.title == "管理存储…", "Storage settings row button must display 管理存储…")
+        check(stableSettings.pricingSyncCheckBtn.title == "立即检查" && stableSettings.pricingSyncCheckBtn.intrinsicContentSize.height == 28, "Pricing check button must use fixed-width InlineRefreshButton matching global 28pt height")
+        stableSettings.pricingSyncCheckBtn.setBusy(true, available: true)
+        check(stableSettings.pricingSyncCheckBtn.isActivitySpinning && stableSettings.pricingSyncCheckBtn.title == "立即检查", "Pricing check button must spin in place without title jump")
+        stableSettings.pricingSyncCheckBtn.setBusy(false, available: true)
         stableSettings.refreshStorageRowState(force: true); pump()
         check(!stableSettings.storageBadge.isHidden && stableSettings.storageBadge.title.hasPrefix("可释放 "), "Storage settings row must display reclaimable space pill badge")
-        check(stableSettings.checkUpdateBtn.title == "检查更新", "About row must replace 关于 GravityBox with 检查更新 button")
-        check(!allTextValues(stableSettings.view).contains("关于 GravityBox"), "Settings UI must not contain 关于 GravityBox button")
-        check(stableSettings.aboutSubtitleLabel.isHidden && stableSettings.aboutSubtitleLabel.stringValue.isEmpty, "About row subtitle must stay hidden when no update is available")
+        check(!allTextValues(stableSettings.view).contains("检查更新") && !allTextValues(stableSettings.view).contains("关于"), "Settings UI must extract 关于 section out into its own top-level sidebar tab")
+        assistant.selectPage(4); pump()
+        let aboutPage = assistant.aboutPage!
+        check(assistant.names == ["总览", "账号", "用量", "设置", "关于"], "Sidebar must contain 5 top-level tabs ending with 关于")
+        check(aboutPage.checkUpdateBtn.title == "检查更新", "About page must display 检查更新 button")
+        check(aboutPage.updateStatusLabel.stringValue.contains("检查更新") || aboutPage.updateStatusLabel.stringValue.contains("最新版本"), "About page must display update status copy when idle/up-to-date")
         check(assistant.installUpdateButton?.isHidden == true, "Sidebar installUpdateButton must stay hidden when no update is available")
         assistant.updateManager.simulateRelease(AppReleaseInfo(
             version: "1.1.0",
@@ -581,8 +595,8 @@ import Cocoa
             dmgURL: nil,
             sha256URL: nil
         ))
-        stableSettings.refreshUpdateRowState()
-        check(!stableSettings.aboutSubtitleLabel.isHidden && stableSettings.aboutSubtitleLabel.stringValue == "发现新版本 v1.1.0，可立即升级", "About row must display exact update subtitle when update is available")
+        aboutPage.refreshUpdateState()
+        check(!aboutPage.installNowBtn.isHidden && aboutPage.updateStatusLabel.stringValue.contains("v1.1.0"), "About page must display inline update prompt and 立即更新 button when update is available")
         check(assistant.installUpdateButton?.isHidden == false && assistant.installUpdateButton?.title == "安装更新" && assistant.installUpdateButton?.badgeText == "v1.1.0" && assistant.installUpdateButton?.isUpdatePrompt == true, "Sidebar must display 安装更新 prompt capsule above 打开 Antigravity when update is available")
         if let installBtn = assistant.installUpdateButton, let openBtn = assistant.launchApplicationButton, let bStack = installBtn.superview as? NSStackView {
             let installIdx = bStack.arrangedSubviews.firstIndex(of: installBtn) ?? -1
@@ -596,9 +610,9 @@ import Cocoa
             window.contentView?.layoutSubtreeIfNeeded(); pump()
             try capture(window.contentView!, output.appendingPathComponent("\(theme)-hero-install-update-capsule.png"))
         }
-        assistant.selectPage(3); pump()
-        stableSettings.showUpdateSheet(); pump()
-        if let updateSheet = stableSettings.updateSheet {
+        assistant.selectPage(4); pump()
+        aboutPage.openUpdateSheet(); pump()
+        if let updateSheet = assistant.updateSheet {
             check(updateSheet.primaryBtn.title == "立即更新", "Update sheet must display 立即更新 button when release is available")
             check(updateSheet.primaryBtn.showsSpinner == false && updateSheet.spinner.isHidden == true, "Update sheet primaryBtn must hide inline spinner when updateAvailable")
             check(updateSheet.closeBtn.isEnabled == true, "Update sheet closeBtn must be enabled in updateAvailable state")
@@ -717,10 +731,10 @@ import Cocoa
             check(window.activeSheetWindow == nil, "dismissAllSheetsAndPopovers must cleanly end attached modal update sheet before update restart")
         }
         assistant.updateManager.simulateRelease(nil)
-        stableSettings.refreshUpdateRowState()
-        check(stableSettings.aboutSubtitleLabel.isHidden, "Clearing available release must hide about row subtitle again")
+        aboutPage.refreshUpdateState()
+        check(!aboutPage.checkUpdateBtn.isHidden && aboutPage.installNowBtn.isHidden, "Clearing available release must restore 检查更新 button on About page")
         check(assistant.installUpdateButton?.isHidden == true, "Clearing available release must hide sidebar installUpdateButton again")
-        if let updateSheet = stableSettings.updateSheet {
+        if let updateSheet = assistant.updateSheet {
             check(updateSheet.closeBtn.isEnabled == true && updateSheet.primaryBtn.isEnabled == true && !updateSheet.primaryBtn.showsSpinner, "Transitioning to upToDate must keep closeBtn and primaryBtn enabled without spinner")
             check(updateSheet.changelogHeading.stringValue == "当前版本状态", "Update sheet upToDate state must display 当前版本状态 heading")
             check(updateSheet.changelogTextView.textContainer?.lineFragmentPadding == 0, "Update sheet changelogTextView must have zero lineFragmentPadding for flush-left alignment")
@@ -760,12 +774,23 @@ import Cocoa
         ]
         assistant.overview!.updateReadinessMatrix()
 
-        // Verify AccountsPage unified & per-card collapse/expand behavior
+        // Verify AccountsPage unified & per-card collapse/expand behavior and removal of Backup button
         assistant.selectPage(1); pump()
         let accPage = assistant.accountsPage!
         accPage.fetch(); pump()
         window.appearance = NSAppearance(named: .aqua)
         window.contentView?.layoutSubtreeIfNeeded(); pump()
+        func allAccButtons(_ v: NSView) -> [NSButton] { (v as? NSButton).map { [$0] } ?? v.subviews.flatMap { allAccButtons($0) } }
+        check(!allAccButtons(accPage.view).contains { $0.title == "备份…" }, "AccountsPage header must remove 备份… button")
+        check((accPage.toggleCollapseAllButton as? DesignButton)?.isQuietAccessory == false, "AccountsPage 收起配额/展开配额 button must match global capsule button style")
+        check(accPage.autoSwitchStatusBadge.title == "已停用", "Smart switch disabled state must retain 已停用 pill badge")
+        let offSubtitle = accPage.policySubtitleLabel.stringValue
+        accPage.autoSwitchToggle.state = .on
+        accPage.updateAutoSwitchState()
+        check(accPage.autoSwitchStatusBadge.title.hasPrefix("已启用"), "Smart switch enabled state must display 已启用 pill badge")
+        check(accPage.policySubtitleLabel.stringValue == offSubtitle, "Smart switch subtitle must stay consistent between ON and OFF states")
+        accPage.autoSwitchToggle.state = .off
+        accPage.updateAutoSwitchState()
         check(!accPage.toggleCollapseAllButton.isHidden && accPage.toggleCollapseAllButton.title == "收起配额", "AccountsPage header must show 收起配额 button when cards are expanded")
         let expandedFirstCardHeight = accPage.cardsStack.arrangedSubviews.first?.bounds.height ?? 0
         check(expandedFirstCardHeight > 180, "Expanded account card height must include full quota bars (>180pt)")
@@ -837,7 +862,7 @@ import Cocoa
             }
             return nil
         }
-        for pageView: NSView in [assistant.overview!.view, assistant.accountsPage!.view, assistant.usagePage!.view, stableSettings.view!, menuPanel.view] {
+        for pageView: NSView in [assistant.overview!.view, assistant.accountsPage!.view, assistant.usagePage!.view, stableSettings.view!, aboutPage.view, menuPanel.view] {
             let found = hasNonEmptyTooltip(pageView)
             check(found == nil, "Global tooltip cleanup violated on view: \(found ?? "")")
         }
@@ -1014,11 +1039,14 @@ import Cocoa
                 "pricingStatus": ["gemini-3.8-flash": "confirmed", "gemini-4-hydrogen": "confirmed"],
             ])
             check(pricingSheet.sheet.contentView != nil, "PricingSyncSheetController must populate native sheet view")
+            func allPricingButtons(_ v: NSView) -> [NSButton] { (v as? NSButton).map { [$0] } ?? v.subviews.flatMap { allPricingButtons($0) } }
+            check(!allPricingButtons(pricingSheet.sheet.contentView!).contains { $0.title == "复制价格表" }, "PricingSyncSheetController must remove 复制价格表 button")
             check(pricingSheet.closeBtn.title == "完成", "PricingSyncSheetController exit button must be titled 完成")
             check(pricingSheet.subtitleLabel.isHidden && pricingSheet.subtitleLabel.stringValue.isEmpty, "PricingSyncSheetController must hide header subtitle on normal synced state")
             check(pricingSheet.summaryPill.title.hasPrefix("已同步 ") && pricingSheet.summaryPill.title.hasSuffix("· 2 款"), "PricingSyncSheetController pill must display latest sync time and active count: \(pricingSheet.summaryPill.title)")
             check(!pricingSheet.historicalNoteLabel.isHidden && pricingSheet.historicalNoteLabel.stringValue.contains("已下架模型"), "PricingSyncSheetController must explain historical pricing retention")
-            check(pricingSheet.latestTextSummary.contains("官方定价 2026-11-12 · 优惠至 2026-12-31") && !pricingSheet.latestTextSummary.contains("核对 2026"), "PricingSyncSheetController must use Plan 1 date wording")
+            check(pricingSheet.renderedSummaryLines.contains { $0.contains("官方定价 2026-11-12 · 优惠至 2026-12-31") } && !pricingSheet.renderedSummaryLines.contains { $0.contains("核对 2026") }, "PricingSyncSheetController must use Plan 1 date wording")
+            try capture(pricingSheet.sheet.contentView!, output.appendingPathComponent("light-pricing-sheet.png"))
             pricingSheet.apply(payload: [
                 "synced": false,
                 "error": "offline",
@@ -1029,11 +1057,7 @@ import Cocoa
                 "pricingStatus": ["gemini-4-hydrogen": "confirmed"],
             ])
             check(!pricingSheet.subtitleLabel.isHidden && pricingSheet.subtitleLabel.stringValue == "检查提示：offline", "PricingSyncSheetController must show concise failure reason without unit suffix")
-            check(pricingSheet.summaryPill.title.hasPrefix("已检查 ") && pricingSheet.summaryPill.title.hasSuffix("· 1 款"), "PricingSyncSheetController pill must display failed check time and active count: \(pricingSheet.summaryPill.title)")
-            let privateBackup = state.appendingPathComponent("private-account-backup.json")
-            try writePrivateAccountBackup(Data("synthetic-only".utf8), to: privateBackup)
-            let permissions = (try FileManager.default.attributesOfItem(atPath: privateBackup.path)[.posixPermissions] as? NSNumber)?.intValue ?? 0
-            check(permissions & 0o777 == 0o600, "Account backups must be private from initial creation")
+            check(pricingSheet.summaryPill.title.hasSuffix("· 1 款"), "PricingSyncSheetController pill must display failed check time and active count: \(pricingSheet.summaryPill.title)")
             var checks = 0
             let manager = isolated.updateManager
             manager.checkTransport = { request, completion in

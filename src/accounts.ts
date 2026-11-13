@@ -1,20 +1,46 @@
-import { allApplicationTargets, applicationTarget, channelStateDirectory, matchingTargetForLanguageServerCommand, type ApplicationTarget } from './application-target.js';
-import { inspectBundle, verifyLanguageServerIdentity } from './discovery.js';
+import { applicationTarget, type ApplicationTarget } from './application-target.js';
+import { inspectBundle } from './discovery.js';
 import { lstat, mkdir, readFile, readdir, unlink } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
-import { execFile, spawn } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { homedir } from 'node:os';
-import * as https from 'node:https';
-import * as http from 'node:http';
 import { atomicJson, commitAccountAndIndex, recoverAccountCommit, commitFileSet, recoverFileSet } from './files.js';
 import { ReentrantMutex } from './mutex.js';
-import { validateAccountPolicy, validateAccountImport } from './account-policy.js';
+import { validateAccountPolicy } from './account-policy.js';
 import { withProcessLease } from './process-lock.js';
 import { ProtobufReader } from './protobuf.js';
 import { decodeTopicRow } from './account-state.js';
+import {
+  MockKeychainAdapter,
+  SystemKeychainAdapter,
+  syncAccountToKeychain,
+  type KeychainAdapter,
+} from './account-keychain.js';
+import {
+  CloudQuotaAuthorityError,
+  cloudOriginFromCommand,
+  cloudProviderContextFromCommand,
+  extractTopicDataString,
+  localRpcFetch,
+  probeLiveLanguageServerOnce,
+  readAntigravityStateDb,
+  validCachedCloudProviderContext,
+  type CloudProviderContext,
+} from './account-probe.js';
+export {
+  MockKeychainAdapter,
+  SystemKeychainAdapter,
+  syncAccountToKeychain,
+  type KeychainAdapter,
+  CloudQuotaAuthorityError,
+  cloudOriginFromCommand,
+  cloudProviderContextFromCommand,
+  localRpcFetch,
+  validCachedCloudProviderContext,
+  type CloudProviderContext,
+};
 import {
   applyFamilyWindows,
   buildArgonStatus,
@@ -32,8 +58,6 @@ import {
   normalizeCloudGroups,
   normalizeCloudModels,
   normalizeIndependentArgonQuota,
-  normalizeLiveGroups,
-  normalizeLiveModels,
   normalizeResetTime,
   normalizeStoredGroups,
   normalizeFraction,
@@ -49,117 +73,6 @@ import {
 } from './quota.js';
 
 const execFileAsync = promisify(execFile);
-
-export interface KeychainAdapter {
-  readPassword(service: string, account: string): Promise<string | null>;
-  writePassword(service: string, account: string, password: string): Promise<void>;
-  deletePassword(service: string, account: string): Promise<void>;
-}
-
-export class SystemKeychainAdapter implements KeychainAdapter {
-  async readPassword(service: string, account: string): Promise<string | null> {
-    try {
-      const { stdout } = await execFileAsync('/usr/bin/security', [
-        'find-generic-password',
-        '-s',
-        service,
-        '-a',
-        account,
-        '-w',
-      ], { timeout: 5000 });
-      return stdout.trim() || null;
-    } catch (error) {
-      if ((error as { code?: number }).code === 44) return null;
-      throw new Error('无法读取账号钥匙串，请检查本机访问权限');
-    }
-  }
-
-  async writePassword(service: string, account: string, password: string): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const q = (val: string) => `"${String(val).replace(/[\\"\r\n]/g, m => (m === '\r' || m === '\n' ? '' : `\\${m}`))}"`;
-      // 通过 security -i 批处理从 stdin 传入完整命令与密码，既不在 argv 暴露凭据，也不触发 /dev/tty getpass() 阻塞
-      const child = spawn('/usr/bin/security', ['-i'], { stdio: ['pipe', 'pipe', 'pipe'] });
-      let settled = false;
-      const finish = (err?: Error) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        if (err) reject(err);
-        else resolve();
-      };
-      const timer = setTimeout(() => {
-        try { child.kill(); } catch {}
-        finish(new Error('无法保存账号钥匙串，访问超时'));
-      }, 5000);
-
-      child.stdin.on('error', () => {});
-      child.stdin.end(`add-generic-password -U -s ${q(service)} -a ${q(account)} -w ${q(password)}\n`);
-
-      child.stderr.on('data', () => {});
-      child.on('close', code => {
-        if (code === 0) finish();
-        else finish(new Error('无法保存账号钥匙串，原凭据访问权限可能受限'));
-      });
-      child.on('error', () => {
-        finish(new Error('无法保存账号钥匙串，原凭据访问权限可能受限'));
-      });
-    });
-  }
-
-  async deletePassword(service: string, account: string): Promise<void> {
-    try {
-      await execFileAsync('/usr/bin/security', ['delete-generic-password', '-s', service, '-a', account], { timeout: 5000 });
-    } catch (error) { if ((error as { code?: number }).code !== 44) throw new Error('无法恢复账号钥匙串'); }
-  }
-}
-
-export class MockKeychainAdapter implements KeychainAdapter {
-  private store = new Map<string, string>();
-
-  async readPassword(service: string, account: string): Promise<string | null> {
-    return this.store.get(`${service}:${account}`) ?? null;
-  }
-
-  async writePassword(service: string, account: string, password: string): Promise<void> {
-    this.store.set(`${service}:${account}`, password);
-  }
-
-  async deletePassword(service: string, account: string): Promise<void> {
-    this.store.delete(`${service}:${account}`);
-  }
-}
-
-
-export type CloudProviderContext = { origin: string; userAgent: string; appVersion: string; clientSubType?: string; identityVersion?: 2 };
-const CLOUD_ORIGINS = new Set(['https://cloudcode-pa.googleapis.com','https://daily-cloudcode-pa.googleapis.com','https://daily-cloudcode-pa.sandbox.googleapis.com']);
-export function cloudOriginFromCommand(command: string, target = applicationTarget()): string | null {
-  if (!command.startsWith(target.appPath + '/Contents/Resources/bin/language_server ')) return null;
-  const dataDirectory = command.match(/(?:^|\s)--app_data_dir(?:=|\s+)([^\s"]+)/)?.[1];
-  if (dataDirectory && dataDirectory !== target.dataDirectoryName) return null;
-  const value=command.match(/(?:^|\s)--cloud_code_endpoint(?:=|\s+)([^\s"]+)/)?.[1];
-  return value && CLOUD_ORIGINS.has(value.replace(/\/$/,'')) ? value.replace(/\/$/,'') : null;
-}
-/** The hub component is significant: omitting it makes CCPA return a different model/quota catalogue. */
-export function cloudProviderContextFromCommand(command: string, appVersion: string, target = applicationTarget()): CloudProviderContext | null {
-  const origin = cloudOriginFromCommand(command, target);
-  const option = (name: string) => command.match(new RegExp('(?:^|\\s)--' + name + '(?:=|\\s+)([^\\s"]+)'))?.[1];
-  const clientSubType = option('subclient_type') ?? '';
-  if (!origin || !/^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(appVersion)
-    || (clientSubType !== '' && !/^[a-z][a-z0-9_-]{0,31}$/.test(clientSubType))
-    || (option('override_user_agent_name') ?? 'antigravity') !== 'antigravity'
-    || (option('override_ide_version') ?? appVersion) !== appVersion) return null;
-  return { origin, appVersion, clientSubType, identityVersion: 2,
-    userAgent: ['antigravity', clientSubType, appVersion].filter(Boolean).join('/') };
-}
-export function validCachedCloudProviderContext(value: any, appVersion: string, target = applicationTarget()): value is CloudProviderContext {
-  if (!value || value.identityVersion !== 2 || !CLOUD_ORIGINS.has(value.origin)
-    || typeof value.clientSubType !== 'string'
-    || (value.clientSubType !== '' && !/^[a-z][a-z0-9_-]{0,31}$/.test(value.clientSubType))) return false;
-  const expected = cloudProviderContextFromCommand(target.appPath + '/Contents/Resources/bin/language_server --cloud_code_endpoint '
-    + value.origin + (value.clientSubType ? ' --subclient_type ' + value.clientSubType : ''), appVersion, target);
-  return !!expected && value.appVersion === expected.appVersion && value.userAgent === expected.userAgent;
-}
-class CloudQuotaAuthorityError extends Error {}
 /** cloudcode 端点优先级：production(0) > daily(1) > sandbox(2)。 */
 export function endpointPriority(url: string): number {
   if (url.includes('daily-cloudcode-pa.sandbox.googleapis.com')) return 2;
@@ -265,61 +178,6 @@ export function refreshResetDescription(
   const pattern = new RegExp(`(\\bin\\s+)${duration}`, 'i');
   if (!pattern.test(description)) return description;
   return description.replace(pattern, `$1${fresh}`);
-}
-
-/**
- * 本地免密 RPC 请求 helper，自动处理 HTTP/HTTPS 与自签名证书
- */
-export async function localRpcFetch(
-  protocol: 'http' | 'https',
-  port: number,
-  path: string,
-  csrfToken: string,
-  body = '{}'
-): Promise<any> {
-  return new Promise((resolveReply, rejectReply) => {
-    const isHttps = protocol === 'https';
-    const client = isHttps ? https : http;
-    const req = client.request(
-      {
-        hostname: '127.0.0.1',
-        port,
-        path,
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-codeium-csrf-token': csrfToken,
-          'Content-Length': Buffer.byteLength(body),
-        },
-        rejectUnauthorized: false,
-        timeout: 2500,
-      },
-      res => {
-        let data = '';
-        res.on('data', chunk => {
-          data += chunk;
-        });
-        res.on('end', () => {
-          if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
-            try {
-              resolveReply(JSON.parse(data));
-            } catch (err) {
-              rejectReply(err);
-            }
-          } else {
-            rejectReply(new Error(`HTTP ${res.statusCode}: ${data.slice(0, 200)}`));
-          }
-        });
-      }
-    );
-    req.on('error', rejectReply);
-    req.on('timeout', () => {
-      req.destroy();
-      rejectReply(new Error('本地 RPC 超时'));
-    });
-    req.write(body);
-    req.end();
-  });
 }
 
 try {
@@ -644,24 +502,6 @@ export interface AccountIndex {
   current_vscode_account_id?: string | null;
 }
 
-export interface AccountExportItem {
-  email: string;
-  refresh_token: string;
-  name?: string | null;
-  oauth_client_key?: string | null;
-  is_gcp_tos: boolean;
-  project_id?: string | null;
-  custom_label?: string | null;
-}
-
-export interface AccountExportResponse {
-  schema_version: number;
-  accounts: AccountExportItem[];
-  /** false 表示 refresh_token 已脱敏，只能用于核对账号清单，不能用于迁移/恢复。 */
-  tokens_included?: boolean;
-  confirm_required?: boolean;
-}
-
 export type AutoSwitchStrategy = 'priority' | 'round_robin';
 
 export interface AutoSwitchConfig {
@@ -903,32 +743,26 @@ export class AccountsManager {
     if(this.providerContextCache&&now<this.providerContextCache.expiresAt)return this.providerContextCache.value;
     if(this.inFlightProviderContext)return await this.inFlightProviderContext;
     const task=(async():Promise<CloudProviderContext>=>{
-      const candidates = [this.target, ...allApplicationTargets().filter(t => t.appPath !== this.target.appPath)];
+      const candidate = this.target;
       const text=(await execFileAsync('/bin/ps',['-ax','-ww','-o','args='])).stdout;
-      const installedTargets: Array<{ target: ApplicationTarget; version: string }> = [];
-      for (const candidate of candidates) {
-        try {
-          const installed = await inspectBundle(candidate.appPath);
-          installedTargets.push({ target: candidate, version: installed.version });
-        } catch {}
+      let version = '';
+      try {
+        version = (await inspectBundle(candidate.appPath)).version;
+      } catch {}
+      const context = text.split('\n').map(line => cloudProviderContextFromCommand(line.trim(), version, candidate)).find(Boolean);
+      const providerCachePath = join(this.stateDir, 'quota-provider-stable.json');
+      if (context) {
+        await atomicJson(providerCachePath, context);
+        this.providerContextCache = { value: context, expiresAt: Date.now() + 15000 };
+        return context;
       }
-      for (const { target: candidate, version } of installedTargets) {
-        const context = text.split('\n').map(line => cloudProviderContextFromCommand(line.trim(), version, candidate)).find(Boolean);
-        if (context) {
-          await atomicJson(join(channelStateDirectory(this.stateDir, candidate.channel), 'quota-provider-stable.json'), context);
-          this.providerContextCache = { value: context, expiresAt: Date.now() + 15000 };
-          return context;
+      try {
+        const cached = JSON.parse(await readFile(providerCachePath, 'utf8')) as CloudProviderContext;
+        if (validCachedCloudProviderContext(cached, version, candidate)) {
+          this.providerContextCache = { value: cached, expiresAt: Date.now() + 15000 };
+          return cached;
         }
-      }
-      for (const { target: candidate, version } of installedTargets) {
-        try {
-          const cached = JSON.parse(await readFile(join(channelStateDirectory(this.stateDir, candidate.channel), 'quota-provider-stable.json'), 'utf8')) as CloudProviderContext;
-          if (validCachedCloudProviderContext(cached, version, candidate)) {
-            this.providerContextCache = { value: cached, expiresAt: Date.now() + 15000 };
-            return cached;
-          }
-        } catch {}
-      }
+      } catch {}
       throw new CloudQuotaAuthorityError('无法确认 Antigravity 实际配额服务，请先运行官方应用；未采用其他环境的默认配额');
     })();
     this.inFlightProviderContext=task;
@@ -1579,81 +1413,6 @@ export class AccountsManager {
     });
   }
 
-  /**
-   * 导出账号。refresh_token 是长期凭据，默认只返回脱敏摘要；
-   * 只有调用方显式传入 { confirm: true }（IPC 层由用户二次确认后传入）才包含真实 refresh_token。
-   */
-  async exportAccounts(ids?: string[], options?: { confirm?: boolean }): Promise<AccountExportResponse> {
-    const confirmed = options?.confirm === true;
-    const index = await this.loadIndex();
-    const targetIds = ids && ids.length > 0 ? ids : index.accounts.map(a => a.id);
-    const items: AccountExportItem[] = [];
-
-    for (const id of targetIds) {
-      const acc = await this.getAccount(id);
-      if (!acc) continue;
-      items.push({
-        email: acc.email,
-        refresh_token: confirmed ? acc.token.refresh_token : '[REDACTED]',
-        name: acc.name,
-        oauth_client_key: acc.token.oauth_client_key,
-        is_gcp_tos: acc.token.is_gcp_tos,
-        project_id: acc.token.project_id,
-        custom_label: acc.custom_label,
-      });
-    }
-
-    return {
-      schema_version: 2,
-      accounts: items,
-      tokens_included: confirmed,
-      confirm_required: !confirmed,
-    };
-  }
-
-  async importAccounts(data: AccountExportResponse): Promise<{ imported: number; updated: number; partial?: boolean; failures?: { index: number; message: string }[] }> {
-    if (!data || !Array.isArray(data.accounts)) {
-      throw new Error('导入格式错误：缺少 accounts 列表');
-    }
-    if (data.tokens_included === false) {
-      throw new Error('该备份为脱敏摘要，不含登录凭据，无法恢复账号；请在导出时选择“包含凭据导出”');
-    }
-    validateAccountImport(data);
-    if (data.accounts.some(item => String(item.refresh_token ?? '') === '[REDACTED]')) {
-      throw new Error('该备份包含脱敏占位符，无法恢复登录凭据；请重新导出并选择“包含凭据导出”');
-    }
-
-    const failures: { index: number; message: string }[] = [];
-    let imported = 0;
-    let updated = 0;
-    const index = await this.loadIndex();
-    const existingEmails = new Set(index.accounts.map(a => a.email.toLowerCase()));
-
-    for (const [itemIndex, item] of data.accounts.entries()) {
-      try {
-      const isExisting = existingEmails.has(item.email.toLowerCase());
-      await this.upsertAccount({
-        email: item.email,
-        refreshToken: item.refresh_token,
-        name: item.name,
-        oauthClientKey: item.oauth_client_key,
-        isGcpTos: item.is_gcp_tos,
-        projectId: item.project_id,
-        customLabel: item.custom_label,
-      });
-      if (isExisting) {
-        updated++;
-      } else {
-        imported++;
-        existingEmails.add(item.email.toLowerCase());
-      }
-      } catch {
-        failures.push({ index: itemIndex + 1, message: '该账号未能完整保存，请重新读取账号列表后重试' });
-      }
-    }
-    return { imported, updated, ...(failures.length ? { partial: true, failures } : {}) };
-  }
-
   // ---- 额度与监控双窗口熔合体系 ----
 
   fuseQuota(fetchAvailableModelsData: any, quotaSummaryData?: any): QuotaData {
@@ -1802,10 +1561,11 @@ export class AccountsManager {
     const isCarbonTarget = trimmed === 'carbon' || trimmed === 'gemini 4 carbon';
     const isClaudeTarget = trimmed === 'claude' || trimmed === '3p' || trimmed === 'claude/gpt';
     const isGeminiTarget = trimmed === 'gemini';
+    const isGeminiAllTarget = trimmed === 'gemini_all' || trimmed === 'gemini 全系模型';
     const isAllTarget = !trimmed || trimmed === 'all';
 
     // 具体模型或动态新增独立模型：优先匹配 standaloneModels，其次使用规范化后的 effective（= min(own, 相关 family 新鲜窗口)）
-    if (!isArgonTarget && !isCarbonTarget && !isClaudeTarget && !isGeminiTarget && !isAllTarget) {
+    if (!isArgonTarget && !isCarbonTarget && !isClaudeTarget && !isGeminiTarget && !isGeminiAllTarget && !isAllTarget) {
       const standalone = (overview.standaloneModels ?? []).find(item =>
         item.key.toLowerCase() === trimmed || item.displayName.toLowerCase() === trimmed);
       if (standalone) {
@@ -1841,6 +1601,39 @@ export class AccountsManager {
       return bounded(status.remaining);
     }
 
+    if (isGeminiAllTarget) {
+      const values: number[] = [];
+      if (familyHasKnownModel('gemini')) {
+        values.push(...familyValues('gemini'));
+      }
+      for (const status of [overview.argonStatus, overview.carbonStatus]) {
+        if (
+          status.availability === 'available' &&
+          status.quotaState === 'known' &&
+          status.remaining !== null &&
+          (typeof status.observedAt !== 'number' || nowSec - status.observedAt <= FRESH_SECONDS)
+        ) {
+          values.push(status.remaining);
+        }
+      }
+      for (const extra of overview.standaloneModels ?? []) {
+        const keyLower = extra.key.toLowerCase();
+        if (keyLower === 'argon' || keyLower === 'carbon') continue;
+        const nameLower = extra.displayName.toLowerCase();
+        if (!keyLower.includes('gemini') && !nameLower.includes('gemini')) continue;
+        if (
+          extra.availability === 'available' &&
+          extra.quotaState === 'known' &&
+          extra.remaining !== null &&
+          (typeof extra.observedAt !== 'number' || nowSec - extra.observedAt <= FRESH_SECONDS)
+        ) {
+          values.push(extra.remaining);
+        }
+      }
+      if (values.length === 0) return null;
+      if (values.some(value => value <= 0)) return 0;
+      return bounded(Math.min(...values));
+    }
     if (isGeminiTarget) {
       if (!familyHasKnownModel('gemini')) return null;
       const values = familyValues('gemini');
@@ -2021,168 +1814,10 @@ export class AccountsManager {
       return await this.inFlightProbe;
     }
 
-    const doProbe = async () => {
-      try {
-      const { stdout: psOut } = await execFileAsync('/bin/ps', ['-ax', '-ww', '-o', 'pid=,args=']);
-      const lines = psOut.split('\n');
-      let targetPid = 0;
-      let csrfToken = '';
-      let matchedAppPath = this.target.appPath;
-
-      for (const line of lines) {
-        if (line.includes('--csrf_token')) {
-          const trimmed = line.trim();
-          const mPid = trimmed.match(/^(\d+)\s+(.+)$/);
-          if (mPid) {
-            const pid = parseInt(mPid[1]!, 10);
-            const cmd = mPid[2]!;
-            const matchedTarget = matchingTargetForLanguageServerCommand(cmd, this.target);
-            if (matchedTarget) {
-              const mCsrf = cmd.match(/--csrf_token[=\s]+([^\s]+)/);
-              if (mCsrf) {
-                targetPid = pid;
-                csrfToken = mCsrf[1]!;
-                matchedAppPath = matchedTarget.appPath;
-                break;
-              }
-            }
-          }
-        }
-      }
-
-      if (!targetPid || !csrfToken) return null;
-      if (fetchImpl === globalThis.fetch && !await verifyLanguageServerIdentity(targetPid, matchedAppPath)) return null;
-
-      const { stdout: lsofOut } = await execFileAsync('/usr/sbin/lsof', [
-        '-nP', '-a', '-p', String(targetPid), '-iTCP', '-sTCP:LISTEN', '-Fn'
-      ]);
-      const portMatches = Array.from(lsofOut.matchAll(/n127\.0\.0\.1:(\d+)/g)).map(m => parseInt(m[1]!, 10));
-      const ports = Array.from(new Set(portMatches));
-      if (ports.length === 0) return null;
-
-      for (const port of ports) {
-        try {
-          let userStatusData: any = null;
-          let quotaSummaryData: any = null;
-          let activeProtocol: 'https' | 'http' = 'https';
-
-          // 1. 获取 UserStatus
-          if (fetchImpl !== globalThis.fetch) {
-            // 测试 mock 注入环境
-            const resp = await fetchImpl(`http://127.0.0.1:${port}/exa.language_server_pb.LanguageServerService/GetUserStatus`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'x-codeium-csrf-token': csrfToken },
-              body: '{}',
-            });
-            if (resp.ok) userStatusData = await resp.json();
-          } else {
-            // 实机环境优先尝试 HTTPS，回退 HTTP，并记录成功协议供后续请求直接复用
-            try {
-              userStatusData = await localRpcFetch('https', port, '/exa.language_server_pb.LanguageServerService/GetUserStatus', csrfToken);
-              activeProtocol = 'https';
-            } catch {
-              try {
-                userStatusData = await localRpcFetch('http', port, '/exa.language_server_pb.LanguageServerService/GetUserStatus', csrfToken);
-                activeProtocol = 'http';
-              } catch {}
-            }
-          }
-
-          const userStatus = userStatusData?.userStatus;
-          if (!userStatus?.email) continue;
-
-          // 2. 获取 RetrieveUserQuotaSummary (官方配额桶)
-          if (fetchImpl !== globalThis.fetch) {
-            try {
-              const respQ = await fetchImpl(`http://127.0.0.1:${port}/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'x-codeium-csrf-token': csrfToken },
-                body: '{}',
-              });
-              if (respQ.ok) {
-                const qRes = await respQ.json() as any;
-                quotaSummaryData = qRes.response || qRes;
-              }
-            } catch {}
-          } else {
-            const fallbackProtocol: 'https' | 'http' = activeProtocol === 'https' ? 'http' : 'https';
-            const reqBody = JSON.stringify({forceRefresh:options.forceRefresh===true});
-            try {
-              const qRes = await localRpcFetch(activeProtocol, port, '/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary', csrfToken, reqBody);
-              quotaSummaryData = qRes?.response || qRes;
-            } catch {
-              try {
-                const qRes = await localRpcFetch(fallbackProtocol, port, '/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary', csrfToken, reqBody);
-                quotaSummaryData = qRes?.response || qRes;
-              } catch {}
-            }
-          }
-
-          const email = String(userStatus.email);
-          const name = userStatus.name ? String(userStatus.name) : null;
-          const userTierId = typeof userStatus.userTier?.id === 'string' ? userStatus.userTier.id : null;
-          const userTierName = typeof userStatus.userTier?.name === 'string' ? userStatus.userTier.name : null;
-          const isEnterpriseVertex = Boolean(
-            userTierId === 'agy-business-paygo-tier' ||
-            userStatus.userTier?.usesGcpTos === true ||
-            userStatus.userTier?.userDefinedCloudaicompanionProject === true ||
-            /agent platform|business|enterprise/i.test(userTierName || '')
-          );
-          const accountType: 'consumer' | 'enterprise_vertex' = isEnterpriseVertex ? 'enterprise_vertex' : 'consumer';
-          const tierRaw = isEnterpriseVertex
-            ? (userStatus.planStatus?.planInfo?.planName || userStatus.planStatus?.planInfo?.teamsTier || userStatus.paidTier?.name || '')
-            : (userStatus.userTier?.name || userStatus.userTier?.id || userStatus.planStatus?.planInfo?.planName || userStatus.paidTier?.name || '');
-          let tier = isEnterpriseVertex ? '' : 'FREE';
-          if (/ultra/i.test(tierRaw)) tier = 'ULTRA';
-          else if (/pro/i.test(tierRaw)) tier = 'PRO';
-          else if (!isEnterpriseVertex && tierRaw) tier = 'FREE';
-
-          // live 与 cloud 共用规范化；保留 disabled/display_name/modelOrAlias 与模型自身 quotaInfo，
-          // 并同样把 family 窗口挂到模型上（只作为参考/effective，不覆写 own_*）。
-          const observedAt = Math.floor(Date.now() / 1000);
-          const clientConfigs = userStatus.cascadeModelConfigData?.clientModelConfigs || [];
-          const models = mergeModelCatalogues([normalizeLiveModels(clientConfigs, observedAt)]);
-          const groups = mergeGroupSets([normalizeLiveGroups(quotaSummaryData, observedAt)]);
-          const windows = familyWindowsFromGroups(groups, Date.now());
-          const applied = applyFamilyWindows(models, windows);
-          const missingFamilies = (['gemini', 'claude', 'argon', 'carbon'] as const).filter(family =>
-            models.some(model => model.family === family && model.disabled !== true)
-            && !groups.some(group => group.family === family && group.buckets.some(bucket => bucket.remaining_fraction_known))
-            && !((family === 'argon' || family === 'carbon') && models.some(m => m.family === family && m.own_percentage_known && !m.own_stale)));
-          const quotaData: QuotaData = {
-            models: applied.map(modelQuotaFromNormalized),
-            quota_groups: groups.map(groupToQuotaGroup),
-            is_forbidden: false,
-            subscription_tier: tier,
-            last_updated: observedAt,
-            model_forwarding_rules: {},
-            source: 'live',
-            refresh_state: {
-              complete: models.length > 0 && groups.length > 0 && missingFamilies.length === 0,
-              endpointsAttempted: ['live:GetUserStatus', 'live:RetrieveUserQuotaSummary'],
-              endpointsSucceeded: ['live:GetUserStatus', ...(quotaSummaryData ? ['live:RetrieveUserQuotaSummary'] : [])],
-              missingFamilies,
-              missingWindows: [],
-              carriedGroups: 0,
-              refreshedAt: observedAt,
-            },
-            quota_warnings: models.length === 0 ? ['NO_MODEL_RECORDS: live 未返回模型列表'] : undefined,
-          };
-
-          return {
-            email,
-            name,
-            tier,
-            accountType,
-            userTierId,
-            userTierName,
-            quota: quotaData,
-          };
-        } catch {}
-      }
-    } catch {}
-    return null;
-    };
+    const doProbe = () => probeLiveLanguageServerOnce(this.target, fetchImpl, options, {
+      modelQuotaFromNormalized,
+      groupToQuotaGroup,
+    });
 
     if (fetchImpl !== globalThis.fetch) {
       return await doProbe();
@@ -2284,75 +1919,55 @@ export class AccountsManager {
     // 4. 检查 state.vscdb (补充 token 或补充 email)
     if (!extractedToken || !extractedEmail) {
       const primaryProfileVscdb = join(this.target.profile, 'User', 'globalStorage', 'state.vscdb');
-      const fallbackVscdbPaths = options?.appSupportDir
-        ? Array.from(new Set([this.target.name, ...allApplicationTargets().map(t => t.name)])).map(name => join(appSupportDir, name, 'User', 'globalStorage', 'state.vscdb'))
-        : Array.from(new Set([this.target.profile, ...allApplicationTargets().map(t => t.profile)])).map(p => join(p, 'User', 'globalStorage', 'state.vscdb'));
-      const candidateVscdbPaths = Array.from(new Set(options?.appSupportDir ? [...fallbackVscdbPaths, primaryProfileVscdb] : [primaryProfileVscdb, ...fallbackVscdbPaths]));
+      const fallbackProfileVscdb = options?.appSupportDir
+        ? join(appSupportDir, this.target.name, 'User', 'globalStorage', 'state.vscdb')
+        : primaryProfileVscdb;
+      const candidateVscdbPaths = Array.from(new Set(
+        options?.appSupportDir ? [fallbackProfileVscdb, primaryProfileVscdb] : [primaryProfileVscdb]
+      ));
       for (const vscdbPath of candidateVscdbPaths) {
         if (extractedToken && extractedEmail) break;
-        if (!existsSync(vscdbPath)) continue;
-        let db: import('node:sqlite').DatabaseSync | undefined;
-        try {
-          const { DatabaseSync } = await import('node:sqlite');
-          db = new DatabaseSync(vscdbPath, { readOnly: true });
-          const rows = db.prepare(
-            "SELECT key, value FROM ItemTable WHERE key IN ('antigravityUnifiedStateSync.oauthToken', 'antigravityUnifiedStateSync.userStatus');"
-          ).all() as Array<{ key?: string; value?: string }>;
-          let oauthRawB64 = '';
-          let userStatusB64 = '';
-          for (const r of rows) {
-            if (r.key === 'antigravityUnifiedStateSync.oauthToken' && r.value) {
-              try {
-                const valObj = JSON.parse(r.value);
-                oauthRawB64 = valObj.data || '';
-              } catch {
-                oauthRawB64 = r.value;
-              }
-            } else if (r.key === 'antigravityUnifiedStateSync.userStatus' && r.value) {
-              try {
-                const valObj = JSON.parse(r.value);
-                userStatusB64 = valObj.data || '';
-              } catch {
-                userStatusB64 = r.value;
-              }
+        const stateRows = await readAntigravityStateDb(vscdbPath, [
+          'antigravityUnifiedStateSync.oauthToken',
+          'antigravityUnifiedStateSync.userStatus',
+        ]);
+        if (stateRows.size === 0) continue;
+        const oauthRawB64 = extractTopicDataString(stateRows.get('antigravityUnifiedStateSync.oauthToken'));
+        const userStatusB64 = extractTopicDataString(stateRows.get('antigravityUnifiedStateSync.userStatus'));
+
+        if (!extractedToken && oauthRawB64) {
+          const payloadBuf = decodeTopicRow(oauthRawB64, 'oauthTokenInfoSentinelKey');
+          if (payloadBuf) {
+            const accessToken = ProtobufReader.findString(payloadBuf, 1) || '';
+            const refreshToken = ProtobufReader.findString(payloadBuf, 3) || '';
+            let expirySec = Math.floor(Date.now() / 1000) + 3600;
+            const timeBuf = ProtobufReader.findField(payloadBuf, 4);
+            if (timeBuf) {
+              const sec = ProtobufReader.findVarint(timeBuf, 1);
+              if (sec && sec > 0) expirySec = sec;
+            }
+
+            if (refreshToken) {
+              extractedToken = {
+                access_token: accessToken,
+                refresh_token: refreshToken,
+                expires_in: Math.max(60, expirySec - Math.floor(Date.now() / 1000)),
+                expiry_timestamp: expirySec,
+                token_type: 'Bearer',
+                email: null,
+                is_gcp_tos: false,
+              };
             }
           }
+        }
 
-          if (!extractedToken && oauthRawB64) {
-            const payloadBuf = decodeTopicRow(oauthRawB64, 'oauthTokenInfoSentinelKey');
-            if (payloadBuf) {
-              const accessToken = ProtobufReader.findString(payloadBuf, 1) || '';
-              const refreshToken = ProtobufReader.findString(payloadBuf, 3) || '';
-              let expirySec = Math.floor(Date.now() / 1000) + 3600;
-              const timeBuf = ProtobufReader.findField(payloadBuf, 4);
-              if (timeBuf) {
-                const sec = ProtobufReader.findVarint(timeBuf, 1);
-                if (sec && sec > 0) expirySec = sec;
-              }
-
-              if (refreshToken) {
-                extractedToken = {
-                  access_token: accessToken,
-                  refresh_token: refreshToken,
-                  expires_in: Math.max(60, expirySec - Math.floor(Date.now() / 1000)),
-                  expiry_timestamp: expirySec,
-                  token_type: 'Bearer',
-                  email: null,
-                  is_gcp_tos: false,
-                };
-              }
-            }
+        if (!extractedEmail && userStatusB64 && oauthRawB64 && extractedToken?.refresh_token === ProtobufReader.findString(decodeTopicRow(oauthRawB64, 'oauthTokenInfoSentinelKey') ?? Buffer.alloc(0), 3)) {
+          const payloadBuf = decodeTopicRow(userStatusB64, 'userStatusSentinelKey');
+          if (payloadBuf) {
+            const email = ProtobufReader.findString(payloadBuf, 7);
+            if (email) extractedEmail = email;
           }
-
-          if (!extractedEmail && userStatusB64 && oauthRawB64 && extractedToken?.refresh_token === ProtobufReader.findString(decodeTopicRow(oauthRawB64, 'oauthTokenInfoSentinelKey') ?? Buffer.alloc(0), 3)) {
-            const payloadBuf = decodeTopicRow(userStatusB64, 'userStatusSentinelKey');
-            if (payloadBuf) {
-              const email = ProtobufReader.findString(payloadBuf, 7);
-              if (email) extractedEmail = email;
-            }
-          }
-        } catch {}
-        finally { try { db?.close(); } catch {} }
+        }
       }
     }
 
@@ -3113,9 +2728,13 @@ export class AccountsManager {
    * 1. 优先通过运行中 language_server RPC 探测；
    * 2. 若 language_server 未启动（如未打开工作区窗口），在宿主默认状态目录下回退读取 Antigravity state.vscdb 与 Keychain。
    */
-  async detectCurrentAntigravityEmail(): Promise<string | null> {
-    const ls = await this.probeLiveLanguageServer().catch(() => null);
-    if (ls?.email) return ls.email;
+  async detectCurrentAntigravityEmail(options?: { liveEmailHint?: string | null }): Promise<string | null> {
+    if (options && options.liveEmailHint !== undefined) {
+      if (options.liveEmailHint) return options.liveEmailHint;
+    } else {
+      const ls = await this.probeLiveLanguageServer().catch(() => null);
+      if (ls?.email) return ls.email;
+    }
     const isDefaultStateDir = this.stateDir === join(homedir(), 'Library', 'Application Support', 'GravityBox');
     if (!isDefaultStateDir) return null;
     const now = Date.now();
@@ -3123,42 +2742,27 @@ export class AccountsManager {
       return this.desktopEmailCache.email;
     }
     let detected: string | null = null;
-    const profiles = Array.from(new Set([this.target.profile, ...allApplicationTargets().map(t => t.profile)]));
-    for (const profilePath of profiles) {
-      if (detected) break;
-      const vscdbPath = join(profilePath, 'User', 'globalStorage', 'state.vscdb');
-      if (!existsSync(vscdbPath)) continue;
-      let db: import('node:sqlite').DatabaseSync | undefined;
-      try {
-        const { DatabaseSync } = await import('node:sqlite');
-        db = new DatabaseSync(vscdbPath, { readOnly: true });
-        const rows = db.prepare(
-          "SELECT key, value FROM ItemTable WHERE key IN ('antigravityUnifiedStateSync.userStatus', 'antigravityAuthStatus');"
-        ).all() as Array<{ key?: string; value?: string }>;
-        for (const r of rows) {
-          if (r.key === 'antigravityUnifiedStateSync.userStatus' && r.value) {
-            let b64 = r.value;
-            try { b64 = JSON.parse(r.value).data || r.value; } catch {}
-            const buf = decodeTopicRow(b64, 'userStatusSentinelKey');
-            const email = buf ? ProtobufReader.findString(buf, 7) : null;
-            if (email && /^[^\s@]+@[^\s@]+$/.test(email)) { detected = email; break; }
+    const vscdbPath = join(this.target.profile, 'User', 'globalStorage', 'state.vscdb');
+    const stateRows = await readAntigravityStateDb(vscdbPath, [
+      'antigravityUnifiedStateSync.userStatus',
+      'antigravityAuthStatus',
+    ]);
+    const userStatusB64 = extractTopicDataString(stateRows.get('antigravityUnifiedStateSync.userStatus'));
+    if (userStatusB64) {
+      const buf = decodeTopicRow(userStatusB64, 'userStatusSentinelKey');
+      const email = buf ? ProtobufReader.findString(buf, 7) : null;
+      if (email && /^[^\s@]+@[^\s@]+$/.test(email)) detected = email;
+    }
+    if (!detected) {
+      const authStatusRaw = stateRows.get('antigravityAuthStatus');
+      if (authStatusRaw) {
+        try {
+          const parsed = JSON.parse(authStatusRaw);
+          if (typeof parsed?.email === 'string' && /^[^\s@]+@[^\s@]+$/.test(parsed.email)) {
+            detected = parsed.email;
           }
-        }
-        if (!detected) {
-          for (const r of rows) {
-            if (r.key === 'antigravityAuthStatus' && r.value) {
-              try {
-                const parsed = JSON.parse(r.value);
-                if (typeof parsed?.email === 'string' && /^[^\s@]+@[^\s@]+$/.test(parsed.email)) {
-                  detected = parsed.email;
-                  break;
-                }
-              } catch {}
-            }
-          }
-        }
-      } catch {}
-      finally { try { db?.close(); } catch {} }
+        } catch {}
+      }
     }
     if (!detected) {
       try {
@@ -3178,7 +2782,7 @@ export class AccountsManager {
   /**
    * 列出所有账号及当前激活账号详情
    */
-  async listAccounts(): Promise<{
+  async listAccounts(options?: { liveEmailHint?: string | null }): Promise<{
     active_account_id: string | null;
     active_account: Account | null;
     accounts: AccountSummary[];
@@ -3187,7 +2791,7 @@ export class AccountsManager {
   }> {
     const index = await this.loadIndex();
     let effectiveActiveId = index.current_account_id;
-    const detectedEmail = await this.detectCurrentAntigravityEmail().catch(() => null);
+    const detectedEmail = await this.detectCurrentAntigravityEmail(options).catch(() => null);
     if (detectedEmail) {
       const matched = index.accounts.find(a => a.email.toLowerCase() === detectedEmail.toLowerCase());
       effectiveActiveId = matched?.id ?? null;
@@ -3215,39 +2819,6 @@ export class AccountsManager {
     };
   }
 }
-
-/**
- * 将指定账号写入系统 Keychain (gemini/antigravity) 免密持久化
- */
-export async function syncAccountToKeychain(
-  acc: Account,
-  keychain: KeychainAdapter = new SystemKeychainAdapter()
-): Promise<void> {
-  // 官方 Go 端按 oauth2.Token 解析：缺少 `expiry` 会被视为永不过期，从而永不刷新（约 1 小时后 401 并跳登录页）。
-  // 因此必须写入 RFC3339 `expiry`；旧字段保留供 GravityBox 自身读取与回滚。
-  const expirySec = Number(acc.token.expiry_timestamp);
-  const expiry = Number.isFinite(expirySec) && expirySec > 0 ? new Date(expirySec * 1000).toISOString() : undefined;
-  const expiresIn = expirySec > 0 ? Math.max(0, Math.floor(expirySec - Date.now() / 1000)) : acc.token.expires_in;
-  const payload = JSON.stringify({
-      token: {
-        access_token: acc.token.access_token,
-        token_type: acc.token.token_type || 'Bearer',
-        refresh_token: acc.token.refresh_token,
-        expiry,
-        expires_in: expiresIn,
-        expiry_timestamp: acc.token.expiry_timestamp,
-        email: acc.email,
-        project_id: acc.token.project_id,
-        is_gcp_tos: acc.token.is_gcp_tos,
-        id_token: acc.token.id_token,
-      },
-      ...(acc.token.is_gcp_tos ? {} : { auth_method: 'consumer' }),
-      id_token_email: acc.email,
-    });
-    const b64 = Buffer.from(payload, 'utf8').toString('base64');
-    await keychain.writePassword('gemini', 'antigravity', `go-keyring-base64:${b64}`);
-}
-
 
 /**
  * IPC 投影：账号对象中只有 token 是敏感字段，原生端不消费 token（仅后端刷新/切号链路使用）。

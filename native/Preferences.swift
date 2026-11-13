@@ -1114,6 +1114,7 @@ final class UpdateSheetController: NSObject, NSWindowDelegate {
             try app.configuration.save()
             app.configureAutoUpdateTimer()
             app.syncUpdatePromptControls()
+            app.aboutPage?.syncAutoUpdateSwitch()
             if next {
                 if let release = app.updateManager.availableRelease {
                     if !app.updateManager.hasDownloadedUpdateReady {
@@ -1164,19 +1165,19 @@ final class UpdateSheetController: NSObject, NSWindowDelegate {
 
 final class PricingSyncSheetController: NSObject, NSWindowDelegate {
     private unowned let app: Assistant
-    let sheet = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 580, height: 480), styleMask: [.titled], backing: .buffered, defer: false)
+    let sheet = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 580, height: 492), styleMask: [.titled], backing: .buffered, defer: false)
+    private let statusIconBox = NSBox()
     private let statusIconView = NSImageView()
-    private let titleLabel = text("价格基准", size: 15, weight: .semibold, color: .labelColor)
-    let subtitleLabel = text("", size: 11.5, color: Design.secondary, wrap: true)
+    private let titleLabel = text("价格基准", size: 16, weight: .semibold, color: .labelColor)
+    let subtitleLabel = text("", size: 11, color: Design.secondary, wrap: true)
     let summaryPill = pillBadge("", color: Design.blue)
     let historicalNoteLabel = text("仅展示当前在用官方模型；已下架模型的历史费用仍按当时费率准确核算。", size: 11, color: Design.secondary, wrap: true)
     private let listStack = NSStackView()
     private let listScroll = NSScrollView()
-    private let copyBtn = button("复制价格表", target: nil, action: #selector(copyPricingText))
-    private let recheckBtn = button("重新检查", target: nil, action: #selector(recheck))
+    let recheckBtn = InlineRefreshButton("重新检查", width: 88, target: nil, action: #selector(recheck))
     let closeBtn = button("完成", target: nil, action: #selector(closeSheet))
-    var latestTextSummary = ""
     private var checking = false
+    var renderedSummaryLines: [String] = []
 
     private static let checkTimeFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -1205,22 +1206,22 @@ final class PricingSyncSheetController: NSObject, NSWindowDelegate {
         let surface = SheetVisualEffectView()
         sheet.contentView = surface
 
-        let iconBox = NSView()
-        iconBox.wantsLayer = true
-        iconBox.layer?.cornerRadius = 10
-        iconBox.layer?.backgroundColor = Design.blue.withAlphaComponent(0.12).cgColor
-        iconBox.translatesAutoresizingMaskIntoConstraints = false
+        statusIconBox.boxType = .custom
+        statusIconBox.cornerRadius = 8.5
+        statusIconBox.borderWidth = 0.5
+        statusIconBox.contentViewMargins = .zero
+        statusIconBox.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            iconBox.widthAnchor.constraint(equalToConstant: 36),
-            iconBox.heightAnchor.constraint(equalToConstant: 36)
+            statusIconBox.widthAnchor.constraint(equalToConstant: 32),
+            statusIconBox.heightAnchor.constraint(equalToConstant: 32)
         ])
+        statusIconBox.setAccessibilityElement(false)
         statusIconView.translatesAutoresizingMaskIntoConstraints = false
-        iconBox.addSubview(statusIconView)
+        statusIconView.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 15, weight: .semibold)
+        statusIconBox.addSubview(statusIconView)
         NSLayoutConstraint.activate([
-            statusIconView.centerXAnchor.constraint(equalTo: iconBox.centerXAnchor),
-            statusIconView.centerYAnchor.constraint(equalTo: iconBox.centerYAnchor),
-            statusIconView.widthAnchor.constraint(equalToConstant: 20),
-            statusIconView.heightAnchor.constraint(equalToConstant: 20)
+            statusIconView.centerXAnchor.constraint(equalTo: statusIconBox.centerXAnchor),
+            statusIconView.centerYAnchor.constraint(equalTo: statusIconBox.centerYAnchor)
         ])
 
         let headerTextCol = vertical([titleLabel, subtitleLabel], spacing: 2)
@@ -1229,15 +1230,15 @@ final class PricingSyncSheetController: NSObject, NSWindowDelegate {
         summaryPill.setContentHuggingPriority(.required, for: .horizontal)
         summaryPill.setContentCompressionResistancePriority(.required, for: .horizontal)
 
-        let headerRow = horizontal([iconBox, headerTextCol, flexibleSpace(), summaryPill], spacing: 12)
+        let headerRow = horizontal([statusIconBox, headerTextCol, flexibleSpace(), summaryPill], spacing: 10)
         headerRow.alignment = .centerY
 
         listStack.orientation = .vertical
         listStack.alignment = .leading
-        listStack.spacing = 8
+        listStack.spacing = 7
         listStack.translatesAutoresizingMaskIntoConstraints = false
 
-        let docWrapper = NSView()
+        let docWrapper = TopAlignedDocument()
         docWrapper.translatesAutoresizingMaskIntoConstraints = false
         docWrapper.addSubview(listStack)
         NSLayoutConstraint.activate([
@@ -1256,16 +1257,18 @@ final class PricingSyncSheetController: NSObject, NSWindowDelegate {
         listScroll.heightAnchor.constraint(equalToConstant: 300).isActive = true
         docWrapper.widthAnchor.constraint(equalTo: listScroll.contentView.widthAnchor).isActive = true
 
-        copyBtn.target = self
+        let listCard = group([listScroll], inset: 10)
+        listCard.cornerRadius = 12
+
         recheckBtn.target = self
         closeBtn.target = self
         closeBtn.bezelColor = Design.blue
         closeBtn.keyEquivalent = "\r"
 
-        let footerRow = horizontal([copyBtn, flexibleSpace(), recheckBtn, closeBtn], spacing: 8)
+        let footerRow = horizontal([flexibleSpace(), recheckBtn, closeBtn], spacing: 8)
         footerRow.alignment = .centerY
 
-        let root = vertical([headerRow, divider(), listScroll, historicalNoteLabel, divider(), footerRow], spacing: 10)
+        let root = vertical([headerRow, listCard, historicalNoteLabel, divider(), footerRow], spacing: 12)
         for child in root.arrangedSubviews { fillWidth(child, in: root) }
 
         let content = fixedPage(root)
@@ -1292,8 +1295,17 @@ final class PricingSyncSheetController: NSObject, NSWindowDelegate {
             ?? (status["lastSyncAt"] as? NSNumber)?.doubleValue
             ?? 0
 
+        let badgeTint: NSColor = synced ? .systemGreen : accessibleWarningColor()
+        statusIconBox.fillColor = NSColor(name: nil) { app in
+            let isDark = app.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            return badgeTint.withAlphaComponent(isDark ? 0.18 : 0.11)
+        }
+        statusIconBox.borderColor = NSColor(name: nil) { app in
+            let isDark = app.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            return badgeTint.withAlphaComponent(isDark ? 0.34 : 0.20)
+        }
         if synced {
-            statusIconView.image = NSImage(systemSymbolName: "checkmark.circle.fill", accessibilityDescription: nil)
+            statusIconView.image = NSImage(systemSymbolName: "checkmark.seal.fill", accessibilityDescription: nil)
             statusIconView.contentTintColor = .systemGreen
             titleLabel.stringValue = healedCount > 0 ? "价格基准已同步并补齐历史记录" : "价格基准已同步"
             if healedCount > 0 {
@@ -1303,12 +1315,14 @@ final class PricingSyncSheetController: NSObject, NSWindowDelegate {
                 subtitleLabel.stringValue = ""
                 subtitleLabel.isHidden = true
             }
+            summaryPill.tint = Design.blue
         } else {
             statusIconView.image = NSImage(systemSymbolName: "exclamationmark.triangle.fill", accessibilityDescription: nil)
             statusIconView.contentTintColor = accessibleWarningColor()
             titleLabel.stringValue = "同步未完成，展示当前生效基准"
             subtitleLabel.stringValue = (err?.isEmpty == false) ? "检查提示：\(err!)" : "无法连接远端价格源"
             subtitleLabel.isHidden = false
+            summaryPill.tint = accessibleWarningColor()
         }
 
         if lastCheckMs > 0 {
@@ -1329,7 +1343,7 @@ final class PricingSyncSheetController: NSObject, NSWindowDelegate {
             $0.removeFromSuperview()
         }
 
-        var copyLines: [String] = []
+        var summaryLines: [String] = []
         let sortedKeys = prices.keys.sorted()
         for key in sortedKeys {
             guard let entry = prices[key] else { continue }
@@ -1342,7 +1356,7 @@ final class PricingSyncSheetController: NSObject, NSWindowDelegate {
             case "confirmed": ("已核对", Design.blue)
             case "user": ("自定义", .systemPurple)
             case "expired": ("已过期", accessibleWarningColor())
-            default: ("历史基准", .systemOrange)
+            default: ("历史基准", Design.inactivePill)
             }
 
             let prov = entry["provenance"] as? [String: Any] ?? [:]
@@ -1394,34 +1408,40 @@ final class PricingSyncSheetController: NSObject, NSWindowDelegate {
                 bottomRow = rateLabel
             }
 
-            let cardBody = vertical([topRow, bottomRow], spacing: 5)
+            let cardBody = vertical([topRow, bottomRow], spacing: 4)
             for r in cardBody.arrangedSubviews { fillWidth(r, in: cardBody) }
             let card = DesignCardBox()
             card.boxType = .custom
-            card.cornerRadius = 10
+            card.cornerRadius = 9
             card.borderWidth = 0.5
             card.borderColor = Design.border
-            card.fillColor = Design.subcard
+            card.enablesHoverHighlight = false
+            card.fillColor = NSColor(name: nil) { app in
+                app.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+                    ? NSColor.white.withAlphaComponent(0.035)
+                    : NSColor.black.withAlphaComponent(0.022)
+            }
             card.contentViewMargins = .zero
             card.addSubview(cardBody)
             cardBody.translatesAutoresizingMaskIntoConstraints = false
             NSLayoutConstraint.activate([
-                cardBody.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 12),
-                cardBody.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -12),
-                cardBody.topAnchor.constraint(equalTo: card.topAnchor, constant: 10),
-                cardBody.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -10)
+                cardBody.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 11),
+                cardBody.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -11),
+                cardBody.topAnchor.constraint(equalTo: card.topAnchor, constant: 8),
+                cardBody.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -8)
             ])
             listStack.addArrangedSubview(card)
             fillWidth(card, in: listStack)
 
-            copyLines.append("\(key) [\(stateTitle)] · \(rateParts.joined(separator: " · "))" + (dateText.isEmpty ? "" : " · \(dateText)") + (sourceUrl.isEmpty ? "" : " · \(sourceUrl)"))
+            summaryLines.append("\(key) [\(stateTitle)] · \(rateParts.joined(separator: " · "))" + (dateText.isEmpty ? "" : " · \(dateText)") + (sourceUrl.isEmpty ? "" : " · \(sourceUrl)"))
         }
 
         if sortedKeys.isEmpty {
             let emptyLabel = text("暂无可用的模型价格基准记录", size: 12, color: Design.secondary)
             listStack.addArrangedSubview(emptyLabel)
         }
-        latestTextSummary = copyLines.joined(separator: "\n")
+        renderedSummaryLines = summaryLines
+        listScroll.documentView?.layoutSubtreeIfNeeded()
         listScroll.contentView.scroll(to: .zero)
         listScroll.reflectScrolledClipView(listScroll.contentView)
     }
@@ -1431,23 +1451,14 @@ final class PricingSyncSheetController: NSObject, NSWindowDelegate {
         NSWorkspace.shared.open(url)
     }
 
-    @objc func copyPricingText() {
-        guard !latestTextSummary.isEmpty else { return }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(latestTextSummary, forType: .string)
-        app.showMessage("价格基准已复制到剪贴板")
-    }
-
     @objc func recheck() {
         guard !checking else { return }
         checking = true
-        recheckBtn.isEnabled = false
-        recheckBtn.title = "检查中…"
+        recheckBtn.setBusy(true, available: true)
         app.bridge.send(["command": "pricing_sync_check"]) { [weak self] result in
             guard let self else { return }
             self.checking = false
-            self.recheckBtn.isEnabled = self.app.reachable
-            self.recheckBtn.title = "重新检查"
+            self.recheckBtn.setBusy(false, available: self.app.reachable)
             if case .success(let payload) = result {
                 self.apply(payload: payload)
                 if payload["synced"] as? Bool == true {
@@ -1486,16 +1497,13 @@ final class PreferencesController: NSObject {
     let translationSwitch = DesignSwitch()
     let hudSwitch = DesignSwitch()
     let pricingSyncSwitch = DesignSwitch()
-    var pricingSyncCheckBtn: NSButton!
+    var pricingSyncCheckBtn: InlineRefreshButton!
     let refresh = NSPopUpButton(frame: .zero, pullsDown: false)
     let login = DesignSwitch()
     let syncLifecycleSwitch = DesignSwitch()
     let storageBadge = pillBadge("", color: Design.blue)
     let storageSubtitleLabel = text("清理无损缓存、孤儿残留与历史运行日志，核心账号与主对话受保护", size: 11, color: Design.secondary, wrap: true)
     var manageCacheBtn: NSButton!
-    let aboutSubtitleLabel = text("", size: 11, color: Design.blue, wrap: true)
-    var checkUpdateBtn: NSButton!
-    var updateSheet: UpdateSheetController?
     var pricingSheet: PricingSyncSheetController?
     private var lastStorageScanAt: Date = .distantPast
     private var storageScanInFlight = false
@@ -1532,10 +1540,7 @@ final class PreferencesController: NSObject {
         pricingSyncSwitch.state = app.configuration.value.autoPricingSyncEnabled ? .on : .off
         pricingSyncSwitch.target = self; pricingSyncSwitch.action = #selector(togglePricingSync)
         pricingSyncSwitch.setAccessibilityLabel("自动更新价格基准")
-        pricingSyncCheckBtn = button("立即检查", target: self, action: #selector(checkPricingSync))
-        pricingSyncCheckBtn.controlSize = .small
-        pricingSyncCheckBtn.translatesAutoresizingMaskIntoConstraints = false
-        pricingSyncCheckBtn.widthAnchor.constraint(greaterThanOrEqualToConstant: 76).isActive = true
+        pricingSyncCheckBtn = InlineRefreshButton("立即检查", width: 88, target: self, action: #selector(checkPricingSync))
         pricingSyncCheckBtn.setAccessibilityLabel("检查价格更新")
         let pricingControlGroup = horizontal([pricingSyncCheckBtn, pricingSyncSwitch], spacing: 8)
         pricingControlGroup.alignment = .centerY
@@ -1581,35 +1586,12 @@ final class PreferencesController: NSObject {
         ], spacing: 12)
         for child in systemAndStorageGroup.arrangedSubviews { fillWidth(child, in: systemAndStorageGroup) }
 
-        let version = app.updateManager.currentVersion
-        let verPill = pillBadge("v\(version)", color: Design.blue)
-        checkUpdateBtn = button("检查更新", target: self, action: #selector(showUpdateSheet))
-        let aboutRow = settingRow(
-            icon: "app-icon",
-            tint: .systemIndigo,
-            title: "GravityBox",
-            badge: verPill,
-            subtitle: "",
-            control: checkUpdateBtn
-        )
-        aboutSubtitleLabel.maximumNumberOfLines = 1
-        aboutSubtitleLabel.lineBreakMode = .byTruncatingTail
-        aboutSubtitleLabel.isHidden = true
-        if let rowStack = aboutRow as? NSStackView,
-           let captionsStack = rowStack.arrangedSubviews.dropFirst().first as? NSStackView {
-            captionsStack.addArrangedSubview(aboutSubtitleLabel)
-        }
-        let details = vertical([aboutRow], spacing: 12)
-        for child in details.arrangedSubviews { fillWidth(child, in: details) }
-
         let enhanceCard = group([enhanceGroup], inset: 16)
         enhanceCard.cornerRadius = 14
         let dataSyncCard = group([dataSyncGroup], inset: 16)
         dataSyncCard.cornerRadius = 14
         let systemAndStorageCard = group([systemAndStorageGroup], inset: 16)
         systemAndStorageCard.cornerRadius = 14
-        let aboutCard = group([details], inset: 16)
-        aboutCard.cornerRadius = 14
 
         func sectionGroup(_ title: String, card: NSView) -> NSStackView {
             let hdr = text(title, size: 11.5, weight: .semibold, color: Design.secondary)
@@ -1624,9 +1606,7 @@ final class PreferencesController: NSObject {
         root.addArrangedSubview(sectionGroup("Antigravity 增强", card: enhanceCard))
         root.addArrangedSubview(sectionGroup("配额与计价", card: dataSyncCard))
         root.addArrangedSubview(sectionGroup("系统与存储", card: systemAndStorageCard))
-        root.addArrangedSubview(sectionGroup("关于", card: aboutCard))
         view = scrollPage(root); Design.applyControls(view)
-        refreshUpdateRowState()
     }
 
     var maintenanceSheet: MaintenanceSheetController?
@@ -1690,26 +1670,6 @@ final class PreferencesController: NSObject {
         }
     }
 
-    @objc func showUpdateSheet() {
-        guard let window = app.window else { return }
-        if let active = window.activeSheetWindow, active !== updateSheet?.sheet { return }
-        if updateSheet == nil {
-            updateSheet = UpdateSheetController(app: app)
-        }
-        updateSheet?.show(in: window)
-    }
-
-    func refreshUpdateRowState() {
-        if let release = app.updateManager.availableRelease {
-            let subtitleText = "发现新版本 v\(release.version)，可立即升级"
-            aboutSubtitleLabel.stringValue = subtitleText
-            aboutSubtitleLabel.isHidden = false
-        } else {
-            aboutSubtitleLabel.stringValue = ""
-            aboutSubtitleLabel.isHidden = true
-        }
-    }
-
     func update() {
         translationSwitch.state = app.statusValue.enabled ? .on : .off
         translationSwitch.isEnabled = app.reachable && app.statusValue.mode != "unsupported"
@@ -1718,12 +1678,10 @@ final class PreferencesController: NSObject {
         login.state = SMAppService.mainApp.status == .enabled ? .on : .off
         syncLifecycleSwitch.state = app.configuration.value.syncAntigravityLifecycle ? .on : .off
         refresh.selectItem(at: Self.refreshIntervals.firstIndex(of: app.configuration.value.quotaRefreshMinutes) ?? 0)
-        refreshUpdateRowState()
         refreshStorageRowState()
         pricingSyncSwitch.state = app.configuration.value.autoPricingSyncEnabled ? .on : .off
         pricingSyncSwitch.isEnabled = app.reachable
-        pricingSyncCheckBtn?.isEnabled = app.reachable
-        updateSheet?.autoUpdateSwitch.state = app.configuration.value.autoUpdateEnabled ? .on : .off
+        pricingSyncCheckBtn?.setBusy(pricingSyncCheckBtn?.isBusy == true, available: app.reachable)
     }
 
     @objc func toggleTranslation() {
@@ -1748,12 +1706,11 @@ final class PreferencesController: NSObject {
     }
 
     @objc func checkPricingSync() {
-        pricingSyncCheckBtn?.isEnabled = false
-        pricingSyncCheckBtn?.title = "检查中…"
+        guard pricingSyncCheckBtn?.isBusy != true else { return }
+        pricingSyncCheckBtn?.setBusy(true, available: true)
         app.bridge.send(["command": "pricing_sync_check"]) { [weak self] result in
             guard let self else { return }
-            self.pricingSyncCheckBtn?.isEnabled = self.app.reachable
-            self.pricingSyncCheckBtn?.title = "立即检查"
+            self.pricingSyncCheckBtn?.setBusy(false, available: self.app.reachable)
             switch result {
             case .success(let payload):
                 if payload["synced"] as? Bool == true {

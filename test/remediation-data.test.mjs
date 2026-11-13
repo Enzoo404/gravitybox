@@ -124,10 +124,8 @@ test('F06/F07: verified Flash rate has a documented local validity boundary; sta
   await assert.rejects(m.archiveDatabasesBeforeClear([path]), /中止清理/);
 });
 
-test('F13/F14: validate the full import and policy patch before the first mutation', async t => {
+test('F14: validate the full policy patch before the first mutation', async t => {
   const f = await fixture(t), m = new AccountsManager(f.state);
-  await assert.rejects(m.importAccounts({ accounts: [{ email: 'first@example.invalid', refresh_token: 'synthetic' }, { email: 42, refresh_token: 'synthetic' }] }), /第2条/);
-  assert.equal((await m.loadIndex()).accounts.length, 0);
   await m.setAutoSwitchConfig({ enabled: true });
   const previous = await readFile(join(f.state, 'auto_switch.json'), 'utf8');
   for (const bad of [{ monitored_model: 42 }, { candidate_account_ids: 'broken' }, { enabled: 'yes' }, { candidate_account_ids: ['a', 'a'] }, { reserve_percentage: null }]) {

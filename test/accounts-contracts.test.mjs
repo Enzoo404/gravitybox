@@ -208,24 +208,33 @@ test('D04: 刷新途中取消 → 不落盘 token/配额/错误，也不继续�
 
 // ---------- C03 导出确认/脱敏 ----------
 
-test('C03: exportAccounts 默认脱敏；只有 confirm:true 才包含 refresh_token', async () => {
-  const dir = await sandbox('gb-p2-export-');
+test('gemini_all 监控范围聚合 Gemini 主池与 Argon/Carbon 可用配额最小值', async () => {
+  const dir = await sandbox('gb-p2-gemini-all-');
   try {
     const mgr = new AccountsManager(dir);
-    const secret = 'SYNTHETIC_REFRESH_TOKEN_1234567890';
-    await mgr.upsertAccount({ email: 'export@example.test', refreshToken: secret, accessToken: 'SYNTHETIC_ACCESS_TOKEN', expiresIn: 3600 });
-
-    const masked = await mgr.exportAccounts();
-    assert.equal(masked.tokens_included, false);
-    assert.equal(masked.confirm_required, true);
-    assert.equal(masked.accounts[0].refresh_token, '[REDACTED]');
-    assert.equal(Object.hasOwn(masked.accounts[0], 'access_token'), false, '导出不得包含临时 access_token');
-    assert.equal(JSON.stringify(masked).includes(secret), false, '缺省导出响应不得泄漏真实 refresh_token');
-
-    const confirmed = await mgr.exportAccounts(undefined, { confirm: true });
-    assert.equal(confirmed.tokens_included, true);
-    assert.equal(confirmed.confirm_required, false);
-    assert.equal(confirmed.accounts[0].refresh_token, secret, '确认导出才可包含 refresh_token（迁移/恢复用）');
+    const future = new Date(Date.now() + 3600_000).toISOString();
+    const acc = await mgr.upsertAccount({
+      email: 'gemini-all@example.test',
+      refreshToken: 'SYNTHETIC_REFRESH_TOKEN_GEMINI_ALL',
+      accessToken: 'SYNTHETIC_ACCESS_TOKEN',
+      expiresIn: 3600,
+    });
+    acc.quota = mgr.fuseQuota(
+      {
+        models: {
+          'gemini-3.8-flash': { displayName: 'Gemini 3.8 Flash', quotaInfo: { remainingFraction: 0.9, resetTime: future } },
+          'gemini-4-argon': { displayName: 'Gemini 4 Argon', quotaInfo: { remainingFraction: 0.25, resetTime: future } },
+        },
+      },
+      {
+        groups: [
+          { displayName: 'Gemini Models', buckets: [{ window: 'five_hour', remainingFraction: 0.9, resetTime: future }, { window: 'weekly', remainingFraction: 0.8, resetTime: future }] },
+        ],
+      }
+    );
+    await mgr.saveAccount(acc);
+    assert.equal(mgr.getAccountRemaining(acc, 'gemini_all'), 25);
+    assert.equal(mgr.getAccountRemaining(acc, 'gemini'), 80);
   } finally {
     await rm(dir, { recursive: true, force: true }).catch(() => {});
   }
@@ -760,8 +769,8 @@ test('AccountsManager: BOM/NUL 容错、CRUD、重排序与快照持久化', asy
   }
 });
 
-test('AccountsManager: Schema v2 导出与合并导入测试', async () => {
-  const sandbox = await mkdtemp(join(tmpdir(), 'gb-test-export-'));
+test('AccountsManager: 多账号索引与自定义标签保存读取验证', async () => {
+  const sandbox = await mkdtemp(join(tmpdir(), 'gb-test-index-read-'));
   try {
     const mgr = new AccountsManager(sandbox);
     await mgr.upsertAccount({
@@ -778,38 +787,10 @@ test('AccountsManager: Schema v2 导出与合并导入测试', async () => {
       customLabel: '标签2',
     });
 
-    // 导出（恢复用备份必须显式确认包含凭据；默认导出仅脱敏摘要）
-    const exported = await mgr.exportAccounts(undefined, { confirm: true });
-    assert.equal(exported.schema_version, 2);
-    assert.equal(exported.accounts.length, 2);
-    // 验证安全红线：绝不能导出临时 access_token 或 device_profile
-    assert.equal(Object.hasOwn(exported.accounts[0], 'access_token'), false);
-    assert.equal(Object.hasOwn(exported.accounts[0], 'device_profile'), false);
-    assert.equal(exported.accounts[0].email, 'export2@test.com');
-
-    // 导入到全新的沙箱中
-    const importSandbox = await mkdtemp(join(tmpdir(), 'gb-test-import-'));
-    try {
-      const importMgr = new AccountsManager(importSandbox);
-      const res = await importMgr.importAccounts(exported);
-      assert.equal(res.imported, 2);
-      assert.equal(res.updated, 0);
-
-      const importedIndex = await importMgr.loadIndex();
-      assert.equal(importedIndex.accounts.length, 2);
-
-      // 重复导入应触发增量更新而非重复新增
-      const res2 = await importMgr.importAccounts(exported);
-      assert.equal(res2.imported, 0);
-      assert.equal(res2.updated, 2);
-
-      // 脱敏摘要不得被当作可恢复凭据导入。
-      const masked = await mgr.exportAccounts();
-      assert.equal(masked.tokens_included, false);
-      await assert.rejects(() => importMgr.importAccounts(masked), /脱敏/);
-    } finally {
-      await rm(importSandbox, { recursive: true, force: true });
-    }
+    const loaded = await mgr.loadIndex();
+    assert.equal(loaded.accounts.length, 2);
+    assert.equal(loaded.accounts[0].email, 'export2@test.com');
+    assert.equal(loaded.accounts[0].custom_label, '标签2');
   } finally {
     await rm(sandbox, { recursive: true, force: true });
   }

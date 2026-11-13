@@ -441,7 +441,10 @@ final class SidebarLaunchButton: NSButton {
     override var allowsVibrancy: Bool { false }
     private var hoverTracking: NSTrackingArea?
     private let hoverMotion = DesignMotion()
+    private let pressMotion = DesignMotion()
     private var hoverProgress: CGFloat = 0
+    private var pressProgress: CGFloat = 0
+    private var lastHighlighted = false
     private var hovered = false {
         didSet {
             guard oldValue != hovered else { return }
@@ -451,6 +454,17 @@ final class SidebarLaunchButton: NSButton {
             }
         }
     }
+    override var isHighlighted: Bool {
+        didSet {
+            guard isHighlighted != lastHighlighted else { return }
+            lastHighlighted = isHighlighted
+            pressMotion.animate(in: self, from: pressProgress, to: isHighlighted ? 1.0 : 0.0, curve: .press, threshold: 0.02) { [weak self] val in
+                self?.pressProgress = val
+                self?.needsDisplay = true
+            }
+        }
+    }
+    deinit { hoverMotion.cancel(); pressMotion.cancel() }
     let iconView = NSImageView()
     let titleField: NSTextField
     let badgeLabel = text("", size: 11, weight: .semibold, color: Design.blue)
@@ -536,6 +550,15 @@ final class SidebarLaunchButton: NSButton {
     override func draw(_ dirtyRect: NSRect) {
         let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         let active = isHighlighted || hoverProgress > 0.5
+        let pp = isHighlighted ? max(pressProgress, 0.72) : pressProgress
+        let scale: CGFloat = 1.0 - 0.02 * pp
+        let gctx = NSGraphicsContext.current
+        gctx?.saveGraphicsState()
+        if abs(scale - 1.0) > 0.001, let cg = gctx?.cgContext {
+            cg.translateBy(x: bounds.midX, y: bounds.midY)
+            cg.scaleBy(x: scale, y: scale)
+            cg.translateBy(x: -bounds.midX, y: -bounds.midY)
+        }
         let rect = bounds.insetBy(dx: 0.5, dy: 1.5)
         let path = NSBezierPath(roundedRect: rect, xRadius: 9, yRadius: 9)
 
@@ -577,6 +600,7 @@ final class SidebarLaunchButton: NSButton {
             path.lineWidth = 2
             path.stroke()
         }
+        gctx?.restoreGraphicsState()
     }
 }
 

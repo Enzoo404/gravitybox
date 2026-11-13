@@ -11,7 +11,6 @@ import { DEEP_STEPS, traverseDeep, sanitizeNativeMenus, deepMarkdown, type DeepR
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { CDP, assertLoopback } from './cdp.js';
-import { allApplicationTargets } from './application-target.js';
 import { allowedTarget, discover, verifyPageService, type Endpoint } from './discovery.js';
 import { compareLayers, type Dictionary } from './dictionary.js';
 import {
@@ -124,11 +123,7 @@ export class Controller {
   private watchProfiles() {
     this.closeProfileWatchers();
     if (this.options.fixture) return;
-    const knownTargets = allApplicationTargets();
-    const profiles = knownTargets.some(t => t.profile === this.options.profile)
-      ? [...new Set(knownTargets.map(t => t.profile))]
-      : [this.options.profile];
-    for (const profileDir of profiles) {
+    for (const profileDir of [this.options.profile]) {
       try {
         const watcher = watch(profileDir, (_event, name) => {
           if (String(name) === 'DevToolsActivePort' && !this.stopped && !this.dormant) {

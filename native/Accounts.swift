@@ -1,19 +1,4 @@
 import Cocoa
-import Darwin
-import UniformTypeIdentifiers
-
-/// Restrict permissions at creation, before any credential bytes are written.
-func writePrivateAccountBackup(_ data: Data, to destination: URL) throws {
-    let temporary = destination.deletingLastPathComponent().appendingPathComponent(".gravitybox-backup-\(UUID().uuidString).tmp")
-    let descriptor = Darwin.open(temporary.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
-    guard descriptor >= 0 else { throw BackendFailure(message: "无法创建私密账号备份，请检查目标文件夹权限") }
-    let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
-    defer { try? handle.close(); try? FileManager.default.removeItem(at: temporary) }
-    try handle.write(contentsOf: data)
-    try handle.synchronize()
-    try handle.close()
-    guard Darwin.rename(temporary.path, destination.path) == 0 else { throw BackendFailure(message: "账号备份未能保存，原目标已保留") }
-}
 
 final class AccountsPage: NSObject {
     unowned let app: Assistant
@@ -23,9 +8,11 @@ final class AccountsPage: NSObject {
     let autoSwitchBadgeBox = NSBox()
     let autoSwitchBadgeIcon = symbol("arrow.triangle.2.circlepath", size: 13.5, color: Design.blue)
     let autoSwitchStatusBadge = pillBadge("已停用", color: Design.inactivePill)
+    let policySubtitleLabel = text("", size: 11, color: Design.secondary)
     let configButton = button("配置…", target: nil, action: #selector(showPolicySettings))
     let toggleCollapseAllButton = button("收起配额", target: nil, action: #selector(toggleCollapseAllAccounts))
     let policyBox: NSBox
+    let recommendationDivider = divider()
     let cardsStack = NSStackView()
     // B01: 页面顶部提示“N 个账号的分组沿用上次记录”（仅在没有挂载底部页脚的前提下提供轻量汇总）。
     private let staleGroupsSummary = text("", size: 11, color: .secondaryLabelColor, wrap: true)
@@ -164,7 +151,6 @@ final class AccountsPage: NSObject {
         saveCurrentBtn.bezelColor = .controlAccentColor
         let refreshQuotaBtn = QuotaRefreshButton(target: nil, action: #selector(refreshAllQuotas))
 
-        (toggleCollapseAllButton as? DesignButton)?.isQuietAccessory = true
         toggleCollapseAllButton.image = NSImage(
             systemSymbolName: isAllCollapsedMode ? "chevron.down" : "chevron.up",
             accessibilityDescription: nil
@@ -175,8 +161,7 @@ final class AccountsPage: NSObject {
         toggleCollapseAllButton.toolTip = nil
         toggleCollapseAllButton.setAccessibilityLabel(toggleCollapseAllButton.title)
 
-        let backupButton = button("备份…", target: nil, action: #selector(showBackupMenu(_:)))
-        let headerActions = horizontal([toggleCollapseAllButton, refreshQuotaBtn, backupButton, saveCurrentBtn], spacing: 8)
+        let headerActions = horizontal([toggleCollapseAllButton, refreshQuotaBtn, saveCurrentBtn], spacing: 8)
         headerActions.detachesHiddenViews = true
         let root = pageStack(title: "账号", actions: headerActions)
         root.spacing = Design.Spacing.page
@@ -223,11 +208,11 @@ final class AccountsPage: NSObject {
         let titleRow = horizontal([policyTitle, autoSwitchStatusBadge], spacing: 6)
         titleRow.alignment = .centerY
 
-        let policySub = text("当前账号配额耗尽或偏低时，智能评估并推荐充裕备用账号，确认后安全切换", size: 11, color: Design.secondary)
-        policySub.lineBreakMode = .byTruncatingTail
-        policySub.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        policySubtitleLabel.lineBreakMode = .byTruncatingTail
+        policySubtitleLabel.maximumNumberOfLines = 1
+        policySubtitleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        let typographyColumn = vertical([titleRow, policySub], spacing: 2)
+        let typographyColumn = vertical([titleRow, policySubtitleLabel], spacing: 2)
         typographyColumn.alignment = .leading
         typographyColumn.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
@@ -237,7 +222,7 @@ final class AccountsPage: NSObject {
         configButton.controlSize = .small
         configButton.font = .systemFont(ofSize: 11.5, weight: .medium)
         configButton.translatesAutoresizingMaskIntoConstraints = false
-        configButton.heightAnchor.constraint(equalToConstant: 22).isActive = true
+        configButton.heightAnchor.constraint(equalToConstant: 24).isActive = true
         configButton.setContentCompressionResistancePriority(.required, for: .horizontal)
         configButton.setContentHuggingPriority(.required, for: .horizontal)
 
@@ -254,8 +239,11 @@ final class AccountsPage: NSObject {
         policyRow.alignment = .centerY
         policyRow.heightAnchor.constraint(greaterThanOrEqualToConstant: 32).isActive = true
 
-        // B10 / U15 推荐候选行
+        // 推荐候选提示行
+        recommendationDivider.isHidden = true
         recommendationRow.alignment = .centerY
+        recommendationLabel.font = .systemFont(ofSize: 11.5, weight: .regular)
+        recommendationLabel.textColor = Design.secondary
         recommendationLabel.maximumNumberOfLines = 1
         recommendationLabel.lineBreakMode = .byTruncatingTail
         recommendationLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -263,12 +251,14 @@ final class AccountsPage: NSObject {
         switchRecommendedBtn.bezelColor = .controlAccentColor
         switchRecommendedBtn.action = #selector(switchRecommendedAccount)
         switchRecommendedBtn.setContentCompressionResistancePriority(.required, for: .horizontal)
-        let recIcon = symbol("gauge.with.needle", size: 14, color: Design.blue)
+        let recIcon = symbol("gauge.with.needle", size: 13.5, color: Design.blue)
         recommendationRow.setViews([recIcon, recommendationLabel, flexibleSpace(), switchRecommendedBtn], in: .leading)
         recommendationRow.isHidden = true
 
-        let policyContent = vertical([policyRow, recommendationRow], spacing: 6)
+        let policyContent = vertical([policyRow, recommendationDivider, recommendationRow], spacing: 8)
+        policyContent.detachesHiddenViews = true
         fillWidth(policyRow, in: policyContent)
+        fillWidth(recommendationDivider, in: policyContent)
         fillWidth(recommendationRow, in: policyContent)
         let box = group([policyContent], inset: 14)
         box.cornerRadius = Design.Radius.card
@@ -289,7 +279,6 @@ final class AccountsPage: NSObject {
         view = scrollPage(root)
         super.init()
 
-        backupButton.target = self
         toggleCollapseAllButton.target = self
         saveCurrentBtn.target = self
         refreshQuotaBtn.target = self
@@ -297,6 +286,7 @@ final class AccountsPage: NSObject {
         switchRecommendedBtn.target = self
         configButton.target = self
         autoSwitchToggle.target = self
+        updateAutoSwitchState()
         autoSwitchToggle.action = #selector(savePolicy)
         autoSwitchToggle.setAccessibilityLabel("智能切换，切换前仍需手动确认")
 
@@ -1006,19 +996,40 @@ final class AccountsPage: NSObject {
     }
 
 
+    private func monitoredModelSummaryLabel() -> String {
+        let raw = (autoSwitchConfig["monitored_model"] as? String ?? "gemini_all").trimmingCharacters(in: .whitespacesAndNewlines)
+        switch raw.lowercased() {
+        case "", "all", "gemini_all":
+            return "Gemini 全系模型"
+        case "gemini":
+            return "Gemini"
+        case "claude", "3p", "claude/gpt":
+            return "Claude/GPT"
+        case "argon", "gemini 4 argon":
+            return "Gemini 4 Argon"
+        case "carbon", "gemini 4 carbon":
+            return "Gemini 4 Carbon"
+        default:
+            return raw
+        }
+    }
+
     func updateAutoSwitchState() {
         autoSwitchToggle.isEnabled = true
         let isEnabled = autoSwitchToggle.state == .on
         let threshold = max(1, intVal(autoSwitchConfig, "reserve_percentage", fallback: intVal(autoSwitchConfig, "reservePercentage", fallback: 10)))
+        let candidateMin = max(1, intVal(autoSwitchConfig, "candidate_min_percentage", fallback: intVal(autoSwitchConfig, "candidateMinPercentage", fallback: 30)))
+        let monitored = monitoredModelSummaryLabel()
 
         policyBox.fillColor = Design.card
+        policySubtitleLabel.stringValue = "监测 \(monitored) · 剩余 ≤ \(threshold)% 时推荐候选（≥ \(candidateMin)%）"
         if isEnabled {
-            policyBox.borderWidth = 1.0
-            policyBox.borderColor = Design.blue.withAlphaComponent(0.35)
+            policyBox.borderWidth = 0.5
+            policyBox.borderColor = Design.blue.withAlphaComponent(0.32)
             autoSwitchBadgeBox.fillColor = Design.blue.withAlphaComponent(0.12)
             autoSwitchBadgeBox.borderColor = Design.blue.withAlphaComponent(0.24)
             autoSwitchBadgeIcon.contentTintColor = Design.blue
-            autoSwitchStatusBadge.title = "活跃中 · 阈值 ≤ \(threshold)%"
+            autoSwitchStatusBadge.title = "已启用 · 阈值 ≤ \(threshold)%"
             autoSwitchStatusBadge.tint = Design.blue
         } else {
             policyBox.borderWidth = 0.5
@@ -1063,6 +1074,7 @@ final class AccountsPage: NSObject {
         recommendationLabel.stringValue = ""
         switchRecommendedBtn.identifier = nil
         switchRecommendedBtn.isHidden = true
+        recommendationDivider.isHidden = true
         recommendationRow.isHidden = true
         rebuildAccountCards()
     }
@@ -1104,9 +1116,11 @@ final class AccountsPage: NSObject {
             let name = candidate["name"] as? String ?? ""
             let displayName = name.isEmpty ? email : "\(name) · \(email)"
             recommendationLabel.stringValue = "当前配额偏低 · 推荐 \(displayName)"
+            recommendationLabel.textColor = .labelColor
             recommendationLabel.toolTip = nil
             switchRecommendedBtn.identifier = NSUserInterfaceItemIdentifier(cId)
             switchRecommendedBtn.isHidden = false
+            recommendationDivider.isHidden = false
             recommendationRow.isHidden = false
         } else if let candidate, let cId = candidate["id"] as? String, cId != activeId {
             let email = candidate["email"] as? String ?? ""
@@ -1114,15 +1128,21 @@ final class AccountsPage: NSObject {
             let displayName = name.isEmpty ? email : "\(name) · \(email)"
             
             recommendationLabel.stringValue = reason.isEmpty ? "备用账号 · \(displayName)" : reason
+            recommendationLabel.textColor = Design.secondary
             switchRecommendedBtn.isHidden = true
+            recommendationDivider.isHidden = false
             recommendationRow.isHidden = false
         } else if let candidate, let cId = candidate["id"] as? String, cId == activeId {
             recommendationLabel.stringValue = "当前账号配额最充裕，暂无需切换。"
+            recommendationLabel.textColor = Design.secondary
             switchRecommendedBtn.isHidden = true
+            recommendationDivider.isHidden = false
             recommendationRow.isHidden = false
         } else {
             recommendationLabel.stringValue = reason.isEmpty ? "暂无可用候选" : reason
+            recommendationLabel.textColor = Design.secondary
             switchRecommendedBtn.isHidden = true
+            recommendationDivider.isHidden = false
             recommendationRow.isHidden = false
         }
     }
@@ -1382,104 +1402,5 @@ final class AccountsPage: NSObject {
     func update() {
         fetch()
         fetchPolicy()
-    }
-
-    @objc func exportAccounts() {
-        guard let window = app.window, window.activeSheetWindow == nil else { return }
-        // C03：导出前明确说明是否包含长期凭据；默认不静默导出 refresh_token。
-        let alert = NSAlert()
-        alert.messageText = "导出账号备份？"
-        alert.informativeText = "包含凭据的备份可用于在新机器恢复账号，但文件内含长期 refresh token，请仅保存在本机并妥善保管。"
-        alert.addButton(withTitle: "包含凭据导出")
-        alert.addButton(withTitle: "仅导出脱敏摘要")
-        alert.addButton(withTitle: "取消")
-        alert.beginSheetModal(for: window) { [weak self] response in
-            guard let self, response != .alertThirdButtonReturn else { return }
-            self.performExport(includeCredentials: response == .alertFirstButtonReturn)
-        }
-    }
-
-    private func performExport(includeCredentials: Bool) {
-        app.bridge.send(["command": "account_export", "confirm": includeCredentials]) { [weak self] response in
-            guard let self, case .success(let value) = response, let dataJson = value["data"], let window = self.app.window else { return }
-            let panel = NSSavePanel()
-            panel.allowedContentTypes = [.json]
-            panel.nameFieldStringValue = includeCredentials ? "GravityBox-账号备份.json" : "GravityBox-账号摘要.json"
-            panel.beginSheetModal(for: window) { [weak self] res in
-                guard let self, res == .OK, let url = panel.url else { return }
-                DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-                    let state = PerformanceSignpost.begin("AccountExportWrite")
-                    let result = Result {
-                        let d = try JSONSerialization.data(withJSONObject: dataJson, options: [.prettyPrinted, .sortedKeys])
-                        try writePrivateAccountBackup(d, to: url)
-                    }
-                    PerformanceSignpost.end("AccountExportWrite", state)
-                    DispatchQueue.main.async {
-                        guard let self else { return }
-                        switch result {
-                        case .success:
-                            if includeCredentials {
-                                self.app.showMessage("账号备份已导出 · 含登录凭据，请妥善保管。")
-                            } else {
-                                self.app.showMessage("已导出脱敏账号摘要；该文件不含凭据，不能用于恢复账号。")
-                            }
-                        case .failure(let error):
-                            self.app.showMessage("导出失败：\(error.localizedDescription)", error: true)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    @objc func showBackupMenu(_ sender: NSButton) {
-        let menu = NSMenu()
-        for (title, action) in [("导入账号备份…", #selector(importAccounts)), ("导出账号备份…", #selector(exportAccounts))] {
-            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
-            item.target = self
-            menu.addItem(item)
-        }
-        Design.popUpMenu(menu, below: sender)
-    }
-
-    @objc func importAccounts() {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.json]
-        panel.canChooseDirectories = false
-        guard let window = app.window, window.activeSheetWindow == nil else { return }
-        panel.beginSheetModal(for: window) { [weak self] response in
-            guard let self, response == .OK, let url = panel.url else { return }
-            DispatchQueue.global(qos: .userInitiated).async {
-                let result = Result { () throws -> [String: Any] in
-                    let size = (try url.resourceValues(forKeys: [.fileSizeKey])).fileSize ?? 0
-                    guard size <= 3_500_000 else { throw BackendFailure(message: "账号备份超过3.5MB，请拆分后导入") }
-                    let data = try Data(contentsOf: url)
-                    guard data.count <= 3_500_000,
-                          let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw BackendFailure(message: "请选择有效的账号备份JSON文件") }
-                    return json
-                }
-                DispatchQueue.main.async {
-                    switch result {
-                    case .failure(let error): self.app.showMessage("读取文件失败：\(error.localizedDescription)", error: true)
-                    case .success(let json): self.submitAccountImport(json)
-                    }
-                }
-            }
-        }
-    }
-
-    private func submitAccountImport(_ json: [String: Any]) {
-        app.bridge.send(["command": "account_import", "data": json]) { [weak self] result in
-            guard let self else { return }
-            switch result {
-            case .failure(let error): self.app.showMessage("导入失败：\(error.localizedDescription)", error: true)
-            case .success(let value):
-                let imported = intVal(value, "imported"), updated = intVal(value, "updated")
-                let failures = value["failures"] as? [[String: Any]] ?? []
-                self.app.showMessage("已导入 \(imported) 个新账号，更新 \(updated) 个已有账号。" + (failures.isEmpty ? "" : "另有 \(failures.count) 项未完成，请核对列表后重试。"), error: !failures.isEmpty)
-                self.fetch()
-                self.app.refresh()
-            }
-        }
     }
 }

@@ -23,7 +23,6 @@ final class DashboardPage: NSObject {
     let carbonWeeklyBar = quotaBar(title: "Gemini 4 Carbon", percentage: nil, resetText: "", icon: "sparkles", unknownPlaceholder: "未取得配额数据")
     let extraStandaloneStack = NSStackView()
     let argonStatusLabel = text("Argon 配额未知", size:11, color:.secondaryLabelColor, wrap:true)
-    let autoSwitchButton: NSButton
     let refreshQuotaButton: QuotaRefreshButton
 
     // 三磁贴 Bento 磁贴
@@ -54,8 +53,6 @@ final class DashboardPage: NSObject {
 
     init(app: Assistant) {
         self.app = app
-        autoSwitchButton = button("管理账号", target: app, action: #selector(Assistant.showAccounts))
-        autoSwitchButton.controlSize = .small
         refreshQuotaButton = QuotaRefreshButton(target: nil, action: #selector(refreshActiveQuota))
         refreshQuotaButton.controlSize = .small
         let stack = pageStack(title: "总览")
@@ -79,7 +76,7 @@ final class DashboardPage: NSObject {
         let identity = vertical([titleRow, activeEmailLabel, accountStatusLabel], spacing: 4)
         for row in identity.arrangedSubviews { fillWidth(row, in: identity) }
         identity.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        let heroActions = horizontal([refreshQuotaButton, autoSwitchButton], spacing: 6)
+        let heroActions = horizontal([refreshQuotaButton], spacing: 6)
         heroActions.alignment = .centerY
         let accountTopRow = identityHeader(identity: identity, actions: heroActions)
         let first = horizontal([gemini5hBar, geminiWeeklyBar], spacing: 14)
@@ -169,7 +166,6 @@ final class DashboardPage: NSObject {
         view = dashboardScrollPage(stack, hero: heroCard, metrics: [token, cost, requests])
         super.init()
 
-        autoSwitchButton.target = app
         refreshQuotaButton.target = self
         update()
     }
@@ -313,7 +309,6 @@ final class DashboardPage: NSObject {
                 let mTokens = intVal(item, "totalTokens", fallback: intVal(item, "total_tokens"))
                 let mReqs = intVal(item, "requestCount", fallback: intVal(item, "request_count"))
                 let mUsd = doubleVal(item, "estimatedUsd", fallback: doubleVal(item, "estimated_usd"))
-                let usdBadge = mUsd > 0 ? InterfaceText.formatUsd(mUsd) : ""
                 let sharePct: Int
                 if totalTokens > 0 {
                     sharePct = Int(round(Double(mTokens) / Double(totalTokens) * 100))
@@ -323,11 +318,12 @@ final class DashboardPage: NSObject {
                     sharePct = 0
                 }
                 let shareNote = sharePct > 0 ? " · 占比 \(sharePct)%" : ""
+                let costNote = mUsd > 0 ? " · \(InterfaceText.formatUsd(mUsd))" : ""
                 let row = Self.makeBentoSubRow(
                     title: displayModel,
-                    badgeText: usdBadge,
+                    badgeText: "",
                     badgeTint: Design.blue,
-                    subtitle: "今日调用 \(mReqs.formatted()) 次\(shareNote)",
+                    subtitle: "今日调用 \(mReqs.formatted()) 次\(shareNote)\(costNote)",
                     trailingText: "\(InterfaceText.formatCompactTokens(mTokens)) Token",
                     trailingTint: .labelColor
                 )
@@ -344,12 +340,12 @@ final class DashboardPage: NSObject {
             let mTokens = intVal(topModel, "totalTokens", fallback: intVal(topModel, "total_tokens"))
             let mReqs = intVal(topModel, "requestCount", fallback: intVal(topModel, "request_count"))
             let mUsd = doubleVal(topModel, "estimatedUsd", fallback: doubleVal(topModel, "estimated_usd"))
-            let usdBadge = mUsd > 0 ? InterfaceText.formatUsd(mUsd) : "主要模型"
+            let costNote = mUsd > 0 ? " · \(InterfaceText.formatUsd(mUsd))" : ""
             let row1 = Self.makeBentoSubRow(
                 title: displayModel,
-                badgeText: usdBadge,
+                badgeText: "",
                 badgeTint: Design.blue,
-                subtitle: "今日调用 \(mReqs.formatted()) 次 · 占今日全部调用",
+                subtitle: "今日调用 \(mReqs.formatted()) 次 · 占今日全部调用\(costNote)",
                 trailingText: "\(InterfaceText.formatCompactTokens(mTokens)) Token",
                 trailingTint: .labelColor
             )

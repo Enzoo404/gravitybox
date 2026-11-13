@@ -38,6 +38,23 @@ export async function atomicJson(path: string, value: unknown, signal?: AbortSig
   await atomicText(path, JSON.stringify(value, null, 2) + '\n', signal, options);
 }
 
+/** Read an optional JSON file; returns null silently on ENOENT, warns on corrupt/unreadable content. */
+export async function readOptionalJson<T = Record<string, unknown>>(path: string, label?: string): Promise<T | null> {
+  try {
+    return JSON.parse(await readFile(path, 'utf8')) as T;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+      console.warn(`[GravityBox] 读取可选配置 ${label ?? basenameForLog(path)} 失败: ${sanitizeError((error as Error)?.message ?? String(error))}`);
+    }
+    return null;
+  }
+}
+
+function basenameForLog(filePath: string): string {
+  const idx = filePath.lastIndexOf('/');
+  return idx >= 0 ? filePath.slice(idx + 1) : filePath;
+}
+
 type FileChange = { path: string; before: string | null; after: string | null };
 /** A recoverable file-set transaction. Caller holds the accounts write lease. */
 export async function recoverFileSet(journalPath: string, allowedPaths: string[]): Promise<void> {

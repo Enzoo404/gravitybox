@@ -137,22 +137,23 @@ final class CachePage: NSObject {
     // Hero Card Controls
     let reclaimableTitleLabel = text("可移入废纸篓体积", size: 11.5, weight: .medium, color: Design.secondary)
     let reclaimableValueLabel = text("正在扫描…", size: 28, weight: .bold)
-    let selectedSummaryBadge = pillBadge("正在扫描", color: .secondaryLabelColor)
-    let appStateLabel = text("", size: 11.5, color: Design.secondary)
+    let selectedSummaryBadge = pillBadge("正在扫描", color: Design.inactivePill)
+    let appStateLabel = text("", size: 11, color: Design.secondary)
     let compositionBar = CacheCompositionBar()
-    let safeLegendLabel = text("无损缓存与临时文件 —", size: 11, color: Design.secondary)
+    let safeLegendLabel = text("无损缓存 —", size: 11, color: Design.secondary)
     let statefulLegendWrap = NSStackView()
     let statefulLegendLabel = text("可瘦身历史 —", size: 11, color: Design.secondary)
-    let protectedLegendLabel = text("核心数据 — 已保护", size: 11, color: Design.secondary)
+    let protectedLegendLabel = text("核心数据已保护", size: 11, color: Design.secondary)
     let lastScannedLabel = text("", size: 11, color: Design.secondary)
 
     // Breakdown Card Controls
     let breakdownWarningLabel = text("", size: 11, color: accessibleWarningColor())
+    let protectedNoteLabel = text("", size: 11, color: Design.secondary)
     let itemsStack = NSStackView()
 
     // Footer Recovery Card Controls
     let recoveryTitleLabel = text("废纸篓安全恢复", size: 13, weight: .semibold, color: .labelColor)
-    let recoverySubtitleLabel = text("清理项移入系统废纸篓并保留恢复点，支持一键原位还原", size: 11, color: Design.secondary)
+    let recoverySubtitleLabel = text("清理项均移入系统废纸篓并保留恢复点，支持一键原位还原", size: 11, color: Design.secondary)
     let feedbackLabel = text("", size: 11.5, color: Design.secondary, wrap: true)
 
     // State
@@ -174,6 +175,8 @@ final class CachePage: NSObject {
     var browserBusy = false
     var scannedAt: Int = 0
     var busy = false
+    var minorSafeExpanded = false
+    private var minorSafeNames: [String] = []
     private var restorableSnapshots: [[String: Any]] = []
     private var latestRestorableSnapshotId: String = ""
     private var lastFetchTime: Date = .distantPast
@@ -187,6 +190,8 @@ final class CachePage: NSObject {
         var clearable: Bool
     }
     private var rowControlsByName: [String: ItemRowControls] = [:]
+    private var minorGroupCheckbox: NSButton?
+    private var minorGroupSizeLabel: NSTextField?
     private var renderedItemNames: [String] = []
     private var renderedLayoutSignature: String = ""
 
@@ -267,7 +272,7 @@ final class CachePage: NSObject {
         legendProtected.alignment = .centerY
 
         let compressiblePriority = NSLayoutConstraint.Priority(45)
-        for lbl in [reclaimableTitleLabel, appStateLabel, safeLegendLabel, statefulLegendLabel, protectedLegendLabel, lastScannedLabel, breakdownWarningLabel, recoveryTitleLabel, recoverySubtitleLabel] {
+        for lbl in [reclaimableTitleLabel, appStateLabel, safeLegendLabel, statefulLegendLabel, protectedLegendLabel, lastScannedLabel, breakdownWarningLabel, protectedNoteLabel, recoveryTitleLabel, recoverySubtitleLabel] {
             lbl.maximumNumberOfLines = 1
             lbl.lineBreakMode = .byTruncatingTail
             lbl.cell?.wraps = false
@@ -275,7 +280,8 @@ final class CachePage: NSObject {
             lbl.setContentCompressionResistancePriority(compressiblePriority, for: .horizontal)
             lbl.setContentHuggingPriority(NSLayoutConstraint.Priority(10), for: .horizontal)
         }
-        selectedSummaryBadge.setContentCompressionResistancePriority(compressiblePriority, for: .horizontal)
+        selectedSummaryBadge.setContentCompressionResistancePriority(.required, for: .horizontal)
+        selectedSummaryBadge.setContentHuggingPriority(.required, for: .horizontal)
 
         let legendSpacer = flexibleSpace()
         legendSpacer.setContentHuggingPriority(NSLayoutConstraint.Priority(20), for: .horizontal)
@@ -296,12 +302,14 @@ final class CachePage: NSObject {
         breakdownHeader.alignment = .centerY
 
         breakdownWarningLabel.isHidden = true
+        protectedNoteLabel.isHidden = true
 
         itemsStack.orientation = .vertical
         itemsStack.alignment = .leading
         itemsStack.spacing = 6.5
 
-        let breakdownContent = vertical([breakdownHeader, breakdownWarningLabel, divider(), itemsStack], spacing: 8)
+        let breakdownContent = vertical([breakdownHeader, breakdownWarningLabel, divider(), itemsStack, protectedNoteLabel], spacing: 8)
+        breakdownContent.detachesHiddenViews = true
         for child in breakdownContent.arrangedSubviews { fillWidth(child, in: breakdownContent) }
         let breakdownCard = group([breakdownContent], inset: 13)
         breakdownCard.cornerRadius = 14
@@ -634,18 +642,41 @@ final class CachePage: NSObject {
         let heroDisplayBytes = sel.count > 0 ? sel.bytes : safeCacheBytes
         reclaimableTitleLabel.stringValue = "可移入废纸篓体积"
         reclaimableValueLabel.stringValue = formatBytes(heroDisplayBytes)
+        if sel.count > 0 {
+            selectedSummaryBadge.title = "已选 \(sel.count) 项"
+            selectedSummaryBadge.tint = Design.blue
+        } else if !entries.isEmpty {
+            selectedSummaryBadge.title = "未选择"
+            selectedSummaryBadge.tint = Design.inactivePill
+        }
+        if appRunning {
+            appStateLabel.stringValue = "Antigravity 运行中 · 清理前将提示关闭"
+            appStateLabel.textColor = Design.secondary
+        } else if !entries.isEmpty {
+            appStateLabel.stringValue = "仅移入废纸篓 · 核心数据受保护"
+            appStateLabel.textColor = Design.secondary
+        } else {
+            appStateLabel.stringValue = ""
+        }
 
-        var protectionNotes = blocked.map { "\($0["name"] ?? "缓存")：\($0["reason"] ?? "无法读取")" }
-        if uncertainConversationCount > 0 { protectionNotes.append("\(uncertainConversationCount) 个会话关系待确认，已保护并排除清理") }
-        breakdownWarningLabel.stringValue = protectionNotes.joined(separator: "；")
+        let blockedNotes = blocked.map { "\($0["name"] ?? "缓存")：\($0["reason"] ?? "无法读取")" }
+        breakdownWarningLabel.stringValue = blockedNotes.joined(separator: "；")
         breakdownWarningLabel.setAccessibilityLabel(breakdownWarningLabel.stringValue)
-        breakdownWarningLabel.isHidden = protectionNotes.isEmpty
+        breakdownWarningLabel.isHidden = blockedNotes.isEmpty
+
+        if uncertainConversationCount > 0 {
+            protectedNoteLabel.stringValue = "已自动保护 \(uncertainConversationCount) 个归属待确认会话、全部主对话及登录凭据"
+            protectedNoteLabel.isHidden = false
+        } else {
+            protectedNoteLabel.stringValue = ""
+            protectedNoteLabel.isHidden = true
+        }
 
         compositionBar.safeBytes = safeCacheBytes
         compositionBar.statefulBytes = statefulCacheBytes
         compositionBar.protectedBytes = totalProtectedBytes
 
-        safeLegendLabel.stringValue = "无损缓存与临时文件 \(formatBytes(safeCacheBytes))"
+        safeLegendLabel.stringValue = "无损缓存 \(formatBytes(safeCacheBytes))"
         if statefulCacheBytes > 0 {
             statefulLegendWrap.isHidden = false
             statefulLegendLabel.stringValue = "可瘦身历史 \(formatBytes(statefulCacheBytes))"
@@ -654,12 +685,12 @@ final class CachePage: NSObject {
         }
         if isTruncated {
             protectedLegendLabel.stringValue = totalProtectedBytes > 0
-                ? "核心数据 \(formatBytes(totalProtectedBytes)) · 部分统计（超出扫描时限）"
-                : "核心数据 · 部分统计（超出扫描时限）"
+                ? "核心数据 \(formatBytes(totalProtectedBytes))（部分统计）"
+                : "核心数据（部分统计）"
         } else {
             protectedLegendLabel.stringValue = totalProtectedBytes > 0
-                ? "核心数据 \(formatBytes(totalProtectedBytes)) 已保护"
-                : "核心数据已保护"
+                ? "核心数据 \(formatBytes(totalProtectedBytes))（已保护）"
+                : "核心数据（已保护）"
         }
 
         if scannedAt > 0 {
@@ -688,6 +719,25 @@ final class CachePage: NSObject {
         }
     }
 
+    private func syncMinorGroupState() {
+        guard let box = minorGroupCheckbox else { return }
+        let selectableMinor = minorSafeNames.filter { name in
+            guard let ctrl = rowControlsByName[name] else { return false }
+            return ctrl.clearable && ctrl.bytes > 0
+        }
+        let selectedMinorCount = selectableMinor.filter { selectedNames.contains($0) }.count
+        box.allowsMixedState = true
+        if selectableMinor.isEmpty || selectedMinorCount == 0 {
+            box.state = .off
+        } else if selectedMinorCount == selectableMinor.count {
+            box.state = .on
+        } else {
+            box.state = .mixed
+        }
+        box.isEnabled = !selectableMinor.isEmpty && !busy
+        minorGroupSizeLabel?.textColor = selectedMinorCount > 0 ? .labelColor : Design.secondary
+    }
+
     private func updateSelectionInPlace() {
         updateSummaryAndControls()
         for (name, ctrl) in rowControlsByName {
@@ -696,6 +746,7 @@ final class CachePage: NSObject {
             ctrl.checkbox.isEnabled = ctrl.clearable && ctrl.bytes > 0 && !busy
             ctrl.sizeLabel.textColor = isSelected ? .labelColor : Design.secondary
         }
+        syncMinorGroupState()
     }
 
     private func renderAll() {
@@ -791,7 +842,7 @@ final class CachePage: NSObject {
             if !clearable, let reason = item["reason"] as? String, !reason.isEmpty {
                 detailCopy = reason
             } else if name == "AgentBrowserCache" && browserBusy {
-                detailCopy = "\(subtitle) · 独立浏览器运行中，清理时自动跳过"
+                detailCopy = "浏览器运行中，清理时自动跳过"
             } else {
                 detailCopy = subtitle
             }
@@ -815,12 +866,25 @@ final class CachePage: NSObject {
             guard let item = sortedEntries.first(where: { ($0["name"] as? String) == name }) else { return false }
             return isStatefulItem(item)
         }
+        let minorThresholdBytes: Int64 = 15 * 1024 * 1024
+        let candidateMinorSafe = safeNames.filter { name in
+            guard name != "OrphanAgentData", let ctrl = rowControlsByName[name] else { return false }
+            return ctrl.clearable && ctrl.bytes > 0 && ctrl.bytes < minorThresholdBytes
+        }
+        let foldMinorSafe = candidateMinorSafe.count >= 2
+        let majorSafeNames = foldMinorSafe
+            ? safeNames.filter { !candidateMinorSafe.contains($0) }
+            : safeNames
+        minorSafeNames = foldMinorSafe ? candidateMinorSafe : []
+
         let currentWindowTitle = Self.retentionChoices.first(where: { $0.days == selectedRetentionDays })?.title ?? "保留近 7 天"
-        let nextSignature = "\(safeNames.joined(separator: "|"))##\(statefulNames.joined(separator: "|"))##\(statefulNames.isEmpty ? currentWindowTitle : "has-stateful")"
+        let nextSignature = "\(majorSafeNames.joined(separator: "|"))##\(minorSafeNames.joined(separator: "|"))##\(minorSafeExpanded ? "exp" : "col")##\(statefulNames.joined(separator: "|"))##\(statefulNames.isEmpty ? currentWindowTitle : "has-stateful")"
 
         if nextSignature != renderedLayoutSignature {
             renderedLayoutSignature = nextSignature
             renderedItemNames = nextNames
+            minorGroupCheckbox = nil
+            minorGroupSizeLabel = nil
             itemsStack.arrangedSubviews.forEach {
                 itemsStack.removeArrangedSubview($0)
                 $0.removeFromSuperview()
@@ -828,20 +892,81 @@ final class CachePage: NSObject {
 
             if !safeNames.isEmpty {
                 let safeDot = Self.makeLegendDot(color: Design.blue)
-                let safeTitle = text("无损缓存与临时文件（推荐清理）", size: 11.5, weight: .semibold, color: Design.secondary)
+                let safeTitle = text("无损加速缓存（推荐清理）", size: 11.5, weight: .semibold, color: Design.secondary)
                 let safeHeader = horizontal([safeDot, safeTitle], spacing: 6)
                 safeHeader.alignment = .centerY
                 itemsStack.addArrangedSubview(safeHeader)
                 fillWidth(safeHeader, in: itemsStack)
-                for (idx, name) in safeNames.enumerated() {
+                var rowCountInSafe = 0
+                for name in majorSafeNames {
                     guard let ctrl = rowControlsByName[name] else { continue }
-                    if idx > 0 {
+                    if rowCountInSafe > 0 {
                         let line = divider()
                         itemsStack.addArrangedSubview(line)
                         fillWidth(line, in: itemsStack)
                     }
                     itemsStack.addArrangedSubview(ctrl.rowView)
                     fillWidth(ctrl.rowView, in: itemsStack)
+                    rowCountInSafe += 1
+                }
+                if foldMinorSafe {
+                    if rowCountInSafe > 0 {
+                        let line = divider()
+                        itemsStack.addArrangedSubview(line)
+                        fillWidth(line, in: itemsStack)
+                    }
+                    let minorBytes = minorSafeNames.reduce(Int64(0)) { acc, name in
+                        acc + (rowControlsByName[name]?.bytes ?? 0)
+                    }
+                    let groupCheck = NSButton(checkboxWithTitle: "", target: self, action: #selector(toggleMinorSafeGroup(_:)))
+                    groupCheck.allowsMixedState = true
+                    groupCheck.setAccessibilityLabel("勾选其余底层加速缓存")
+                    minorGroupCheckbox = groupCheck
+
+                    let gTitle = text("其余 \(minorSafeNames.count) 项底层编译与图形缓存", size: 13, weight: .semibold, color: .labelColor)
+                    let gSub = text("V8、Metal、WebGPU 等细碎加速缓存（可展开逐项勾选）", size: 11, color: Design.secondary)
+                    gSub.maximumNumberOfLines = 1
+                    gSub.lineBreakMode = .byTruncatingTail
+                    let gCaptions = vertical([gTitle, gSub], spacing: 2)
+                    gCaptions.alignment = .leading
+                    gCaptions.setContentCompressionResistancePriority(NSLayoutConstraint.Priority(45), for: .horizontal)
+
+                    let expandBtn = button(minorSafeExpanded ? "收起" : "展开明细", target: self, action: #selector(toggleMinorSafeExpanded))
+                    expandBtn.controlSize = .small
+                    expandBtn.image = NSImage(
+                        systemSymbolName: minorSafeExpanded ? "chevron.up" : "chevron.down",
+                        accessibilityDescription: nil
+                    )?.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 10, weight: .semibold))
+                    expandBtn.image?.isTemplate = true
+                    expandBtn.imagePosition = .imageTrailing
+                    expandBtn.setContentHuggingPriority(.required, for: .horizontal)
+                    expandBtn.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+                    let gSize = text(formatBytes(minorBytes), size: 13, weight: .semibold, color: .labelColor)
+                    gSize.font = .monospacedDigitSystemFont(ofSize: 13, weight: .semibold)
+                    gSize.alignment = .right
+                    gSize.setContentHuggingPriority(.required, for: .horizontal)
+                    gSize.setContentCompressionResistancePriority(.required, for: .horizontal)
+                    minorGroupSizeLabel = gSize
+
+                    let gSpacer = flexibleSpace()
+                    gSpacer.setContentHuggingPriority(NSLayoutConstraint.Priority(20), for: .horizontal)
+                    let groupRow = horizontal([groupCheck, gCaptions, gSpacer, expandBtn, gSize], spacing: 10)
+                    groupRow.alignment = .centerY
+                    itemsStack.addArrangedSubview(groupRow)
+                    fillWidth(groupRow, in: itemsStack)
+                    Design.applyControls(groupRow)
+
+                    if minorSafeExpanded {
+                        for name in minorSafeNames {
+                            guard let ctrl = rowControlsByName[name] else { continue }
+                            let subLine = divider()
+                            itemsStack.addArrangedSubview(subLine)
+                            fillWidth(subLine, in: itemsStack)
+                            itemsStack.addArrangedSubview(ctrl.rowView)
+                            fillWidth(ctrl.rowView, in: itemsStack)
+                        }
+                    }
                 }
             }
 
@@ -853,7 +978,7 @@ final class CachePage: NSObject {
             }
 
             let historyDot = Self.makeLegendDot(color: Design.color(0xD97706, 0xFBBF24))
-            let historyTitle = text("历史深度瘦身（按需勾选 · 主对话与历史账单完好保留）", size: 11.5, weight: .semibold, color: Design.secondary)
+            let historyTitle = text("历史记录瘦身（按需勾选 · 保留主对话与账单）", size: 11.5, weight: .semibold, color: Design.secondary)
             let historyHeader = horizontal([historyDot, historyTitle], spacing: 6)
             historyHeader.alignment = .centerY
             itemsStack.addArrangedSubview(historyHeader)
@@ -878,6 +1003,7 @@ final class CachePage: NSObject {
                 fillWidth(emptyHint, in: itemsStack)
             }
         }
+        syncMinorGroupState()
     }
 
     private func renderSelectedSnapshotSummary(_ snap: [String: Any]) {
@@ -989,6 +1115,25 @@ final class CachePage: NSObject {
             selectedNames.remove(name)
         }
         updateSelectionInPlace()
+    }
+
+    @objc func toggleMinorSafeGroup(_ sender: NSButton) {
+        let selectableMinor = minorSafeNames.filter { name in
+            guard let ctrl = rowControlsByName[name] else { return false }
+            return ctrl.clearable && ctrl.bytes > 0
+        }
+        let allSelected = !selectableMinor.isEmpty && selectableMinor.allSatisfy { selectedNames.contains($0) }
+        if allSelected {
+            selectedNames.subtract(selectableMinor)
+        } else {
+            selectedNames.formUnion(selectableMinor)
+        }
+        updateSelectionInPlace()
+    }
+
+    @objc func toggleMinorSafeExpanded() {
+        minorSafeExpanded.toggle()
+        rebuildItemsStack()
     }
 
     @objc func selectRecommendedOnly() {
@@ -1285,7 +1430,7 @@ final class CachePage: NSObject {
 // MARK: - Maintenance Sheet Window Controller (方案 A: 设置面板内嵌弹窗)
 final class MaintenanceSheetController: NSObject, NSWindowDelegate {
     unowned let app: Assistant
-    let sheet = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 740, height: 660), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+    let sheet = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 740, height: 724), styleMask: [.titled, .closable], backing: .buffered, defer: false)
     var cachePage: CachePage
     var onDismiss: (() -> Void)?
 

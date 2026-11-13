@@ -1,4 +1,3 @@
-import { allApplicationTargets } from './application-target.js';
 import { lstat, readdir, mkdir, readFile } from 'node:fs/promises';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
@@ -132,7 +131,7 @@ export function normalizeRetentionDays(raw: unknown): number {
 export const CACHE_METADATA: Record<string, CacheItemMetadata> = {
   'Cache': {
     title: '网络与静态资源缓存',
-    subtitle: '界面静态资源与临时网络响应数据',
+    subtitle: '界面资源与临时网络缓存',
     icon: 'internaldrive',
     category: 'safe',
     section: 'runtime',
@@ -140,7 +139,7 @@ export const CACHE_METADATA: Record<string, CacheItemMetadata> = {
   },
   'Code Cache': {
     title: 'V8 字节码编译缓存',
-    subtitle: 'JavaScript 与 WebAssembly 预编译加速缓存',
+    subtitle: 'JS / Wasm 预编译加速缓存',
     icon: 'cpu',
     category: 'safe',
     section: 'runtime',
@@ -148,7 +147,7 @@ export const CACHE_METADATA: Record<string, CacheItemMetadata> = {
   },
   'GPUCache': {
     title: '图形与着色器缓存',
-    subtitle: 'Metal 与 WebGL 图形渲染管线编译产物',
+    subtitle: 'Metal 与 WebGL 着色器缓存',
     icon: 'sparkles.rectangle.stack',
     category: 'safe',
     section: 'runtime',
@@ -156,7 +155,7 @@ export const CACHE_METADATA: Record<string, CacheItemMetadata> = {
   },
   'DawnCache': {
     title: 'WebGPU 图形加速缓存',
-    subtitle: 'Dawn 引擎图形管线与计算着色器缓存',
+    subtitle: 'Dawn 引擎图形管线缓存',
     icon: 'cube.transparent',
     category: 'safe',
     section: 'runtime',
@@ -164,7 +163,7 @@ export const CACHE_METADATA: Record<string, CacheItemMetadata> = {
   },
   'DawnWebGPUCache': {
     title: 'WebGPU 管线缓存',
-    subtitle: 'WebGPU 渲染管线与着色器加速缓存',
+    subtitle: 'WebGPU 管线与着色器缓存',
     icon: 'cube.transparent',
     category: 'safe',
     section: 'runtime',
@@ -172,7 +171,7 @@ export const CACHE_METADATA: Record<string, CacheItemMetadata> = {
   },
   'DawnGraphiteCache': {
     title: 'Graphite 渲染管线缓存',
-    subtitle: 'Chromium Graphite 图形管线预编译产物',
+    subtitle: 'Chromium 图形管线预编译缓存',
     icon: 'cube.transparent',
     category: 'safe',
     section: 'runtime',
@@ -180,7 +179,7 @@ export const CACHE_METADATA: Record<string, CacheItemMetadata> = {
   },
   'GraphiteDawnCache': {
     title: 'Graphite 着色器加速缓存',
-    subtitle: '现代图形后端预编译着色器与管线缓存',
+    subtitle: '图形后端着色器与管线缓存',
     icon: 'sparkles.rectangle.stack',
     category: 'safe',
     section: 'runtime',
@@ -188,7 +187,7 @@ export const CACHE_METADATA: Record<string, CacheItemMetadata> = {
   },
   'ShaderCache': {
     title: '底层着色器缓存',
-    subtitle: '图形驱动预编译着色器残留数据',
+    subtitle: '图形驱动预编译着色器缓存',
     icon: 'sparkles.rectangle.stack',
     category: 'safe',
     section: 'runtime',
@@ -196,7 +195,7 @@ export const CACHE_METADATA: Record<string, CacheItemMetadata> = {
   },
   'CachedData': {
     title: '工作区运行编译缓存',
-    subtitle: '主进程与渲染进程预编译脚本缓存',
+    subtitle: '主进程与渲染进程脚本缓存',
     icon: 'memorychip',
     category: 'safe',
     section: 'runtime',
@@ -204,7 +203,7 @@ export const CACHE_METADATA: Record<string, CacheItemMetadata> = {
   },
   'CachedExtensionVSIXs': {
     title: '扩展安装包残留',
-    subtitle: '插件安装与更新遗留的 VSIX 压缩包',
+    subtitle: '插件安装遗留的 VSIX 压缩包',
     icon: 'shippingbox',
     category: 'safe',
     section: 'runtime',
@@ -212,7 +211,7 @@ export const CACHE_METADATA: Record<string, CacheItemMetadata> = {
   },
   'CachedProfilesData': {
     title: '配置快照临时缓存',
-    subtitle: '工作区配置切换生成的临时加速缓存',
+    subtitle: '配置切换生成的临时加速缓存',
     icon: 'doc.badge.gearshape',
     category: 'safe',
     section: 'runtime',
@@ -220,7 +219,7 @@ export const CACHE_METADATA: Record<string, CacheItemMetadata> = {
   },
   'Crashpad': {
     title: '崩溃转储与诊断残留',
-    subtitle: '历史崩溃报告与废弃诊断转储文件',
+    subtitle: '历史崩溃报告与诊断转储',
     icon: 'exclamationmark.triangle',
     category: 'safe',
     section: 'runtime',
@@ -228,7 +227,7 @@ export const CACHE_METADATA: Record<string, CacheItemMetadata> = {
   },
   'logs': {
     title: '历史运行日志',
-    subtitle: '主进程、渲染进程与扩展宿主历史日志',
+    subtitle: '应用与扩展宿主运行日志',
     icon: 'doc.text',
     category: 'safe',
     section: 'runtime',
@@ -236,7 +235,7 @@ export const CACHE_METADATA: Record<string, CacheItemMetadata> = {
   },
   'blob_storage': {
     title: '临时二进制块缓存',
-    subtitle: '运行期产生的临时二进制块数据',
+    subtitle: '运行期临时二进制块数据',
     icon: 'archivebox',
     category: 'safe',
     section: 'runtime',
@@ -244,7 +243,7 @@ export const CACHE_METADATA: Record<string, CacheItemMetadata> = {
   },
   'PartitionsCache': {
     title: '内嵌视图子分区缓存',
-    subtitle: '内嵌浏览器与隔离分区的静态资源及编译缓存',
+    subtitle: '隔离视图静态资源与编译缓存',
     icon: 'square.split.2x2',
     category: 'safe',
     section: 'runtime',
@@ -252,7 +251,7 @@ export const CACHE_METADATA: Record<string, CacheItemMetadata> = {
   },
   'AgentBrowserCache': {
     title: '浏览器沙箱加速缓存',
-    subtitle: 'Browser 沙箱的网页与编译缓存（保留站点登录与 Cookie）',
+    subtitle: '内置浏览器缓存（保留登录与 Cookie）',
     icon: 'globe',
     category: 'safe',
     section: 'runtime',
@@ -260,7 +259,7 @@ export const CACHE_METADATA: Record<string, CacheItemMetadata> = {
   },
   'OrphanAgentData': {
     title: '崩溃日志与临时媒体',
-    subtitle: '父对话已删除的孤儿任务碎片、崩溃日志与临时媒体缓存',
+    subtitle: '已删对话碎片、崩溃日志与临时媒体',
     icon: 'trash.slash',
     category: 'safe',
     section: 'runtime',
@@ -268,7 +267,7 @@ export const CACHE_METADATA: Record<string, CacheItemMetadata> = {
   },
   'AgentTaskStepLogs': {
     title: '历史任务与步骤输出日志',
-    subtitle: '非活跃对话的后台终端日志、步骤输出与 scratch 临时草稿',
+    subtitle: '非活跃对话的终端、步骤日志与草稿',
     icon: 'terminal',
     category: 'stateful',
     section: 'history',
@@ -277,7 +276,7 @@ export const CACHE_METADATA: Record<string, CacheItemMetadata> = {
   },
   'AgentVerboseTranscripts': {
     title: '全量冗余转录与分片镜像',
-    subtitle: '非活跃对话的 transcript_full 与分片镜像（保留紧凑版记录）',
+    subtitle: '非活跃对话冗余转录（保留精简版）',
     icon: 'doc.on.doc',
     category: 'stateful',
     section: 'history',
@@ -286,7 +285,7 @@ export const CACHE_METADATA: Record<string, CacheItemMetadata> = {
   },
   'AgentSubagentDatabases': {
     title: '历史子智能体轨迹库',
-    subtitle: '已完成任务的后台 Subagent 数据库（清理前自动归档 Token 账单）',
+    subtitle: '已完成子智能体库（账单已归档）',
     icon: 'arrow.triangle.branch',
     category: 'stateful',
     section: 'history',
@@ -345,7 +344,7 @@ export const CACHE_METADATA: Record<string, CacheItemMetadata> = {
 
 export async function antigravityRunning(appPath = '/Applications/Antigravity.app') {
   try {
-    const appRoots = Array.from(new Set([appPath, ...allApplicationTargets().map(t => t.appPath)]));
+    const appRoots = Array.from(new Set([appPath, '/Applications/Antigravity.app']));
     const macOsPrefixes = appRoots.map(p => p + '/Contents/MacOS/');
     const lsPrefixes = appRoots.map(p => p + '/Contents/Resources/bin/language_server');
     const { stdout } = await promisify(execFile)('/bin/ps', ['-axo', 'command=']);
@@ -799,22 +798,16 @@ export class CacheMaintenance {
     const targets: SubTargetSpec[] = [];
     try {
       const st = await lstat(partRoot);
-      if (st.isSymbolicLink()) return [{ path: partRoot }];
-      if (!st.isDirectory()) return [];
+      if (st.isSymbolicLink() || !st.isDirectory()) return [];
       const partitions = await readdir(partRoot);
       for (const part of partitions) {
         const partDir = join(partRoot, part);
         const pst = await lstat(partDir).catch(() => null);
-        if (!pst) continue;
-        if (pst.isSymbolicLink()) {
-          targets.push({ path: partDir });
-          continue;
-        }
-        if (!pst.isDirectory()) continue;
+        if (!pst || pst.isSymbolicLink() || !pst.isDirectory()) continue;
         for (const sub of PARTITION_SAFE_SUBDIRS) {
           const candidate = join(partDir, sub);
           const cst = await lstat(candidate).catch(() => null);
-          if (cst) targets.push({ path: candidate });
+          if (cst && !cst.isSymbolicLink()) targets.push({ path: candidate });
         }
       }
     } catch {}
@@ -828,12 +821,12 @@ export class CacheMaintenance {
     const targets: SubTargetSpec[] = [];
     try {
       const st = await lstat(bpRoot);
-      if (st.isSymbolicLink()) return [{ path: bpRoot }];
-      if (!st.isDirectory()) return [];
+      if (st.isSymbolicLink() || !st.isDirectory()) return [];
 
       for (const topSub of BROWSER_TOP_SAFE_SUBDIRS) {
         const candidate = join(bpRoot, topSub);
-        if (await lstat(candidate).catch(() => null)) {
+        const cst = await lstat(candidate).catch(() => null);
+        if (cst && !cst.isSymbolicLink()) {
           targets.push({ path: candidate });
         }
       }
@@ -848,15 +841,11 @@ export class CacheMaintenance {
         if (!isProfileDir) continue;
         const profPath = join(bpRoot, entry);
         const pst = await lstat(profPath).catch(() => null);
-        if (!pst) continue;
-        if (pst.isSymbolicLink()) {
-          targets.push({ path: profPath });
-          continue;
-        }
-        if (!pst.isDirectory()) continue;
+        if (!pst || pst.isSymbolicLink() || !pst.isDirectory()) continue;
         for (const sub of BROWSER_PROFILE_SAFE_SUBDIRS) {
           const candidate = join(profPath, sub);
-          if (await lstat(candidate).catch(() => null)) {
+          const cst = await lstat(candidate).catch(() => null);
+          if (cst && !cst.isSymbolicLink()) {
             targets.push({ path: candidate });
           }
         }
@@ -1135,7 +1124,7 @@ export class CacheMaintenance {
     const windowDesc = retentionDays > 0 ? `${retentionDays} 天前` : '非活跃';
     if (name === 'OrphanAgentData') {
       const sub = agentTargets.orphanConvCount > 0
-        ? `含 ${agentTargets.orphanConvCount} 个已删主对话遗留的孤儿记录、崩溃日志与临时媒体`
+        ? `${agentTargets.orphanConvCount} 个已删对话碎片与崩溃日志`
         : CACHE_METADATA.OrphanAgentData!.subtitle;
       return await this.inspectMultiTargetItem(name, agentTargets.orphanTargets, {
         dynamicSubtitle: sub,
@@ -1144,17 +1133,17 @@ export class CacheMaintenance {
     }
     if (name === 'AgentTaskStepLogs') {
       return await this.inspectMultiTargetItem(name, agentTargets.taskStepTargets, {
-        dynamicSubtitle: `${windowDesc}对话的后台终端日志、步骤输出与 scratch 草稿`,
+        dynamicSubtitle: `${windowDesc}对话的终端、步骤日志与草稿`,
       });
     }
     if (name === 'AgentVerboseTranscripts') {
       return await this.inspectMultiTargetItem(name, agentTargets.verboseTranscriptTargets, {
-        dynamicSubtitle: `${windowDesc}对话的 transcript_full 与分片镜像（保留紧凑版记录）`,
+        dynamicSubtitle: `${windowDesc}冗余转录（保留精简版记录）`,
       });
     }
     if (name === 'AgentSubagentDatabases') {
       const sub = agentTargets.subagentCount > 0
-        ? `${windowDesc}共 ${agentTargets.subagentCount} 个后台子智能体库（清理前自动归档 Token 账单）`
+        ? `${windowDesc} ${agentTargets.subagentCount} 个子智能体库（账单已归档）`
         : CACHE_METADATA.AgentSubagentDatabases!.subtitle;
       return await this.inspectMultiTargetItem(name, agentTargets.subagentDbTargets, {
         dynamicSubtitle: sub,
@@ -1385,24 +1374,24 @@ export class CacheMaintenance {
         agentConvTargets.orphanTargets.length > 0
           ? this.inspectMultiTargetItem('OrphanAgentData', agentConvTargets.orphanTargets, {
               dynamicSubtitle: agentConvTargets.orphanConvCount > 0
-                ? `含 ${agentConvTargets.orphanConvCount} 个已删主对话遗留的孤儿记录、崩溃日志与临时媒体`
+                ? `${agentConvTargets.orphanConvCount} 个已删对话碎片与崩溃日志`
                 : CACHE_METADATA.OrphanAgentData!.subtitle,
               itemCount: agentConvTargets.orphanConvCount,
             })
           : Promise.resolve(null),
         agentConvTargets.taskStepTargets.length > 0
           ? this.inspectMultiTargetItem('AgentTaskStepLogs', agentConvTargets.taskStepTargets, {
-              dynamicSubtitle: `${windowDesc}对话的后台终端日志、步骤输出与 scratch 草稿`,
+              dynamicSubtitle: `${windowDesc}对话的终端、步骤日志与草稿`,
             })
           : Promise.resolve(null),
         agentConvTargets.verboseTranscriptTargets.length > 0
           ? this.inspectMultiTargetItem('AgentVerboseTranscripts', agentConvTargets.verboseTranscriptTargets, {
-              dynamicSubtitle: `${windowDesc}对话的 transcript_full 与分片镜像（保留紧凑版记录）`,
+              dynamicSubtitle: `${windowDesc}冗余转录（保留精简版记录）`,
             })
           : Promise.resolve(null),
         agentConvTargets.subagentDbTargets.length > 0
           ? this.inspectMultiTargetItem('AgentSubagentDatabases', agentConvTargets.subagentDbTargets, {
-              dynamicSubtitle: `${windowDesc}共 ${agentConvTargets.subagentCount} 个后台子智能体库（清理前自动归档 Token 账单）`,
+              dynamicSubtitle: `${windowDesc} ${agentConvTargets.subagentCount} 个子智能体库（账单已归档）`,
               itemCount: agentConvTargets.subagentCount,
             })
           : Promise.resolve(null),
@@ -1560,6 +1549,11 @@ export class CacheMaintenance {
         if (recheck.fingerprint !== row.fingerprint) throw Error('缓存正在变化，停止清理');
         for (const sub of row.subTargets) {
           if (!this.isAllowedTargetPath(sub.path)) throw Error('清理路径超出安全边界');
+          const resolvedSub = resolve(sub.path);
+          const forbiddenSegments = new Set(['User', 'Cookies', 'Local Storage', 'Session Storage', 'WebStorage', 'Network Persistent State', 'conversation_summaries.db', 'state.vscdb']);
+          if (resolvedSub.split(sep).some(seg => forbiddenSegments.has(seg))) {
+            throw Error('命中受保护的核心数据路径，已中止清理');
+          }
           const to = row.isSingleLegacyRoot ? join(target, row.name)
             : join(target, 'items', row.name, `${++sequence}-${basename(sub.path)}`);
           moved.push({ entryName: row.name, from: sub.path, to });

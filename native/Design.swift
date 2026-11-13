@@ -311,6 +311,7 @@ enum Design {
 final class DesignMotion: NSObject {
     enum Curve {
         case hover      // 130ms cubic-out
+        case press      // 140ms snappy critically-damped tactile press/release
         case slide      // 180ms spring-out
         case expand     // 200ms ease-in-out
         case sweep      // 260ms cubic-out
@@ -320,6 +321,7 @@ final class DesignMotion: NSObject {
         var duration: CFTimeInterval {
             switch self {
             case .hover: return 0.13
+            case .press: return 0.14
             case .slide: return 0.18
             case .expand: return 0.20
             case .sweep: return 0.26
@@ -331,7 +333,7 @@ final class DesignMotion: NSObject {
         func evaluate(_ t: Double) -> CGFloat {
             let p = min(1.0, max(0.0, t))
             switch self {
-            case .hover, .sweep:
+            case .hover, .press, .sweep:
                 return CGFloat(1.0 - pow(1.0 - p, 3.0))
             case .slide:
                 return CGFloat(1.0 - pow(1.0 - p, 3.4))
@@ -454,11 +456,13 @@ class DesignButton: NSButton {
         }
     }
 
+    var isActivitySpinning: Bool { showsSpinner }
+
     var hovered = false {
         didSet {
             guard oldValue != hovered else { return }
             let target: CGFloat = hovered ? 1.0 : 0.0
-            hoverMotion.animate(in: self, from: hoverProgress, to: target, curve: .spring, threshold: 0.02) { [weak self] val in
+            hoverMotion.animate(in: self, from: hoverProgress, to: target, curve: .hover, threshold: 0.02) { [weak self] val in
                 guard let self else { return }
                 self.hoverProgress = val
                 self.needsDisplay = true
@@ -470,7 +474,7 @@ class DesignButton: NSButton {
             guard isHighlighted != lastHighlighted else { return }
             lastHighlighted = isHighlighted
             let target: CGFloat = isHighlighted ? 1.0 : 0.0
-            pressMotion.animate(in: self, from: pressProgress, to: target, curve: .spring, threshold: 0.01) { [weak self] val in
+            pressMotion.animate(in: self, from: pressProgress, to: target, curve: .press, threshold: 0.01) { [weak self] val in
                 guard let self else { return }
                 self.pressProgress = val
                 self.needsDisplay = true
@@ -587,10 +591,10 @@ class DesignButton: NSButton {
         let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         let inPopover = Design.isInPopover(self)
         let hp = isEnabled ? hoverProgress : 0
-        let pp = isEnabled ? (isHighlighted ? max(pressProgress, 0.85) : pressProgress) : 0
+        let pp = isHighlighted ? max(pressProgress, 0.72) : pressProgress
 
-        // Q弹缩放：悬停时微微浮起 (+1.5%)，按压时弹性内缩 (-4.5%)，松手时沿 .spring 阻尼过冲回弹
-        let scale: CGFloat = isEnabled ? (1.0 + 0.015 * hp - 0.048 * pp) : 1.0
+        // 统一轻快按压回弹：悬停不越界放大、按压优雅内缩 2.5%、松手沿 140ms 阻尼干脆回弹（异步禁用态亦不截断释放动画）
+        let scale: CGFloat = 1.0 - 0.025 * pp
         let gctx = NSGraphicsContext.current
         gctx?.saveGraphicsState()
         if abs(scale - 1.0) > 0.001, let cg = gctx?.cgContext {
@@ -606,7 +610,7 @@ class DesignButton: NSButton {
         let path = NSBezierPath(roundedRect: rect, xRadius: cornerR, yRadius: cornerR)
 
         if primary {
-            let activeLook = isEnabled || showsSpinner
+            let activeLook = isEnabled || isActivitySpinning
             let topBlue = activeLook
                 ? Design.color(0x1A82FF, 0x389BFF).withAlphaComponent(1.0 - 0.12 * pp + 0.04 * hp)
                 : Design.color(0x4CA0FF, 0x2B7AE0)
@@ -666,9 +670,9 @@ class DesignButton: NSButton {
             }
         } else {
             // 主窗口轻玻璃立体胶囊按钮（与左侧毛玻璃导航栏和菜单栏质感拉齐）
-            let enableScale: CGFloat = isEnabled ? 1.0 : 0.45
+            let enableScale: CGFloat = isEnabled ? 1.0 : (isActivitySpinning ? 0.88 : 0.45)
             NSGraphicsContext.saveGraphicsState()
-            if isEnabled {
+            if isEnabled || isActivitySpinning {
                 let btnShadow = NSShadow()
                 btnShadow.shadowColor = isDark
                     ? NSColor.black.withAlphaComponent(0.32 * (1.0 - 0.5 * pp))
@@ -715,7 +719,7 @@ class DesignButton: NSButton {
             }
         }
 
-        let fgAlpha: CGFloat = primary ? ((isEnabled || showsSpinner) ? 1.0 : 0.88) : (isEnabled ? 1.0 : 0.42)
+        let fgAlpha: CGFloat = primary ? ((isEnabled || isActivitySpinning) ? 1.0 : 0.88) : (isEnabled ? 1.0 : (isActivitySpinning ? 0.86 : 0.42))
         let baseFg: NSColor = primary ? .white : (isQuietAccessory ? (hp > 0.25 ? Design.primary : Design.secondary) : Design.primary)
         let fgColor = baseFg.withAlphaComponent(fgAlpha)
         let attrs: [NSAttributedString.Key: Any] = [
@@ -1053,17 +1057,31 @@ final class MenuRefreshButton: NSButton {
     private var hoverTracking: NSTrackingArea?
     private var appliedState: (busy: Bool, available: Bool, error: String)?
     private let hoverMotion = DesignMotion()
+    private let pressMotion = DesignMotion()
     private var hoverProgress: CGFloat = 0
+    private var pressProgress: CGFloat = 0
+    private var lastHighlighted = false
     override var allowsVibrancy: Bool { false }
     var hovered = false {
         didSet {
             guard oldValue != hovered else { return }
-            hoverMotion.animate(in: self, from: hoverProgress, to: hovered ? 1.0 : 0.0, curve: .hover, threshold: 0.05) { [weak self] val in
+            hoverMotion.animate(in: self, from: hoverProgress, to: hovered ? 1.0 : 0.0, curve: .hover, threshold: 0.04) { [weak self] val in
                 self?.hoverProgress = val
                 self?.needsDisplay = true
             }
         }
     }
+    override var isHighlighted: Bool {
+        didSet {
+            guard isHighlighted != lastHighlighted else { return }
+            lastHighlighted = isHighlighted
+            pressMotion.animate(in: self, from: pressProgress, to: isHighlighted ? 1.0 : 0.0, curve: .press, threshold: 0.02) { [weak self] val in
+                self?.pressProgress = val
+                self?.needsDisplay = true
+            }
+        }
+    }
+    deinit { hoverMotion.cancel(); pressMotion.cancel() }
     override var intrinsicContentSize: NSSize { NSSize(width: 26, height: 26) }
     init(target: AnyObject?, action: Selector) {
         super.init(frame: .zero)
@@ -1112,6 +1130,15 @@ final class MenuRefreshButton: NSButton {
     override func draw(_ dirtyRect: NSRect) {
         let focused = window?.firstResponder === self
         let hp = isEnabled ? max(hoverProgress, (isHighlighted || focused) ? 1.0 : 0.0) : 0.0
+        let pp = isHighlighted ? max(pressProgress, 0.72) : pressProgress
+        let scale: CGFloat = 1.0 - 0.04 * pp
+        let gctx = NSGraphicsContext.current
+        gctx?.saveGraphicsState()
+        if abs(scale - 1.0) > 0.001, let cg = gctx?.cgContext {
+            cg.translateBy(x: bounds.midX, y: bounds.midY)
+            cg.scaleBy(x: scale, y: scale)
+            cg.translateBy(x: -bounds.midX, y: -bounds.midY)
+        }
         if hp > 0.02 {
             let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
             let fill = isDark ? NSColor.white.withAlphaComponent(0.12 * hp) : NSColor.black.withAlphaComponent(0.06 * hp)
@@ -1121,6 +1148,7 @@ final class MenuRefreshButton: NSButton {
         let busy = !spinner.isHidden
         let tint = busy ? Design.secondary : (isEnabled ? (hp > 0.5 ? Design.blue : Design.secondary) : Design.secondary.withAlphaComponent(0.4))
         caption.textColor = tint; refreshIcon.contentTintColor = tint
+        gctx?.restoreGraphicsState()
     }
 }
 
@@ -1355,6 +1383,7 @@ final class QuotaRefreshButton: DesignButton {
     var localBusy = false
     var lastError: String?
     private var appliedDisplayState: (busy: Bool, available: Bool, error: String)?
+    override var isActivitySpinning: Bool { !spinner.isHidden }
     override var intrinsicContentSize: NSSize { NSSize(width: 88, height: 28) }
     init(target: AnyObject?, action: Selector) {
         super.init(frame: .zero); title = "刷新配额"; self.target = target; self.action = action
@@ -1401,6 +1430,7 @@ final class InlineRefreshButton: DesignButton {
     let fixedWidth: CGFloat
     private(set) var isBusy = false
     private var appliedBusyState: (busy: Bool, available: Bool)?
+    override var isActivitySpinning: Bool { !spinner.isHidden }
     override var intrinsicContentSize: NSSize { NSSize(width: fixedWidth, height: 28) }
     init(_ buttonTitle: String = "刷新", width: CGFloat = 68, target: AnyObject? = nil, action: Selector) {
         self.fixedWidth = width

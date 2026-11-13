@@ -1,4 +1,4 @@
-import { type ApplicationChannel, type ApplicationTarget, allApplicationTargets, applicationTarget, channelStateDirectory } from './application-target.js';
+import { type ApplicationChannel, type ApplicationTarget, applicationTarget } from './application-target.js';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { readFile, mkdir, lstat, open, unlink, readdir } from 'node:fs/promises';
@@ -164,14 +164,14 @@ export class AccountSwitchService {
   }) {
     this.keychain = options.keychain ?? new SystemKeychainAdapter();
     this.target = options.target ?? applicationTarget(options.channel ?? 'stable', undefined, { profile: options.profile });
-    this.journalPath = join(channelStateDirectory(options.stateDir, this.target.channel), 'account-switch-journal-stable.json');
+    this.journalPath = join(options.stateDir, 'account-switch-journal-stable.json');
   }
 
   setTarget(target: ApplicationTarget) {
     this.target = target;
     this.options.channel = target.channel;
     this.options.profile = target.profile;
-    this.journalPath = join(channelStateDirectory(this.options.stateDir, target.channel), 'account-switch-journal-stable.json');
+    this.journalPath = join(this.options.stateDir, 'account-switch-journal-stable.json');
   }
 
   private assertSupported() {}
@@ -237,7 +237,7 @@ export class AccountSwitchService {
   private async guardStopped() {
     const candidatePrefixes = Array.from(
       // Insiders shares official credentials: block switching while it runs, without managing it.
-      new Set([this.target.appPath, ...allApplicationTargets().map(t => t.appPath), '/Applications/Antigravity - Insiders.app']),
+      new Set([this.target.appPath, '/Applications/Antigravity.app', '/Applications/Antigravity - Insiders.app']),
     ).map(p => p + '/Contents/');
     const running = this.options.isRunning ? await this.options.isRunning() :
       (await run('/bin/ps', ['-ax', '-o', 'args='])).stdout.split('\n').some(line => {
