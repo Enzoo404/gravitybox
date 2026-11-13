@@ -8,7 +8,7 @@ import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { extractUiStrings } from '../dist/bundle.js';
+import { extractUiStrings, SUPPORTED_BUNDLES } from '../dist/bundle.js';
 import { reconcileExtraction, verifyBundleSource } from '../tools/coverage-report.mjs';
 
 const exec = promisify(execFile);
@@ -114,12 +114,32 @@ test('I02 provenance：保留全部 text 但篡改 kinds/count/counts 必须拒�
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
-test('I02 provenance：本地官方 2.24.0 来源字节与历史 ui-strings 的 text/kinds/count 逐条对账一致', { skip: existsSync(join(root, 'vendor', 'antigravity', '2.24.0', 'main.js')) ? false : '缺少 vendor/antigravity/2.24.0/main.js（需授权 live 取证）' }, async () => {
-  const uiStrings = JSON.parse(await readFile(join(root, 'ui-strings', '2.24.0.json'), 'utf8'));
-  const source = await readFile(join(root, 'vendor', 'antigravity', '2.24.0', 'main.js'), 'utf8');
-  const result = reconcileExtraction(uiStrings, source);
-  assert.equal(result.ok, true, result.reason);
-  assert.equal(result.extractedCount, uiStrings.strings.length);
+test('I02 provenance：本地最新已存官方包核对提取，无 vendor 时仅核对最新清单基本结构', async () => {
+  const versions = [...SUPPORTED_BUNDLES.keys()];
+  const available = versions.filter(version =>
+    existsSync(join(root, 'vendor', 'antigravity', version, 'main.js')) &&
+    existsSync(join(root, 'ui-strings', `${version}.json`))
+  );
+  if (available.length > 0) {
+    const version = available.at(-1);
+    const uiStrings = JSON.parse(await readFile(join(root, 'ui-strings', `${version}.json`), 'utf8'));
+    const source = await readFile(join(root, 'vendor', 'antigravity', version, 'main.js'), 'utf8');
+    const result = reconcileExtraction(uiStrings, source);
+    assert.equal(result.ok, true, `${version}: ${result.reason}`);
+    assert.equal(result.extractedCount, uiStrings.strings.length);
+    return;
+  }
+  // 全版本快照完整性与词典覆盖由 verify 统一检查，单项测试不重复执行。
+  const latestVersion = versions.at(-1);
+  const uiStrings = JSON.parse(await readFile(join(root, 'ui-strings', `${latestVersion}.json`), 'utf8'));
+  assert.equal(uiStrings.appVersion, latestVersion);
+  assert.ok(Array.isArray(uiStrings.strings) && uiStrings.strings.length > 0);
+  const seen = new Set();
+  for (const row of uiStrings.strings) {
+    assert.equal(typeof row.text, 'string');
+    assert.ok(!seen.has(row.text), `发现重复原文：${row.text}`);
+    seen.add(row.text);
+  }
 });
 
 test('I02 provenance：字节不匹配、缺源、空 bundle、不存在的 --bundle 全部 fail-closed', async () => {

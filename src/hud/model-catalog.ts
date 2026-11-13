@@ -94,6 +94,7 @@ const DISPLAY_NAME_MAP: Record<string, string> = {
   'gemini-4-carbon-trial': 'Gemini 4 Carbon Trial',
   'gemini-3.9-flash': 'Gemini 3.9 Flash',
   'gemini-3.8-flash': 'Gemini 3.8 Flash',
+  'gemini-3.8-flash-control': 'Gemini 3.8 Flash',
   'gemini-3.8-flash-n': 'Gemini 3.8 Flash',
   'gemini-3.8-flash-tiered': 'Gemini 3.8 Flash',
   'gemini-3.8-flash-exp-a': 'Gemini 3.8 Flash',

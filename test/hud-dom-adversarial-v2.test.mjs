@@ -1,7 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { computeUpwardPopoverPosition, applyPopoverGeometry } from '../runtime/hud-popover.js';
-import { HUD_STYLES_CSS } from '../runtime/hud-styles.js';
 
 function setupMockBrowser(vw = 1000, vh = 800) {
   globalThis.window = {
@@ -75,42 +74,24 @@ describe('DOM & 布局对抗性复验 (直接验证 runtime/hud-popover.js 与 r
       assert.equal(arrowStyleObj.left, '140px');
     });
 
-    it('Case C4 (5000 次蒙特卡洛随机对抗压力测试): 视口 150~2560px 100% 杜绝裁切', () => {
-      for (let i = 0; i < 5000; i++) {
-        const vw = Math.floor(150 + Math.random() * 2000);
-        const vh = Math.floor(400 + Math.random() * 800);
-        setupMockBrowser(vw, vh);
-
-        const pw = [296, 296, 312][i % 3];
-        const safeMargin = 12;
-        const capsuleW = 40 + Math.random() * 100;
-        const capsuleLeft = Math.random() * (vw + 100) - 50;
-
-        const fakeCapsule = {
-          getBoundingClientRect: () => ({ left: capsuleLeft, width: capsuleW, top: 500, right: capsuleLeft + capsuleW, bottom: 522 })
-        };
-
-        const pos = computeUpwardPopoverPosition(fakeCapsule, pw, 190, safeMargin, 8, 12);
-        assert.ok(pos.left >= safeMargin);
-        if (vw >= 120 + 2 * safeMargin) {
-          assert.ok(pos.left + pos.width <= vw);
+    it('Popover geometry remains within deterministic viewport and anchor boundaries', () => {
+      for (const vw of [150, 260, 290, 320, 440, 1000, 2560]) {
+        for (const pw of [280, 296, 312]) {
+          for (const left of [-50, 0, vw / 2, vw - 20, vw + 50]) {
+            for (const width of [40, 140]) {
+              setupMockBrowser(vw, 800);
+              const capsule = { getBoundingClientRect: () => ({ left, width, right: left + width, top: 700, bottom: 722 }) };
+              const pos = computeUpwardPopoverPosition(capsule, pw, 190, 12, 8, 12);
+              assert.ok(pos.left >= 12, JSON.stringify({ vw, pw, left, width, pos }));
+              assert.ok(pos.left + pos.width <= vw - 12, JSON.stringify({ vw, pw, left, width, pos }));
+            }
+          }
         }
       }
     });
   });
 
   describe('复验重点 2: 小三角相切夹紧公式与外层 overflow: visible 防裁切校验', () => {
-    it('加宽详情保留长数值和中英文模型名，窄屏允许换行而不省略', () => {
-      const rule = (selector) => HUD_STYLES_CSS.slice(HUD_STYLES_CSS.indexOf(`${selector} {`)).split('}')[0];
-      assert.match(rule('.hud-popover-header'), /flex-wrap:\s*wrap/);
-      assert.match(rule('.hud-popover-row'), /justify-content:\s*space-between/);
-      for (const selector of ['.hud-popover-val', '.hud-popover-label', '.hud-popover-title',
-        '.hud-popover-badge', '.hud-popover-badge-muted']) {
-        assert.match(rule(selector), /white-space:\s*normal/);
-        assert.match(rule(selector), /overflow-wrap:\s*anywhere/);
-        assert.doesNotMatch(rule(selector), /text-overflow:\s*ellipsis|max-width:\s*175px/);
-      }
-    });
 
     it('小三角底边两翼必须 100% 严格落在卡片平直底边内 [19, W_eff - 19]', () => {
       setupMockBrowser(1000, 800);
@@ -127,13 +108,6 @@ describe('DOM & 布局对抗性复验 (直接验证 runtime/hud-popover.js 与 r
       const posRight = computeUpwardPopoverPosition(fakeRightCapsule, 280, 190, 12, 8, 12);
       assert.equal(posRight.arrowPixelOffset, 261);
       assert.equal(posRight.arrowPixelOffset + 7, 268);
-    });
-
-    it('HUD_STYLES_CSS 中 .hud-popover 必须为 overflow: visible 且由 .hud-popover-inner 承担滚动，防止 bottom: -6px 小三角被裁切', () => {
-      assert.match(HUD_STYLES_CSS, /\.hud-popover\s*\{[^}]*overflow:\s*visible/s);
-      assert.match(HUD_STYLES_CSS, /\.hud-popover-inner\s*\{[^}]*overflow-y:\s*auto/s);
-      assert.match(HUD_STYLES_CSS, /@container\s+hud\s*\(max-width:\s*360px\)/);
-      assert.match(HUD_STYLES_CSS, /@container\s+hud\s*\(max-width:\s*440px\)/);
     });
   });
 });

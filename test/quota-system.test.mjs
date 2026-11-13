@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, readFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, readFile, writeFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { AccountsManager, normalizedModelFromStored } from '../dist/accounts.js';
-import { normalizeFraction, normalizeCloudModels, normalizeLiveModels, normalizeCloudGroups,
+import { AccountsManager, normalizedModelFromStored, accountCredentialReadiness, cloudOriginFromCommand } from '../dist/accounts.js';
+import { normalizeFraction, normalizeCloudModels, normalizeLiveModels, normalizeCloudGroups, normalizeLiveGroups,
   familyWindowsFromGroups, buildArgonStatus, buildCarbonStatus, buildStandaloneModels, applyFamilyWindows, mergeGroupSets,
   mergeGroupsWithPrevious, mergeModelsWithPrevious, mergeModelCatalogues, familyModelQuotaFromModels } from '../dist/quota.js';
 import { projectQuotaContract, buildDashboardAggregate } from '../dist/main.js';
@@ -214,4 +214,168 @@ test('Gemini 4 Carbon 与未来新模型自动检测：无模型证据时保持�
   const standalones = buildStandaloneModels(applied, [], ultraWindows, now, ultraArgon, ultraCarbon);
   assert.deepEqual(standalones.map(item => item.key), ['argon', 'carbon', 'gemini-4-neon']);
   assert.equal(standalones[2].remaining, .64);
+});
+
+test('Gemini 4 Hydrogen 归入基础 Gemini 共享池，不单独列为独立配额行；共享池新模型及多档位变体不裂变重复行', () => {
+  const models = normalizeCloudModels({
+    models: {
+      'gemini-4-hydrogen-low': { displayName: 'Gemini 4 Hydrogen (Low)', quotaInfo: { remainingFraction: 0.22, resetTime: future } },
+      'gemini-4-hydrogen-medium': { displayName: 'Gemini 4 Hydrogen (Medium)', quotaInfo: { remainingFraction: 0.22, resetTime: future } },
+      'gemini-4-hydrogen-high': { displayName: 'Gemini 4 Hydrogen (High)', quotaInfo: { remainingFraction: 0.22, resetTime: future } },
+      'gemini-4-hydrogen-xhigh': { displayName: 'Gemini 4 Hydrogen (XHigh)', quotaInfo: { remainingFraction: 0.22, resetTime: future } },
+      'gemini-4-helium-high': { displayName: 'Gemini 4 Helium (High)', quotaInfo: { remainingFraction: 0.22, resetTime: future } },
+      'gemini-4-xenon-low': { displayName: 'Gemini 4 Xenon (Low)', quotaInfo: { remainingFraction: 0.85, resetTime: future } },
+      'gemini-4-xenon-high': { displayName: 'Gemini 4 Xenon (High)', quotaInfo: { remainingFraction: 0.85, resetTime: future } },
+    },
+  }, stamp);
+  for (const m of models.filter(m => m.model_id.includes('hydrogen'))) {
+    assert.equal(m.family, 'gemini');
+  }
+
+  // 旧持久化文件中被误标为 other 的 hydrogen 也必须在读取时自愈归入 gemini
+  const repaired = normalizedModelFromStored({
+    name: 'gemini-4-hydrogen-xhigh',
+    display_name: 'Gemini 4 Hydrogen (XHigh)',
+    family: 'other',
+    percentage: 22,
+    percentage_known: true,
+    own_percentage: 22,
+    own_percentage_known: true,
+    reset_time: future,
+  });
+  assert.equal(repaired.family, 'gemini');
+
+  const groups = normalizeLiveGroups({
+    groups: [
+      {
+        displayName: 'Gemini Models',
+        buckets: [{ bucketId: 'gemini-weekly', window: 'weekly', remainingFraction: 0.22, resetTime: future }],
+      },
+    ],
+  }, stamp);
+  const windows = familyWindowsFromGroups(groups, now);
+  const applied = applyFamilyWindows(models, windows);
+  const standalones = buildStandaloneModels(applied, groups, windows, now);
+  // hydrogen 归属 gemini；helium 因与 gemini 共享配额窗口也不单独列出；xenon 多档位收敛为一条
+  assert.deepEqual(standalones.map(item => item.key), ['argon', 'carbon', 'gemini-4-xenon']);
+  assert.equal(standalones[2].displayName, 'Gemini 4 Xenon');
+});
+
+async function withQuotaAccountFixture(fn) {
+  const d = await mkdtemp(join(tmpdir(), 'gb-quota-regression-'));
+  try {
+    await fn(d);
+  } finally {
+    await rm(d, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+test('配额服务403不被误判为登录凭据失效', () => {
+  const account = {
+    token: { refresh_token: 'synthetic', access_token: 'synthetic-access', expiry_timestamp: Date.now() / 1000 + 3600 },
+    quota_refresh_error: 'HTTP 403（官方产品许可校验未通过，错误码 3501）',
+  };
+  assert.equal(accountCredentialReadiness(account).state, 'ready');
+  account.quota_refresh_error = 'HTTP 401';
+  assert.equal(accountCredentialReadiness(account).state, 'needs_authorization');
+});
+
+test('已拒绝的配额范围不会被外部旧满额复活；凭据同步仍可继续', () => withQuotaAccountFixture(async d => {
+  const ext = join(d, 'external');
+  await mkdir(join(ext, 'accounts'), { recursive: true });
+  const m = new AccountsManager(join(d, 'state'), { externalDir: ext });
+  const a = await m.upsertAccount({ email: 'test@example.test', refreshToken: 'synthetic-refresh', accessToken: 'synthetic-access', expiresIn: 3600 });
+  a.quota = { models: [], quota_groups: [], last_updated: 0, is_forbidden: false, model_forwarding_rules: {}, quota_warnings: ['UNVERIFIED_CLOUD_SCOPE: HTTP 403'], source: 'cloud' };
+  await m.saveAccount(a);
+  await writeFile(join(ext, 'accounts.json'), JSON.stringify({ accounts: [{ id: 'external', email: a.email }] }));
+  await writeFile(join(ext, 'accounts', 'one.json'), JSON.stringify({
+    ...a,
+    id: 'external',
+    quota: { ...a.quota, last_updated: Math.floor(Date.now() / 1000), quota_warnings: [], models: [{ name: 'gemini-test', percentage: 100 }] },
+    token: { ...a.token, access_token: 'new-synthetic', expiry_timestamp: Math.floor(Date.now() / 1000) + 7200 },
+  }));
+  await m.syncFromExternalAgySwitch();
+  const saved = await m.getAccount(a.id);
+  assert.deepEqual(saved.quota.models, []);
+  assert.equal(saved.quota.source, 'cloud');
+  assert.equal(saved.token.access_token, 'new-synthetic');
+}));
+
+test('官方3501许可拒绝解释准确且不传播服务端其他内容', () => withQuotaAccountFixture(async d => {
+  const m = new AccountsManager(d, { providerContext: { origin: 'https://daily-cloudcode-pa.googleapis.com', userAgent: 'antigravity/2.25.0', appVersion: '2.25.0' } });
+  m.probeLiveLanguageServer = async () => null;
+  const a = await m.upsertAccount({ email: 'denied@example.test', refreshToken: 'synthetic-refresh', accessToken: 'synthetic-access', expiresIn: 3600 });
+  await assert.rejects(
+    m.refreshQuota(a.id, async url => url.includes('retrieveUserQuotaSummary')
+      ? Response.json({ error: { status: 'PERMISSION_DENIED', message: 'license invalid (#3501) private-service-detail' } }, { status: 403 })
+      : Response.json({})),
+    /官方产品许可校验未通过/
+  );
+  const saved = await m.getAccount(a.id);
+  assert.match(saved.quota_refresh_error, /3501/);
+  assert.ok(!saved.quota_refresh_error.includes('private-service-detail'));
+}));
+
+test('备用账号按真实桌面服务和版本查询账号额度，不附加项目、不混入另一环境的满额', () => withQuotaAccountFixture(async d => {
+  const origin = 'https://daily-cloudcode-pa.googleapis.com';
+  const context = { origin, userAgent: 'antigravity/2.25.0', appVersion: '2.25.0' };
+  const makeGroup = (family, remaining, window) => ({
+    displayName: family,
+    buckets: [{ bucketId: family + '-' + window, window, remainingFraction: remaining, resetTime: new Date(Date.now() + 3600000).toISOString() }],
+  });
+  const m = new AccountsManager(d, { providerContext: context });
+  m.probeLiveLanguageServer = async () => null;
+  const a = await m.upsertAccount({ email: 'standby@example.test', refreshToken: 'synthetic-refresh', accessToken: 'synthetic-access', expiresIn: 3600 });
+  a.token.project_id = 'legacy-wrong-project';
+  await m.saveAccount(a);
+  const calls = [];
+  const fetched = await m.refreshQuota(a.id, async (url, options) => {
+    calls.push(url);
+    assert.equal(new URL(url).origin, origin);
+    assert.equal(options.headers['User-Agent'], 'antigravity/2.25.0');
+    if (!url.includes('loadCodeAssist')) assert.deepEqual(JSON.parse(options.body), {});
+    const json = url.includes('loadCodeAssist')
+      ? { paidTier: { name: 'PRO' } }
+      : url.includes('fetchAvailableModels')
+        ? { models: { 'gemini-3.8-flash': { quotaInfo: { remainingFraction: 0.99 } } } }
+        : { groups: [makeGroup('Gemini Models', 0.36, 'weekly'), makeGroup('Gemini Models', 0.99, '5h')] };
+    return { ok: true, status: 200, json: async () => json };
+  });
+  assert.equal(calls.length, 4);
+  assert.equal(m.getAccountQuotaOverview(fetched).geminiWeeklyRemaining, 36);
+  assert.equal(fetched.quota.refresh_state.providerOrigin, origin);
+  assert.equal(fetched.quota.refresh_state.requestScope, 'account');
+}));
+
+test('正确服务拒绝额度时不回退到另一个环境的100%，旧错误云端数值留恢复记录', () => withQuotaAccountFixture(async d => {
+  const origin = 'https://daily-cloudcode-pa.googleapis.com';
+  const context = { origin, userAgent: 'antigravity/2.25.0', appVersion: '2.25.0' };
+  const m = new AccountsManager(d, { providerContext: context });
+  m.probeLiveLanguageServer = async () => null;
+  const a = await m.upsertAccount({ email: 'denied@example.test', refreshToken: 'synthetic-refresh', accessToken: 'synthetic-access', expiresIn: 3600 });
+  a.quota = { models: [{ name: 'gemini-3.8-flash', percentage: 100, percentage_known: true }], quota_groups: [], last_updated: Date.now() / 1000, is_forbidden: false, model_forwarding_rules: {}, source: 'cloud' };
+  await m.saveAccount(a);
+  await assert.rejects(
+    m.refreshQuota(a.id, async url => {
+      assert.equal(new URL(url).origin, origin);
+      if (url.includes('retrieveUserQuotaSummary')) return { ok: false, status: 403 };
+      return { ok: true, status: 200, json: async () => url.includes('fetchAvailableModels') ? { models: { 'gemini-3.8-flash': { quotaInfo: { remainingFraction: 1 } } } } : { paidTier: { name: 'FREE' } } };
+    }),
+    /HTTP 403/
+  );
+  const saved = await m.getAccount(a.id);
+  assert.deepEqual(saved.quota.models, []);
+  assert.equal(m.getAccountQuotaOverview(saved).geminiWeeklyRemaining, null);
+  assert.match(saved.quota_refresh_error, /HTTP 403/);
+  const paths = await readdir(join(d, 'quota-rejected'));
+  assert.equal(paths.length, 1);
+  const archive = await readFile(join(d, 'quota-rejected', paths[0]), 'utf8');
+  assert.ok(!archive.includes('synthetic-refresh'));
+}));
+
+test('仅采纳官方进程的固定Google服务端点', () => {
+  const origin = 'https://daily-cloudcode-pa.googleapis.com';
+  assert.equal(cloudOriginFromCommand('/Applications/Antigravity.app/Contents/Resources/bin/language_server --cloud_code_endpoint ' + origin), origin);
+  assert.equal(cloudOriginFromCommand('/tmp/fake --cloud_code_endpoint ' + origin), null);
+  assert.equal(cloudOriginFromCommand('/Applications/Antigravity.app/Contents/Resources/bin/language_server --cloud_code_endpoint https://attacker.invalid'), null);
 });

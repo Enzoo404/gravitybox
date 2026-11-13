@@ -9,7 +9,8 @@ export function compactNumber(value: number, significantDigits = 3): string {
 }
 export function durationText(value: number, language: 'zh' | 'en' = 'zh'): string {
   const seconds = Math.max(0, Math.round(Number.isFinite(value) ? value : 0));
+  if (seconds === 0) return language === 'en' ? '0s' : '0秒';
   const hours = Math.floor(seconds / 3600), minutes = Math.floor(seconds % 3600 / 60), rest = seconds % 60;
-  if (language === 'en') return `${hours ? `${hours}h ` : ''}${hours || minutes ? `${minutes}m ` : ''}${rest}s`;
-  return `${hours ? `${hours} 小时 ` : ''}${hours || minutes ? `${minutes} 分 ` : ''}${rest} 秒`;
+  if (language === 'en') return `${hours ? `${hours}h` : ''}${minutes ? `${minutes}m` : ''}${rest ? `${rest}s` : ''}`;
+  return `${hours ? `${hours}小时` : ''}${minutes ? `${minutes}分` : ''}${rest ? `${rest}秒` : ''}`;
 }

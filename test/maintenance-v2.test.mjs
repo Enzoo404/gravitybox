@@ -9,8 +9,6 @@ import { CacheMaintenance } from '../dist/maintenance.js';
 import {
   UsageStatsManager,
   ProtobufWriter,
-  calculateEstimatedUsd,
-  DEFAULT_API_PRICES,
 } from '../dist/usage.js';
 
 const execFileAsync = promisify(execFile);

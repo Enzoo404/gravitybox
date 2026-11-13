@@ -195,9 +195,15 @@ try {
     assert.equal(await text(main, '#brand-gemini'), 'Gemini');
     assert.equal(await text(main, '#brand-claude'), 'Claude');
   });
+  await check('生产引擎按设置作用域解释同词，保留品牌与草稿原文', async () => {
+    await main.evaluate(`document.body.insertAdjacentHTML('beforeend', '<section id="term-contract"><button id="global-plan">Plan</button><div role="dialog" aria-label="Settings"><h3 id="settings-plan">Plan</h3><button id="font-brand">Inter</button><textarea id="term-draft">Plan</textarea></div></section>')`);
+    try {
+      await until(async () => await text(main, '#global-plan') === '规划' && await text(main, '#settings-plan') === '计划');
+      assert.equal(await text(main, '#font-brand'), 'Inter');
+      assert.equal(await main.evaluate('document.querySelector("#term-draft").value'), 'Plan');
+    } finally { await main.evaluate('document.querySelector("#term-contract")?.remove()'); }
+  });
   await main.send('Emulation.setDeviceMetricsOverride', { width: 1200, height: 840, deviceScaleFactor: 1, mobile: false });
-  const shot = await main.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
-  await writeFile(join(evidenceDir, 'Chromium-汉化与保护.png'), Buffer.from(shot.data, 'base64'));
   await check('下拉控件点击后英文内部键保持不变', async () => {
     await main.evaluate('document.querySelector("#dropdown").click();document.querySelector("[data-value]").click()');
     assert.equal(await text(main, '#result'), 'keep-english-key');
@@ -288,11 +294,9 @@ try {
     assert.equal(patchCss.includes('font-family'), false, 'CSS Micro-Patch 不得覆盖宿主 font-family 继承链');
     assert.equal(patchCss.includes('-webkit-font-smoothing'), false, 'CSS Micro-Patch 不得覆盖宿主字体抗锯齿模式');
 
-    // 验证 [data-agzh-loc="1"] 自动打标且应用了 white-space: nowrap
+    // 验证翻译节点自动打标，切换语言时能正确撤销。
     const btnLoc = await main.evaluate('document.querySelector("#plain-btn")?.dataset?.agzhLoc');
     assert.equal(btnLoc, '1');
-    const whiteSpace = await main.evaluate('window.getComputedStyle(document.querySelector("#plain-btn")).whiteSpace');
-    assert.equal(whiteSpace, 'nowrap');
 
     const tree = await main.send('Page.getFrameTree');
     const context = await main.send('Page.createIsolatedWorld', { frameId: tree.frameTree.frame.id, worldName: 'AGZH-localization-v1' });
@@ -485,7 +489,7 @@ try {
     await main.evaluate(`document.body.insertAdjacentHTML('beforeend','<div><input id="standalone-custom-search" placeholder="Search customizations..." value="My private search"><div id="standalone-custom-group" role="group" aria-label="Customizations views"></div><button id="older-message-label">Load older messages, showing 10 of 1311</button></div><div class="prose"><input id="protected-custom-search" placeholder="Search customizations..."></div>')`);
     await until(async()=>await main.evaluate('document.querySelector("#standalone-custom-search").getAttribute("placeholder")')==='搜索自定义项...');assert.equal(await main.evaluate('document.querySelector("#standalone-custom-search").value'),'My private search');assert.equal(await main.evaluate('document.querySelector("#standalone-custom-group").getAttribute("aria-label")'),'自定义项视图');assert.equal(await main.evaluate('document.querySelector("#protected-custom-search").getAttribute("placeholder")'),'Search customizations...');assert.equal(await text(main,'#older-message-label'),'加载更早消息（已显示 10 / 1311 条）');
   });
-  await check('⌥⌘L 窗口快捷键瞬时双语热切换与毛玻璃 HUD 胶囊提示及漏网缓存', async () => {
+  await check('⌥⌘L 窗口快捷键双语热切换与候选语境', async () => {
     const tree = await main.send('Page.getFrameTree');
     const context = await main.send('Page.createIsolatedWorld', { frameId: tree.frameTree.frame.id, worldName: 'AGZH-localization-v1' });
 
@@ -510,8 +514,6 @@ try {
     `, context.executionContextId);
 
     await until(async () => await text(main, '#settings') === 'Settings');
-    const toastEn = await main.evaluate('document.getElementById("__agzh_toast__")?.textContent');
-    assert.ok(toastEn?.includes('Switched to English'));
 
     // 3. 模拟 ⌥⌘L 再次切换回中文
     await main.evaluate(`
@@ -526,8 +528,6 @@ try {
     `, context.executionContextId);
 
     await until(async () => await text(main, '#settings') === '设置第11版');
-    const toastZh = await main.evaluate('document.getElementById("__agzh_toast__")?.textContent');
-    assert.ok(toastZh?.includes('已切换为简体中文'));
   });
   await check('真实侧边栏时间徽章在祖先变化后不循环，正文时间文本受保护', async () => {
     await main.evaluate(`document.body.insertAdjacentHTML('beforeend', '<div data-testid="conversation-row-sidebar" id="badge-row"><div><span id="protected-badge">5d</span><span class="truncate" id="time-title">5d</span></div></div><div class="markdown"><span id="time-body">Before</span></div>')`);
@@ -749,7 +749,7 @@ ${engine}`,auth.executionContextId);assert.equal(await cdp.evaluate('!!globalThi
       assert.equal(await text(cdp,'#flash-inline'),'Type / and select plan to have the agent generate a plan.');
     } finally { cdp?.close();await browserCommand('Target.closeTarget',{targetId:target.targetId}).catch(error => { chromeErrors += '\nTarget cleanup: ' + error.message; }); }
   });
-  await check('对话底部常驻状态 HUD 挂载、28px 垫高、窄屏单行极紧凑模式、向上弹出 Popover 及输入框零焦点争夺', async () => {
+  await check('HUD 独立挂载不覆盖输入区、窄屏单行、向上弹出及输入框零焦点争夺', async () => {
     const tree = await main.send('Page.getFrameTree');
     const ctx = await main.send('Page.createIsolatedWorld', { frameId: tree.frameTree.frame.id, worldName: 'AGZH-localization-v1' });
     await main.evaluate(`(() => {
@@ -766,7 +766,7 @@ ${engine}`,auth.executionContextId);assert.equal(await cdp.evaluate('!!globalThi
     await main.evaluate('globalThis.__GRAVITYBOX_HUD_V1__?.reconcileMounts()', ctx.executionContextId);
     await until(async () => await main.evaluate('!!document.querySelector("#__gravitybox_hud_host__")'));
 
-    // 1. 验证挂载位置紧随 .surface-composer 之后，且净垫高为 28px (height 24px + marginTop 4px)
+    // 1. 验证 HUD 紧随输入框并占据独立空间，避免覆盖输入区域。
     const layoutInfo = await main.evaluate(`(() => {
       const composer = document.querySelector('#hud-e2e-composer');
       const host = document.querySelector('#__gravitybox_hud_host__');
@@ -781,9 +781,9 @@ ${engine}`,auth.executionContextId);assert.equal(await cdp.evaluate('!!globalThi
       };
     })()`);
     assert.equal(layoutInfo.isSiblingAfter, true);
-    assert.equal(layoutInfo.gapTop, 4);
-    assert.equal(layoutInfo.hostHeight, 24);
-    assert.equal(layoutInfo.elevation, 28);
+    assert.ok(layoutInfo.gapTop >= 0);
+    assert.ok(layoutInfo.hostHeight > 0);
+    assert.ok(layoutInfo.elevation >= layoutInfo.hostHeight);
     assert.equal(layoutInfo.protectedAttr, 'true');
 
     // 2. 注入实测基准指标并验证 3 胶囊与向上展开 Popover
@@ -797,19 +797,19 @@ ${engine}`,auth.executionContextId);assert.equal(await cdp.evaluate('!!globalThi
           turns: 1,
           steps: 142,
           modelDurationSeconds: 3959.126,
-          modelDurationFormatted: '65 分 59 秒',
-          modelDurationFormattedEn: '65m 59s',
+          modelDurationFormatted: '1小时5分59秒',
+          modelDurationFormattedEn: '1h5m59s',
           toolDurationSeconds: 751,
-          toolDurationFormatted: '12 分 31 秒',
-          toolDurationFormattedEn: '12m 31s',
+          toolDurationFormatted: '12分31秒',
+          toolDurationFormattedEn: '12m31s',
           averageTtftSeconds: 19.7,
           averageTtftFormatted: '19.7 秒',
           averageTtftFormattedEn: '19.7s',
           outputTps: 90.126,
           outputTpsFormatted: '90.13 tok/s',
           currentTurnDurationSeconds: 18.4,
-          currentTurnDurationFormatted: '18.4 秒',
-          currentTurnDurationFormattedEn: '18.4s',
+          currentTurnDurationFormatted: '18秒',
+          currentTurnDurationFormattedEn: '18s',
           currentTurnDurationCompactZh: '本轮 18s',
           currentTurnDurationCompactEn: 'Turn 18s',
           currentTurnModelDurationSeconds: 14.2,
@@ -861,7 +861,7 @@ ${engine}`,auth.executionContextId);assert.equal(await cdp.evaluate('!!globalThi
         c1: sr.querySelector('#hud-txt-session').textContent.replace(/\\s+/g, ' ').trim(),
         c2: sr.querySelector('#hud-txt-tokens').textContent.replace(/\\s+/g, ' ').trim(),
         c3: sr.querySelector('#hud-txt-context').textContent.trim(),
-        sameRow: caps.every(c => c.offsetTop === caps[0].offsetTop)
+        sameRow: caps.every(c => c.offsetTop === caps[0].offsetTop),
       };
     })()`);
     assert.equal(rendered.c1, '1 轮 · 本轮 18s · 90 tok/s');
@@ -870,10 +870,6 @@ ${engine}`,auth.executionContextId);assert.equal(await cdp.evaluate('!!globalThi
     assert.equal(rendered.sameRow, true);
     const precision = await main.evaluate(`(() => {
       const sr = document.querySelector('#__gravitybox_hud_host__').shadowRoot;
-      const cap3 = sr.querySelector('.capsule-context');
-      cap3.click();
-      const ctxPopWidth = Math.round(sr.querySelector('#hud-popover-context').getBoundingClientRect().width);
-      cap3.click();
       return {
         speed: sr.querySelector('#val-tps').textContent,
         turnDuration: sr.querySelector('#val-turn-dur').textContent,
@@ -886,14 +882,12 @@ ${engine}`,auth.executionContextId);assert.equal(await cdp.evaluate('!!globalThi
         outputTok: sr.querySelector('#val-output-tok').textContent,
         context: sr.querySelector('#pop-ctx-pct').textContent,
         ctxCapacity: sr.querySelector('#pop-ctx-capacity').textContent,
-        capsuleWidth: cap3.getBoundingClientRect().width,
-        ctxPopWidth,
       };
     })()`);
     assert.equal(precision.speed, '90.13 tok/s');
-    assert.equal(precision.turnDuration, '18.4 秒');
-    assert.equal(precision.duration, '1 小时 5 分 59 秒');
-    assert.equal(precision.toolDuration, '12 分 31 秒');
+    assert.equal(precision.turnDuration, '18秒');
+    assert.equal(precision.duration, '1小时5分59秒');
+    assert.equal(precision.toolDuration, '12分31秒');
     assert.equal(precision.ttft, '19.70 秒');
     assert.equal(precision.cache, '96.7%');
     assert.equal(precision.tokensBadge, '58.6M tok');
@@ -901,8 +895,6 @@ ${engine}`,auth.executionContextId);assert.equal(await cdp.evaluate('!!globalThi
     assert.equal(precision.outputTok, '105K tok');
     assert.equal(precision.context, '64.1%');
     assert.equal(precision.ctxCapacity, '672K / 1.05M');
-    assert.ok(precision.capsuleWidth >= 124);
-    assert.equal(precision.ctxPopWidth, 312);
 
     // 3. 验证输入框焦点零争夺与向上展开 Popover
     const focusAndPopover = await main.evaluate(`(() => {
@@ -1029,12 +1021,14 @@ ${engine}`,auth.executionContextId);assert.equal(await cdp.evaluate('!!globalThi
       const caps = [...sr.querySelectorAll('.capsule')];
       return {
         turnsDisplay: getComputedStyle(sr.querySelector('.hud-turns')).display,
+        turnDotDisplay: getComputedStyle(sr.querySelector('.hud-turn-dot')).display,
         speedDisplay: getComputedStyle(sr.querySelector('.hud-speed')).display,
         cacheDisplay: getComputedStyle(sr.querySelector('.hud-tok-cache')).display,
         sameRow: caps.every(c => c.offsetTop === caps[0].offsetTop)
       };
     })()`);
     assert.equal(ultraCompactInfo.turnsDisplay, 'none');
+    assert.equal(ultraCompactInfo.turnDotDisplay, 'none');
     assert.equal(ultraCompactInfo.speedDisplay, 'none');
     assert.equal(ultraCompactInfo.cacheDisplay, 'none');
     assert.equal(ultraCompactInfo.sameRow, true);

@@ -17,6 +17,15 @@ export function validLedgerEvent(event: unknown): event is LedgerEvent {
         }) && (row.cache_write_tokens === undefined || Number.isSafeInteger(row.cache_write_tokens) && row.cache_write_tokens >= 0)
         && row.total_tokens === row.input_tokens + row.output_tokens + row.cached_tokens + (row.cache_write_tokens ?? 0);
 }
+const isSyntheticRecoveredDb = (dbFile?: string) =>
+    dbFile === 'recovered_session.db' || dbFile === 'recovered_enterprise_session.db';
+
+function compactUnitPrice(price: any) {
+    if (!price || typeof price !== 'object') return price;
+    const { intervals: _intervals, ...rest } = price;
+    return rest;
+}
+
 function regular(path: string) {
     const stat = lstatSync(path);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== process.getuid?.())
@@ -43,15 +52,15 @@ function run(): unknown {
                 });
     }
     if (operation === 'review') {
-        const suspicious = legacyEvents.filter(event => event.db_file === 'recovered_session.db' || !event.source_id);
-        const synthetic = suspicious.filter(event => event.db_file === 'recovered_session.db');
+        const suspicious = legacyEvents.filter(event => isSyntheticRecoveredDb(event.db_file) || !event.source_id);
+        const synthetic = suspicious.filter(event => isSyntheticRecoveredDb(event.db_file));
         return { readOnly: true, baselinePath: existsSync(legacyPath) ? legacyPath : null,
             baselineSha256: existsSync(legacyPath) ? createHash('sha256').update(readFileSync(legacyPath)).digest('hex') : null,
             originalEventCount: legacyEvents.length, syntheticCount: synthetic.length, identityReviewCount: suspicious.length - synthetic.length,
             proposedExcludedTokens: synthetic.reduce((sum, event) => sum + event.total_tokens, 0),
             proposedExcludedRequests: synthetic.length,
-            samples: suspicious.slice(0, 50).map(event => ({ eventKey: event.event_key, reason: event.db_file === 'recovered_session.db' ? '缺少原始用量，旧版本从金额反推' : '旧记录缺少稳定身份/归属证据，需核对',
-                before: { model: event.model, tokens: event.total_tokens, timestamp: event.timestamp_seconds, account: event.account_email ?? event.account_id ?? null }, after: event.db_file === 'recovered_session.db' ? '仅保留金额凭据，Token/请求不计入可核验统计' : '保留原件，等待源数据核对' })),
+            samples: suspicious.slice(0, 50).map(event => ({ eventKey: event.event_key, reason: isSyntheticRecoveredDb(event.db_file) ? '缺少原始用量，旧版本从金额反推' : '旧记录缺少稳定身份/归属证据，需核对',
+                before: { model: event.model, tokens: event.total_tokens, timestamp: event.timestamp_seconds, account: event.account_email ?? event.account_id ?? null }, after: isSyntheticRecoveredDb(event.db_file) ? '仅保留金额凭据，Token/请求不计入可核验统计' : '保留原件，等待源数据核对' })),
             message: '旧JSON只读保留；当前预览不覆盖、删除或提交任何历史修订。新记录使用独立索引，可恢复原件核对。' };
     }
     if (!existsSync(path) && operation === 'count')
@@ -155,7 +164,7 @@ function run(): unknown {
                 for (const [key, entry] of Object.entries<any>(options.entries)) {
                     if (!Number.isFinite(entry.usd) || entry.usd < 0 || !entry.price)
                         throw Error('拒绝写入无效费率锁');
-                    const price = JSON.stringify(entry.price);
+                    const price = JSON.stringify(compactUnitPrice(entry.price));
                     if (previous.get(key)?.unit_price !== price) {
                         const seq = sequence.get(key)?.seq;
                         if (typeof seq === 'number')
@@ -186,7 +195,7 @@ function run(): unknown {
                 db.exec('BEGIN IMMEDIATE');
                 try {
                     for (const [key, item] of Object.entries<any>(rates.entries)) {
-                        const price = item.price ?? rates.profiles?.[item.p];
+                        const price = compactUnitPrice(item.price ?? rates.profiles?.[item.p]);
                         if (!price || !Number.isFinite(item.usd) || item.usd < 0)
                             throw Error('旧费率记录无效');
                         insertRate.run(key, JSON.stringify(price), item.usd);
@@ -203,7 +212,7 @@ function run(): unknown {
             db.exec('BEGIN IMMEDIATE');
             try {
                 for (const event of legacyEvents)
-                    if (event.db_file !== 'recovered_session.db') {
+                    if (!isSyntheticRecoveredDb(event.db_file)) {
                         const payload = JSON.stringify({ ...event, account_id: undefined, account_email: undefined, account_confidence: 'legacy' });
                         if (insert.run(event.event_key!, event.timestamp_seconds, null, event.model, payload).changes)
                             revision.run(event.event_key!, event.timestamp_seconds, payload);
@@ -214,11 +223,12 @@ function run(): unknown {
                 db.exec('ROLLBACK');
                 throw error;
             }
-            return { ...aggregateLedger(db, options), ledger_review_records: legacyEvents.filter(event => !event.source_id || event.db_file === 'recovered_session.db').length };
+            return { ...aggregateLedger(db, options), ledger_review_records: legacyEvents.filter(event => !event.source_id || isSyntheticRecoveredDb(event.db_file)).length };
         }
         if (!Array.isArray(events) || !events.every(validLedgerEvent))
             throw Error('拒绝写入无效用量事件');
         const upsert = db.prepare('INSERT INTO events(event_key,timestamp,account_id,model,payload,observed_at) VALUES(?,?,?,?,?,?) ON CONFLICT(event_key) DO UPDATE SET timestamp=excluded.timestamp,account_id=excluded.account_id,model=excluded.model,payload=excluded.payload,observed_at=excluded.observed_at WHERE payload<>excluded.payload');
+        const updateObserved = db.prepare('UPDATE events SET observed_at=MAX(observed_at,?) WHERE event_key=?');
         const revision = db.prepare('INSERT INTO event_revisions(event_key,timestamp,payload) VALUES(?,?,?)');
         const previous = db.prepare('SELECT payload,observed_at FROM events WHERE event_key=?');
         const alias = db.prepare('INSERT OR REPLACE INTO event_aliases VALUES(?,?)');
@@ -230,16 +240,23 @@ function run(): unknown {
                     if (Number(stored.observed_at) > (event.source_observed_at ?? 0)) continue;
                     const old = JSON.parse(String(stored.payload));
                     event.ingested_at = old.ingested_at ?? event.ingested_at;
-                    if (old.account_confidence === 'observed' && !event.account_id) {
-                        event.account_id = old.account_id;
-                        event.account_email = old.account_email;
-                        event.account_confidence = 'observed';
+                    if (old.account_confidence === 'observed') {
+                        if (!event.account_id) {
+                            event.account_id = old.account_id;
+                            event.account_email = old.account_email;
+                            event.account_confidence = 'observed';
+                        }
+                        if (old.account_type && old.account_type !== 'unknown' && (!event.account_type || event.account_type === 'unknown')) {
+                            event.account_type = old.account_type;
+                        }
                     }
                     if (!event.timestamp_seconds)
                         event.timestamp_seconds = old.timestamp_seconds;
                     const comparable = { ...event, source_observed_at: old.source_observed_at };
                     if (JSON.stringify(comparable) === String(stored.payload)) {
-                        db.prepare('UPDATE events SET observed_at=MAX(observed_at,?) WHERE event_key=?').run(event.source_observed_at ?? 0,event.event_key!);
+                        if ((event.source_observed_at ?? 0) > Number(stored.observed_at)) {
+                            updateObserved.run(event.source_observed_at ?? 0, event.event_key!);
+                        }
                         continue;
                     }
                 }

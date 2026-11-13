@@ -1,6 +1,7 @@
 import { allApplicationTargets, applicationTarget, channelStateDirectory, matchingTargetForLanguageServerCommand, type ApplicationTarget } from './application-target.js';
 import { inspectBundle, verifyLanguageServerIdentity } from './discovery.js';
 import { lstat, mkdir, readFile, readdir, unlink } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { execFile, spawn } from 'node:child_process';
@@ -12,7 +13,7 @@ import { atomicJson, commitAccountAndIndex, recoverAccountCommit, commitFileSet,
 import { ReentrantMutex } from './mutex.js';
 import { validateAccountPolicy, validateAccountImport } from './account-policy.js';
 import { withProcessLease } from './process-lock.js';
-import { ProtobufReader } from './usage.js';
+import { ProtobufReader } from './protobuf.js';
 import { decodeTopicRow } from './account-state.js';
 import {
   applyFamilyWindows,
@@ -433,7 +434,7 @@ export interface ModelQuota {
   max_tokens?: number;
   max_output_tokens?: number;
   supported_mime_types?: Record<string, boolean>;
-  // ---- task-38 新字段（均可选，旧数据容错） ----
+  // 扩展配额与模型状态字段（均可选，旧数据容错）
   model_id?: string;
   model_or_alias?: string | null;
   family?: Family;
@@ -485,9 +486,9 @@ export interface QuotaData {
    * 存在该字段时顶层 last_updated 不再被刷新时刻覆盖，而是取最旧分组的观察时间。
    */
   stale_groups?: { name: string; observed_at: number }[];
-  /** task-38：本轮刷新完整性 / 端点来源 / 缺失 family 与窗口。 */
+  /** 本轮刷新完整性 / 端点来源 / 缺失 family 与窗口。 */
   refresh_state?: QuotaRefreshState;
-  /** task-38：机器可读告警码（前缀 CODE:）。 */
+  /** 机器可读告警码（前缀 CODE:）。 */
   quota_warnings?: string[];
 }
 
@@ -495,6 +496,9 @@ export interface LiveLanguageServerStatus {
   email: string;
   name?: string | null;
   tier: string;
+  accountType?: 'consumer' | 'enterprise_vertex' | 'unknown';
+  userTierId?: string | null;
+  userTierName?: string | null;
   quota: QuotaData;
 }
 
@@ -516,7 +520,7 @@ export interface AccountSummary {
   credentialReadiness?: ReturnType<typeof accountCredentialReadiness>;
 }
 
-/** task-38：账号渲染指纹覆盖规范化配额快照（availability/disabled/own/family窗口/refresh_state/warnings）。 */
+/** 账号渲染指纹覆盖规范化配额快照（availability/disabled/own/family窗口/refresh_state/warnings）。 */
 export function quotaSnapshotForRevision(quota: QuotaData | null | undefined): unknown {
   if (!quota) return null;
   const windowPart = (status: WindowStatus | null | undefined) => status
@@ -696,7 +700,7 @@ export function sanitizeJsonString(raw: Buffer | string): string {
   return str.replace(/^[\u0000\s]+/, '');
 }
 
-/** task-38 规范化 <-> 持久化 legacy 形状转换（集中在 accounts 边界的适配层）。 */
+/** 规范化与持久化配额结构转换（集中在 accounts 边界的适配层）。 */
 export function modelQuotaFromNormalized(model: NormalizedModel): ModelQuota {
   return {
     ...model,
@@ -740,7 +744,8 @@ export function normalizedModelFromStored(model: ModelQuota, fallbackSource: Quo
     ? (model.own_percentage ?? null)
     : (model.percentage_known ? Math.round(model.percentage) : null);
   const displayName = model.display_name ?? null;
-  const family: Family = model.family ?? classifyFamily({ modelId: model.name, displayName, modelOrAlias: model.model_or_alias });
+  const reclassified = classifyFamily({ modelId: model.name, displayName, modelOrAlias: model.model_or_alias });
+  const family: Family = !model.family || model.family === 'other' ? reclassified : model.family;
   const ownKnown = (model.own_percentage_known ?? known) && ownPercentage !== null
     && Number.isFinite(ownPercentage) && ownPercentage >= 0 && ownPercentage <= 100;
   const percentage = model.effective_known !== undefined
@@ -815,7 +820,7 @@ export interface QuotaOverview {
   lastUpdated: number | null;
   isStale: boolean;
   staleHours: number;
-  // task-38 新增（稳定合同）
+  // 规范化配额详情字段
   argonStatus: ArgonStatus;
   carbonStatus: ArgonStatus;
   standaloneModels: StandaloneModelStatus[];
@@ -854,6 +859,8 @@ export class AccountsManager {
   private inFlightExternalSync: Promise<{ imported: number; updated: number; skipped: number; found: number }> | null = null;
   private indexCache: { mtimeMs: number; size: number; index: AccountIndex } | null = null;
   private accountCache = new Map<string, { mtimeMs: number; size: number; account: Account; digest: string }>();
+  private accountFileDigests = new WeakMap<Account, string>();
+  private refreshSaveMeta = new WeakMap<Account, { expectedRefreshToken: string; isRefreshUpdate: boolean }>();
 
   private async withWriteLock<T>(action: () => Promise<T>): Promise<T> {
     return this.mutex.run(() => withProcessLease(join(this.stateDir, 'accounts-write.lock'), action), { label: 'AccountsManager.writeLock' });
@@ -1225,11 +1232,6 @@ export class AccountsManager {
     });
   }
 
-  private channelAccount(account: Account): Account {
-    // Retain retired fields on disk, but never present Insiders quota as stable quota.
-    return account;
-  }
-
   async getAccount(id: string): Promise<Account | null> {
     await this.init();
     if (!/^[a-zA-Z0-9_-]+$/.test(id)) throw new Error('账号 ID 无效');
@@ -1239,8 +1241,8 @@ export class AccountsManager {
       const cached = this.accountCache.get(id);
       if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) {
         const clone = structuredClone(cached.account);
-        Object.defineProperty(clone, '_expectedFileDigest', { value: cached.digest, writable: true, configurable: true, enumerable: false });
-        return this.channelAccount(clone);
+        this.accountFileDigests.set(clone, cached.digest);
+        return clone;
       }
       const raw = await readFile(filePath);
       const acc = JSON.parse(sanitizeJsonString(raw)) as Account;
@@ -1250,9 +1252,9 @@ export class AccountsManager {
         }
         const digest = createHash('sha256').update(raw).digest('hex');
         this.accountCache.set(id, { mtimeMs: st.mtimeMs, size: st.size, account: structuredClone(acc), digest });
-        Object.defineProperty(acc, '_expectedFileDigest', {value:digest,writable:true,configurable:true,enumerable:false});
+        this.accountFileDigests.set(acc, digest);
       }
-      return acc ? this.channelAccount(acc) : acc;
+      return acc;
     } catch (error) {
       this.accountCache.delete(id);
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
@@ -1262,19 +1264,21 @@ export class AccountsManager {
 
   async saveAccount(
     account: Account,
-    options?: { expectedRefreshToken?: string; isRefreshUpdate?: boolean }
+    options?: { expectedRefreshToken?: string; expectedFileDigest?: string; isRefreshUpdate?: boolean }
   ): Promise<void> {
     if (!/^[a-zA-Z0-9_-]+$/.test(account.id)) throw new Error('账号 ID 无效');
     await this.init();
 
     return this.withWriteLock(async () => {
-      const expectedRefresh = options?.expectedRefreshToken ?? (account as any)._expectedRefreshToken;
-      const isRefreshUpdate = options?.isRefreshUpdate ?? (account as any)._isRefreshUpdate ?? false;
+      const meta = this.refreshSaveMeta.get(account);
+      const expectedRefresh = options?.expectedRefreshToken ?? meta?.expectedRefreshToken;
+      const isRefreshUpdate = options?.isRefreshUpdate ?? meta?.isRefreshUpdate ?? false;
 
       const accountPath = join(this.accountsDir, `${account.id}.json`);
       const diskAccount = await this.getAccount(account.id);
-      const expectedFileDigest=(account as any)._expectedFileDigest;
-      if (!isRefreshUpdate && expectedFileDigest && (!diskAccount || expectedFileDigest !== (diskAccount as any)._expectedFileDigest)) throw new Error('账号记录已在其他操作中更新，请重新读取后保存');
+      const expectedFileDigest = options?.expectedFileDigest ?? this.accountFileDigests.get(account);
+      const diskDigest = diskAccount ? this.accountFileDigests.get(diskAccount) : undefined;
+      if (!isRefreshUpdate && expectedFileDigest && (!diskAccount || expectedFileDigest !== diskDigest)) throw new Error('账号记录已在其他操作中更新，请重新读取后保存');
 
       if (expectedRefresh !== undefined && diskAccount) {
         if (diskAccount.token.refresh_token !== expectedRefresh) {
@@ -1347,7 +1351,9 @@ export class AccountsManager {
       await commitAccountAndIndex(accountPath, toSave, this.indexPath, index);
       this.indexCache = null;
       this.accountCache.delete(toSave.id);
-      Object.defineProperty(account, '_expectedFileDigest', {value:createHash('sha256').update(await readFile(accountPath)).digest('hex'),writable:true,configurable:true,enumerable:false});
+      const nextDigest = createHash('sha256').update(await readFile(accountPath)).digest('hex');
+      this.accountFileDigests.set(account, nextDigest);
+      this.accountFileDigests.set(toSave, nextDigest);
     });
   }
 
@@ -2114,14 +2120,24 @@ export class AccountsManager {
 
           const email = String(userStatus.email);
           const name = userStatus.name ? String(userStatus.name) : null;
-          const tierRaw = userStatus.userTier?.name || userStatus.userTier?.id ||
-            userStatus.planStatus?.planInfo?.planName || userStatus.paidTier?.name || '';
-          let tier = 'FREE';
+          const userTierId = typeof userStatus.userTier?.id === 'string' ? userStatus.userTier.id : null;
+          const userTierName = typeof userStatus.userTier?.name === 'string' ? userStatus.userTier.name : null;
+          const isEnterpriseVertex = Boolean(
+            userTierId === 'agy-business-paygo-tier' ||
+            userStatus.userTier?.usesGcpTos === true ||
+            userStatus.userTier?.userDefinedCloudaicompanionProject === true ||
+            /agent platform|business|enterprise/i.test(userTierName || '')
+          );
+          const accountType: 'consumer' | 'enterprise_vertex' = isEnterpriseVertex ? 'enterprise_vertex' : 'consumer';
+          const tierRaw = isEnterpriseVertex
+            ? (userStatus.planStatus?.planInfo?.planName || userStatus.planStatus?.planInfo?.teamsTier || userStatus.paidTier?.name || '')
+            : (userStatus.userTier?.name || userStatus.userTier?.id || userStatus.planStatus?.planInfo?.planName || userStatus.paidTier?.name || '');
+          let tier = isEnterpriseVertex ? '' : 'FREE';
           if (/ultra/i.test(tierRaw)) tier = 'ULTRA';
           else if (/pro/i.test(tierRaw)) tier = 'PRO';
-          else if (tierRaw) tier = 'FREE';
+          else if (!isEnterpriseVertex && tierRaw) tier = 'FREE';
 
-          // task-38：live 与 cloud 共用规范化；保留 disabled/display_name/modelOrAlias 与模型自身 quotaInfo，
+          // live 与 cloud 共用规范化；保留 disabled/display_name/modelOrAlias 与模型自身 quotaInfo，
           // 并同样把 family 窗口挂到模型上（只作为参考/effective，不覆写 own_*）。
           const observedAt = Math.floor(Date.now() / 1000);
           const clientConfigs = userStatus.cascadeModelConfigData?.clientModelConfigs || [];
@@ -2157,6 +2173,9 @@ export class AccountsManager {
             email,
             name,
             tier,
+            accountType,
+            userTierId,
+            userTierName,
             quota: quotaData,
           };
         } catch {}
@@ -2271,24 +2290,25 @@ export class AccountsManager {
       const candidateVscdbPaths = Array.from(new Set(options?.appSupportDir ? [...fallbackVscdbPaths, primaryProfileVscdb] : [primaryProfileVscdb, ...fallbackVscdbPaths]));
       for (const vscdbPath of candidateVscdbPaths) {
         if (extractedToken && extractedEmail) break;
+        if (!existsSync(vscdbPath)) continue;
+        let db: import('node:sqlite').DatabaseSync | undefined;
         try {
-          const { stdout } = await execFileAsync('/usr/bin/sqlite3', [
-            '-readonly', '-json',
-            vscdbPath,
-            "SELECT key, value FROM ItemTable WHERE key IN ('antigravityUnifiedStateSync.oauthToken', 'antigravityUnifiedStateSync.userStatus');",
-          ]);
-          const rows = JSON.parse(stdout || '[]');
+          const { DatabaseSync } = await import('node:sqlite');
+          db = new DatabaseSync(vscdbPath, { readOnly: true });
+          const rows = db.prepare(
+            "SELECT key, value FROM ItemTable WHERE key IN ('antigravityUnifiedStateSync.oauthToken', 'antigravityUnifiedStateSync.userStatus');"
+          ).all() as Array<{ key?: string; value?: string }>;
           let oauthRawB64 = '';
           let userStatusB64 = '';
           for (const r of rows) {
-            if (r.key === 'antigravityUnifiedStateSync.oauthToken') {
+            if (r.key === 'antigravityUnifiedStateSync.oauthToken' && r.value) {
               try {
                 const valObj = JSON.parse(r.value);
                 oauthRawB64 = valObj.data || '';
               } catch {
                 oauthRawB64 = r.value;
               }
-            } else if (r.key === 'antigravityUnifiedStateSync.userStatus') {
+            } else if (r.key === 'antigravityUnifiedStateSync.userStatus' && r.value) {
               try {
                 const valObj = JSON.parse(r.value);
                 userStatusB64 = valObj.data || '';
@@ -2332,6 +2352,7 @@ export class AccountsManager {
             }
           }
         } catch {}
+        finally { try { db?.close(); } catch {} }
       }
     }
 
@@ -2657,8 +2678,7 @@ export class AccountsManager {
       quota: account.quota,
       quota_refresh_error: account.quota_refresh_error,
     };
-    (toSave as any)._expectedRefreshToken = expectedRefresh;
-    (toSave as any)._isRefreshUpdate = true;
+    this.refreshSaveMeta.set(toSave, { expectedRefreshToken: expectedRefresh, isRefreshUpdate: true });
     signal?.throwIfAborted();
     await this.saveAccount(toSave, { expectedRefreshToken: expectedRefresh, isRefreshUpdate: true });
   }
@@ -3106,13 +3126,15 @@ export class AccountsManager {
     const profiles = Array.from(new Set([this.target.profile, ...allApplicationTargets().map(t => t.profile)]));
     for (const profilePath of profiles) {
       if (detected) break;
+      const vscdbPath = join(profilePath, 'User', 'globalStorage', 'state.vscdb');
+      if (!existsSync(vscdbPath)) continue;
+      let db: import('node:sqlite').DatabaseSync | undefined;
       try {
-        const vscdbPath = join(profilePath, 'User', 'globalStorage', 'state.vscdb');
-        const { stdout } = await execFileAsync('/usr/bin/sqlite3', [
-          '-readonly', '-json', vscdbPath,
-          "SELECT key, value FROM ItemTable WHERE key IN ('antigravityUnifiedStateSync.userStatus', 'antigravityAuthStatus');",
-        ], { timeout: 2000 });
-        const rows = JSON.parse(stdout || '[]');
+        const { DatabaseSync } = await import('node:sqlite');
+        db = new DatabaseSync(vscdbPath, { readOnly: true });
+        const rows = db.prepare(
+          "SELECT key, value FROM ItemTable WHERE key IN ('antigravityUnifiedStateSync.userStatus', 'antigravityAuthStatus');"
+        ).all() as Array<{ key?: string; value?: string }>;
         for (const r of rows) {
           if (r.key === 'antigravityUnifiedStateSync.userStatus' && r.value) {
             let b64 = r.value;
@@ -3136,6 +3158,7 @@ export class AccountsManager {
           }
         }
       } catch {}
+      finally { try { db?.close(); } catch {} }
     }
     if (!detected) {
       try {

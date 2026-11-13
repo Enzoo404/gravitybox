@@ -54,9 +54,9 @@ export function aggregateLedger(db: DatabaseSync, options: AggregateOptions): To
     const firstSequence = db.prepare('SELECT MIN(seq) AS seq FROM event_revisions WHERE event_key=?');
     db.exec('BEGIN IMMEDIATE');
     try {
-        for (const row of db.prepare('SELECT e.payload,l.unit_price,l.usd FROM events e LEFT JOIN rate_locks l ON l.event_key=e.event_key').iterate()) {
+        for (const row of db.prepare('SELECT e.payload,l.unit_price,l.usd FROM events e LEFT JOIN rate_locks l ON l.event_key=e.event_key LEFT JOIN event_aliases a ON a.legacy_key=e.event_key WHERE a.legacy_key IS NULL').iterate()) {
             const event = JSON.parse(String(row.payload)) as LedgerEvent;
-            if (event.db_file === 'recovered_session.db' || !event.source_id && event.db_file && options.liveFiles?.includes(event.db_file))
+            if (event.db_file === 'recovered_session.db' || event.db_file === 'recovered_enterprise_session.db' || !event.source_id && event.db_file && options.liveFiles?.includes(event.db_file))
                 continue;
             if (!event.account_id && !event.account_email) { unattributedRequests++; unattributedTokens += event.total_tokens; }
             const all = accounts.get('all')!;
@@ -85,7 +85,8 @@ export function aggregateLedger(db: DatabaseSync, options: AggregateOptions): To
                 if (price && (!(event.cache_write_tokens ?? 0) || Number.isFinite(price.cacheWrite))) {
                     cost = !zeroSentinel && !event.source_id && row.usd !== null && row.usd !== undefined ? Number(row.usd) : calculateEstimatedUsd(event.input_tokens, event.output_tokens, event.cached_tokens, price, event.cache_write_tokens ?? 0);
                     if (!row.unit_price || zeroSentinel || Number(row.usd) !== cost) {
-                        saveLock.run(event.event_key, JSON.stringify(price), cost);
+                        const { intervals: _intervals, ...compactPrice } = price as any;
+                        saveLock.run(event.event_key, JSON.stringify(compactPrice), cost);
                         if (!row.unit_price || zeroSentinel)
                             changedRateMinSeq = Math.min(changedRateMinSeq, Number(firstSequence.get(event.event_key)?.seq ?? 0));
                     }
@@ -162,7 +163,8 @@ export function aggregateLedger(db: DatabaseSync, options: AggregateOptions): To
     db.prepare('INSERT INTO snapshot_pins VALUES(?,?,?) ON CONFLICT(snapshot_id) DO UPDATE SET expires=excluded.expires').run(hash, revision, Date.now() + 600000);
     const receipts = db.prepare('SELECT COUNT(*) AS count,COALESCE(SUM(l.usd),0) AS usd FROM rate_locks l LEFT JOIN events e ON e.event_key=l.event_key LEFT JOIN event_aliases a ON a.legacy_key=l.event_key WHERE e.event_key IS NULL AND a.legacy_key IS NULL').get();
     return { unattributed_requests: unattributedRequests, unattributed_tokens: unattributedTokens, historical_amount_receipts: { unmatchedCount: Number(receipts?.count ?? 0), unmatchedUsd: Number(receipts?.usd ?? 0) }, today: periods[0]!, last_7_days: periods[1]!, last_30_days: periods[2]!, all_time: periods[3]!, daily_trends: [...daily.values()].sort((a, b) => a.date.localeCompare(b.date)), today_hourly: [...hourly.values()].sort((a, b) => a.hour.localeCompare(b.hour)),
-        available_accounts: [...accounts.values()], selected_account_id: accountId, unknown_time_records: unknownCount, unknown_time_tokens: unknownTokens,
+        available_accounts: [...accounts.values()], selected_account_id: accountId,
+        unknown_time_records: unknownCount, unknown_time_tokens: unknownTokens,
         databases_scanned: 0, generations_scanned: 0, skipped_large_records: 0, generated_at: now, snapshot_id: hash,
         availability: unknownCount ? 'partial' : 'complete', ledger_snapshot: snapshot };
 }
@@ -188,7 +190,13 @@ export function ledgerEventPage(db: DatabaseSync, options: {
         start.setDate(start.getDate() - 29);
     const end = new Date(snapshot.generatedAt * 1000);
     end.setHours(24, 0, 0, 0);
-    const conditions = ['r.seq<=?', 'NOT EXISTS(SELECT 1 FROM event_revisions n WHERE n.event_key=r.event_key AND n.seq>r.seq AND n.seq<=?)', "json_extract(r.payload,'$.model') LIKE ? ESCAPE '\\'"];
+    const conditions = [
+        'r.seq<=?',
+        'NOT EXISTS(SELECT 1 FROM event_revisions n WHERE n.event_key=r.event_key AND n.seq>r.seq AND n.seq<=?)',
+        'NOT EXISTS(SELECT 1 FROM event_aliases a WHERE a.legacy_key=r.event_key)',
+        "COALESCE(json_extract(r.payload,'$.db_file'),'') NOT IN ('recovered_session.db','recovered_enterprise_session.db')",
+        "json_extract(r.payload,'$.model') LIKE ? ESCAPE '\\'",
+    ];
     const params: Array<string | number> = [snapshot.revision, snapshot.revision, '%' + options.query.replace(/[\\%_]/g, '\\$&') + '%'];
     if (options.period !== 'all') {
         conditions.push('r.timestamp>=? AND r.timestamp<?');

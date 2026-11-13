@@ -3,7 +3,7 @@ import { promisify } from 'node:util';
 import { readFile, open, stat as fsStat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { assertLoopback } from './cdp.js';
-import { allApplicationTargets, targetForApp } from './application-target.js';
+import { targetForApp } from './application-target.js';
 const execute = promisify(execFile);
 export type Endpoint = { port: number; pid: number; browserURL: string; appVersion: string; legacyPatch: boolean; appPath?: string; profile?: string };
 
@@ -101,19 +101,7 @@ async function discoverSingle(appPath: string, profile: string): Promise<Endpoin
 }
 
 export async function discover(appPath: string, profile: string): Promise<Endpoint | undefined> {
-  const primary = await discoverSingle(appPath, profile);
-  if (primary) return primary;
-  const knownTargets = allApplicationTargets();
-  const isDefaultTarget = knownTargets.some(t => t.appPath === appPath && t.profile === profile);
-  if (!isDefaultTarget) return undefined;
-  for (const candidate of knownTargets) {
-    if (candidate.appPath === appPath && candidate.profile === profile) continue;
-    try {
-      const found = await discoverSingle(candidate.appPath, candidate.profile);
-      if (found) return found;
-    } catch {}
-  }
-  return undefined;
+  return discoverSingle(appPath, profile);
 }
 
 export function allowedTarget(target: { type: string; url: string }, fixtureOrigin?: string): boolean {
@@ -146,26 +134,22 @@ export async function verifyPageService(url: string, appPath: string): Promise<b
     const listeners = (await execute('/usr/sbin/lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-Fpfn'])).stdout;
     const owners = parseListeners(listeners, port);
     if (owners.length !== 1) {
-      verifiedPortCache.set(cacheKey, { valid: false, expiresAt: now + 10_000 });
+      verifiedPortCache.delete(cacheKey);
       return false;
     }
     const executable = (await execute('/usr/sbin/lsof', ['-nP', '-a', '-p', String(owners[0]!.pid), '-d', 'txt', '-Fn'])).stdout;
     const lines = executable.split('\n');
-    const candidateApps = allApplicationTargets().some(t => t.appPath === appPath)
-      ? allApplicationTargets().map(t => t.appPath)
-      : [appPath];
     const valid = lines.some(line => {
       if (!line.startsWith('n')) return false;
       const binPath = line.slice(1);
-      return candidateApps.some(candidateApp =>
-        binPath === join(candidateApp, 'Contents', 'Resources', 'bin', 'language_server') ||
-        binPath.startsWith(candidateApp + '/Contents/')
-      );
+      return binPath === join(appPath, 'Contents', 'Resources', 'bin', 'language_server') ||
+        binPath.startsWith(appPath + '/Contents/');
     });
-    verifiedPortCache.set(cacheKey, { valid, expiresAt: now + 60_000 });
+    if (valid) verifiedPortCache.set(cacheKey, { valid: true, expiresAt: now + 60_000 });
+    else verifiedPortCache.delete(cacheKey);
     return valid;
   } catch {
-    verifiedPortCache.set(cacheKey, { valid: false, expiresAt: now + 10_000 });
+    verifiedPortCache.delete(cacheKey);
     return false;
   }
 }

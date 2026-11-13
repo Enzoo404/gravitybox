@@ -27,7 +27,8 @@ export class UsageLedger {
                 execArgv: ['--disable-warning=ExperimentalWarning'],
                 resourceLimits: { maxOldGenerationSizeMb: 256 },
             });
-            const timer = setTimeout(() => { void worker.terminate(); reject(new Error('用量总账操作超时，原始账本已保留')); }, 30000);
+            const timeoutMs = ['save', 'aggregate', 'revalue'].includes(operation) ? 90000 : 30000;
+            const timer = setTimeout(() => { void worker.terminate(); reject(new Error('用量总账操作超时，原始账本已保留')); }, timeoutMs);
             worker.once('message', result => {
                 clearTimeout(timer);
                 if (result.ok)

@@ -1,8 +1,9 @@
 import { normalizeModelId } from './model-identity.js';
 import { ALLOWED_DATA_DIRECTORY_NAMES, type DataDirectoryName } from './application-target.js';
-import { MODEL_PRICES, MODEL_PRICE_ALIASES } from './model-catalog.js';
+import { MODEL_PRICES, MODEL_PRICE_ALIASES, FEED_MODEL_KEYS, CATALOG_PRICING_VERSION } from './model-catalog.js';
 import { SqliteReadSnapshot } from './sqlite-read.js';
 import { readdir, readFile, lstat } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { homedir } from 'node:os';
 import { atomicJson, atomicText } from './files.js';
@@ -10,6 +11,8 @@ import { createHash } from 'node:crypto';
 import { APP_VERSION } from './version.js';
 import type { LedgerSnapshot } from './usage-aggregate.js';
 import { UsageLedger, type LedgerEvent } from './usage-ledger.js';
+import { ProtobufReader, ProtobufWriter } from './protobuf.js';
+export { ProtobufReader, ProtobufWriter };
 
 try {
   process.loadEnvFile?.();
@@ -225,7 +228,7 @@ export interface GenerationEvent {
  * 审计基准日期：2026-11-02
  */
 export const PRICING_METADATA = {
-  version: '2026-11-12',
+  version: CATALOG_PRICING_VERSION || '2026-11-13',
   sourceUrl: 'https://cloud.google.com/vertex-ai/pricing',
   effectiveDate: '2026-11-01',
   currency: 'USD',
@@ -238,119 +241,6 @@ export function priceStatus(price: ApiPricing | ApiPricingInterval[], now=Date.n
   if (!p) return 'historical';
   if(p.provenance?.validUntil&&Date.parse(p.provenance.validUntil)<now)return 'expired';
   return p.provenance?.verification==='confirmed'?'confirmed':p.provenance?.verification==='user'?'user':'historical';
-}
-
-/**
- * 纯 TypeScript Protobuf 基础解码工具
- */
-export class ProtobufReader {
-  /** Field 2 of CortexStepGeneratorMetadata is repeated uint32 step_indices. */
-  static stepIndices(buf:Buffer):number[]|null {
-    let offset=0,present=false;const result:number[]=[];
-    const valid=(n:number)=>Number.isSafeInteger(n)&&n>=0&&n<=0xffffffff;
-    while(offset<buf.length){
-      const tag=this.readVarint(buf,offset);if(!tag||!valid(tag[0])||!tag[0])return[];
-      const field=tag[0]>>>3,wire=tag[0]&7;offset=tag[1];
-      if(wire===0){const value=this.readVarint(buf,offset);if(!value)return[];offset=value[1];if(field===2){present=true;if(!valid(value[0]))return[];result.push(value[0]);}}
-      else if(wire===2){const length=this.readVarint(buf,offset);if(!length||!Number.isSafeInteger(length[0])||length[0]<0)return[];offset=length[1];const end=offset+length[0];if(end>buf.length)return[];
-        if(field===2){present=true;while(offset<end){const v=this.readVarint(buf.subarray(0,end),offset);if(!v||!valid(v[0])||result.length>=10000)return[];result.push(v[0]);offset=v[1];}}
-        offset=end;
-      } else if(wire===1)offset+=8;else if(wire===5)offset+=4;else return[];
-      if(offset>buf.length)return[];
-    }
-    return present?[...new Set(result)]:null;
-  }
-  static readVarint(buf: Buffer, offset: number): [number, number] | null {
-    let result = 0;
-    let shift = 0;
-    let pos = offset;
-
-    while (pos < buf.length) {
-      const byte = buf[pos++]!;
-      result += (byte & 0x7f) * Math.pow(2, shift);
-      shift += 7;
-      if ((byte & 0x80) === 0) {
-        return [Math.round(result), pos];
-      }
-    }
-    return null;
-  }
-
-  static findField(buf: Buffer, targetField: number): Buffer | null {
-    let offset = 0;
-    while (offset < buf.length) {
-      const v = this.readVarint(buf, offset);
-      if (!v) break;
-      const [tag, newOffset] = v;
-      const wireType = tag & 0x07;
-      const fieldNum = tag >>> 3;
-
-      if (wireType === 2) {
-        // Length-delimited
-        const lenInfo = this.readVarint(buf, newOffset);
-        if (!lenInfo) break;
-        const [length, contentOffset] = lenInfo;
-        const end = contentOffset + length;
-        if (end > buf.length) break;
-
-        if (fieldNum === targetField) {
-          return buf.subarray(contentOffset, end);
-        }
-        offset = end;
-      } else if (wireType === 0) {
-        // Varint
-        const val = this.readVarint(buf, newOffset);
-        if (!val) break;
-        offset = val[1];
-      } else if (wireType === 1) {
-        // 64-bit
-        offset = newOffset + 8;
-      } else if (wireType === 5) {
-        // 32-bit
-        offset = newOffset + 4;
-      } else {
-        break;
-      }
-    }
-    return null;
-  }
-
-  static findVarint(buf: Buffer, targetField: number): number | null {
-    let offset = 0;
-    while (offset < buf.length) {
-      const v = this.readVarint(buf, offset);
-      if (!v) break;
-      const [tag, newOffset] = v;
-      const wireType = tag & 0x07;
-      const fieldNum = tag >>> 3;
-
-      if (wireType === 0) {
-        const val = this.readVarint(buf, newOffset);
-        if (!val) break;
-        if (fieldNum === targetField) {
-          return val[0];
-        }
-        offset = val[1];
-      } else if (wireType === 2) {
-        const lenInfo = this.readVarint(buf, newOffset);
-        if (!lenInfo) break;
-        offset = lenInfo[1] + lenInfo[0];
-      } else if (wireType === 1) {
-        offset = newOffset + 8;
-      } else if (wireType === 5) {
-        offset = newOffset + 4;
-      } else {
-        break;
-      }
-    }
-    return null;
-  }
-
-  static findString(buf: Buffer, targetField: number): string | null {
-    const fieldBuf = this.findField(buf, targetField);
-    if (!fieldBuf) return null;
-    return fieldBuf.toString('utf8').trim() || null;
-  }
 }
 
 const SORTED_DEFAULT_PRICE_KEYS = Object.keys(DEFAULT_API_PRICES).sort((a, b) => b.length - a.length);
@@ -378,7 +268,7 @@ export function matchPricingKeys(modelName: string): string {
     .replace(/^claude-5\.5-sonnet/, 'claude-sonnet-5-5');
   for (const key of SORTED_DEFAULT_PRICE_KEYS) {
     if (lower === key) return key;
-    if (lower.startsWith(key + '-') && /^(?:extra-low|high|medium|low|thinking|latest|preview|trial|\d{8}|\d{4}-\d{2}-\d{2}|\d{3})(?:-thinking)?(?:-\d{2}-\d{2})?$/.test(lower.slice(key.length + 1))) return key;
+    if (lower.startsWith(key + '-') && /^(?:xhigh|extra-high|extra-low|high|medium|low|thinking|latest|preview|trial|\d{8}|\d{4}-\d{2}-\d{2}|\d{3})(?:-thinking)?(?:-\d{2}-\d{2})?$/.test(lower.slice(key.length + 1))) return key;
   }
 
   return lower;
@@ -487,6 +377,9 @@ export class UsageStatsManager {
   private persistCachePath?: string;
   private persistLoaded = false;
   private fileCacheDirty = false;
+  private observationsPath: string;
+  private observationsLoaded = false;
+  private observationTimeline: Array<{ at: number; id?: string; email?: string; account_type: 'consumer' | 'enterprise_vertex' | 'unknown' }> = [];
   private ledger: UsageLedger;
   private usageLedgerLoaded = false;
   private usageLedgerLoading?: Promise<void>;
@@ -494,13 +387,15 @@ export class UsageStatsManager {
   private usageLedgerEvents = new Map<string, LedgerEvent>();
   private pendingLedgerEvents = new Map<string, LedgerEvent>();
   private largeLedger = false;
+  private largeLedgerBaselinePresent = false;
   private ledgerUnavailable = false;
+  private ledgerCorrupt = false;
   private archivedUnavailable = false;
   private storageWarnings = new Set<string>();
   private cachedSummariesByAccount = new Map<string, { data: TokenUsageSummary; expiresAt: number }>();
   private lastAggregationKeysByAccount = new Map<string, string>();
   private knownAccounts: Array<{ id: string; email: string; name?: string | null }> = [];
-  private currentAccountContext?: { id?: string; email?: string };
+  private currentAccountContext?: { id?: string; email?: string; account_type?: 'consumer' | 'enterprise_vertex' | 'unknown' };
   private accountContextObservedAtSec = Math.floor(Date.now() / 1000);
   private archivedEventsPath: string;
   private archivedEventsLoaded = false;
@@ -515,15 +410,21 @@ export class UsageStatsManager {
     }
   >();
   private remotePricingCachePath: string;
+  private pricingSyncStatePath: string;
   private remotePricingUrl: string;
   private fallbackPricingUrls: string[];
   private customRemoteUrlConfigured: boolean;
   private autoRemotePricingSync: boolean;
   private lastRemoteSyncAt = 0;
   private lastSyncSuccess = false;
+  private lastCheckAt = 0;
+  private lastCheckSuccess = false;
+  private nextAutoSyncAt = 0;
+  private syncStateLoaded = false;
   private lastSyncError: string | null = null;
   private lastSyncedSourceUrl = '';
   private lastSyncedVersion = '';
+  private activeOfficialModels: string[] | null = null;
 
   constructor(options?: { geminiDir?: string; stateDir?: string; remotePricingUrl?: string; fallbackPricingUrls?: string[]; dataDirectoryName?: DataDirectoryName }) {
     const defaultGeminiDir = join(homedir(), '.gemini');
@@ -532,11 +433,13 @@ export class UsageStatsManager {
     if (options?.dataDirectoryName && !ALLOWED_DATA_DIRECTORY_NAMES.includes(options.dataDirectoryName)) throw new Error('仅统计 Antigravity 正式版用量');
     this.dataDirectoryNames = options?.dataDirectoryName ? [options.dataDirectoryName] : ALLOWED_DATA_DIRECTORY_NAMES;
     const stateDir = options?.stateDir ?? (options?.geminiDir && options.geminiDir !== defaultGeminiDir ? join(options.geminiDir, '.gravitybox_state') : defaultStateDir);
+    this.observationsPath = join(stateDir, 'usage-account-observations.json');
     this.ledger = new UsageLedger(stateDir);
     this.rateLocksPath = join(stateDir, 'usage-rate-locks.json');
     this.archivedEventsPath = join(stateDir, 'usage-archived-events.json');
     this.pricingCachePath = join(stateDir, 'api_pricing.json');
     this.remotePricingCachePath = join(stateDir, 'remote_pricing.json');
+    this.pricingSyncStatePath = join(stateDir, 'pricing-sync-status.json');
     this.remotePricingUrl = options?.remotePricingUrl ?? process.env.GRAVITYBOX_PRICING_FEED_URL ?? 'https://raw.githubusercontent.com/Enzoo404/gravitybox/main/assets/pricing-feed.json';
     this.customRemoteUrlConfigured = Boolean(options?.remotePricingUrl || process.env.GRAVITYBOX_PRICING_FEED_URL);
     this.fallbackPricingUrls = options?.fallbackPricingUrls ?? DEFAULT_PRICING_FEED_URLS;
@@ -553,6 +456,16 @@ export class UsageStatsManager {
   }
 
   setAutoRemotePricingSync(enabled: boolean) { this.autoRemotePricingSync = enabled; }
+
+  /** 动态更新当前官方 Antigravity 包含的非禁用模型列表，用于价格基准展示过滤。 */
+  setActiveOfficialModels(modelIds: Iterable<string> | null): void {
+    if (!modelIds) {
+      this.activeOfficialModels = null;
+      return;
+    }
+    const list = Array.from(modelIds).map(id => String(id).trim()).filter(Boolean);
+    this.activeOfficialModels = list.length > 0 ? list : null;
+  }
 
   private cachedPriceRef(price: ApiPricing): ApiPricing {
     const key = JSON.stringify(price);
@@ -806,11 +719,86 @@ export class UsageStatsManager {
     this.knownAccounts = Array.isArray(accounts) ? accounts.filter(a => a && (a.id || a.email)) : [];
   }
 
-  setCurrentAccountContext(ctx?: { id?: string; email?: string }): void {
-    const prevId = this.currentAccountContext?.id || this.currentAccountContext?.email || '';
-    const nextId = ctx?.id || ctx?.email || '';
-    if (prevId !== nextId) this.accountContextObservedAtSec = Math.ceil(Date.now() / 1000);
-    this.currentAccountContext = ctx ? { id: ctx.id, email: ctx.email } : undefined;
+  private ensureObservationTimelineLoaded(): void {
+    if (this.observationsLoaded) return;
+    this.observationsLoaded = true;
+    try {
+      const raw = JSON.parse(readFileSync(this.observationsPath, 'utf8'));
+      if (raw && raw.version === 1 && Array.isArray(raw.entries)) {
+        const valid = raw.entries.filter((e: any) => e && typeof e.at === 'number' && Number.isFinite(e.at));
+        if (valid.length > 0) {
+          this.observationTimeline = valid
+            .concat(this.observationTimeline)
+            .sort((a: any, b: any) => a.at - b.at)
+            .slice(-500);
+        }
+      }
+    } catch {}
+  }
+
+  private async loadObservationTimeline(): Promise<void> {
+    this.ensureObservationTimelineLoaded();
+  }
+
+  private saveObservationTimeline(): void {
+    if (this.observationTimeline.length === 0) return;
+    const payload = { version: 1, entries: this.observationTimeline.slice(-500) };
+    void atomicJson(this.observationsPath, payload, undefined, { durability: 'relaxed' }).catch(() => {});
+  }
+
+  private lookupObservedContext(timestampSec: number): { id?: string; email?: string; account_type: 'consumer' | 'enterprise_vertex' | 'unknown' } | null {
+    if (timestampSec <= 0) return null;
+    this.ensureObservationTimelineLoaded();
+    if (this.currentAccountContext && timestampSec >= this.accountContextObservedAtSec) {
+      return {
+        id: this.currentAccountContext.id,
+        email: this.currentAccountContext.email,
+        account_type: this.currentAccountContext.account_type ?? 'unknown',
+      };
+    }
+    let matched: { at: number; id?: string; email?: string; account_type: 'consumer' | 'enterprise_vertex' | 'unknown' } | null = null;
+    for (const entry of this.observationTimeline) {
+      if (entry.at <= timestampSec) matched = entry;
+      else break;
+    }
+    if (matched && (matched.id || matched.email)) {
+      return { id: matched.id, email: matched.email, account_type: matched.account_type };
+    }
+    return null;
+  }
+
+  setCurrentAccountContext(ctx?: { id?: string; email?: string; account_type?: 'consumer' | 'enterprise_vertex' | 'unknown' }): void {
+    this.ensureObservationTimelineLoaded();
+    const prevEmail = (this.currentAccountContext?.email || '').trim().toLowerCase();
+    const nextEmail = (ctx?.email || '').trim().toLowerCase();
+    const prevId = this.currentAccountContext?.id || '';
+    const nextId = ctx?.id || '';
+    const nextType = ctx?.account_type || 'unknown';
+    const sameUser = nextEmail
+      ? prevEmail === nextEmail
+      : (prevId === nextId && prevEmail === '');
+    if (!sameUser) {
+      const nowSec = Math.floor(Date.now() / 1000);
+      this.accountContextObservedAtSec = nowSec;
+      const last = this.observationTimeline[this.observationTimeline.length - 1];
+      const nextEntry = ctx
+        ? { at: nowSec, id: ctx.id, email: ctx.email, account_type: nextType }
+        : { at: nowSec, account_type: 'unknown' as const };
+      const isSameAsLast =
+        last &&
+        (last.email || '').toLowerCase() === (nextEntry.email || '').toLowerCase() &&
+        (last.id || '') === (nextEntry.id || '');
+      if (!isSameAsLast) {
+        this.observationTimeline.push(nextEntry);
+        if (this.observationTimeline.length > 500) {
+          this.observationTimeline = this.observationTimeline.slice(-500);
+        }
+        this.saveObservationTimeline();
+      }
+    }
+    this.currentAccountContext = ctx
+      ? { id: ctx.id, email: ctx.email, account_type: nextType }
+      : undefined;
   }
 
   private loadUsageLedger(): Promise<void> {
@@ -824,10 +812,13 @@ export class UsageStatsManager {
   private async loadUsageLedgerOnce(): Promise<void> {
     if (this.usageLedgerLoaded) return;
     this.usageLedgerLoaded = true;
+    await this.loadObservationTimeline();
     try {
-      this.largeLedger = await this.ledger.count() > 50_000;
+      const totalCount = await this.ledger.count();
+      this.largeLedger = totalCount > 50_000;
+      this.largeLedgerBaselinePresent = totalCount > 0;
       for (const event of this.largeLedger ? [] : await this.ledger.load()) {
-        if (event.db_file === 'recovered_session.db') {
+        if (event.db_file === 'recovered_session.db' || event.db_file === 'recovered_enterprise_session.db') {
           this.storageWarnings.add('旧账本含费用反推的合成事件，原记录已保留，未计入可核验用量；请核对恢复材料');
           continue;
         }
@@ -836,6 +827,7 @@ export class UsageStatsManager {
       }
     } catch {
       this.ledgerUnavailable = true;
+      this.ledgerCorrupt = true;
       this.storageWarnings.add('持久化用量总账无法读取或版本不支持，原件已保留，停止写回；当前只展示可读取的源数据');
     }
     await this.loadArchivedEvents();
@@ -846,17 +838,22 @@ export class UsageStatsManager {
 
   private upsertLedger(event: LedgerEvent): void {
     const key = event.event_key;
-    if (!key || event.db_file === 'recovered_session.db') return;
+    if (!key || event.db_file === 'recovered_session.db' || event.db_file === 'recovered_enterprise_session.db') return;
     const previous = this.usageLedgerEvents.get(key);
     if ((previous?.source_observed_at ?? 0) > (event.source_observed_at ?? 0)) return;
     const next = { ...previous, ...event,
       timestamp_seconds: event.timestamp_seconds || previous?.timestamp_seconds || 0,
       ingested_at: previous?.ingested_at ?? event.ingested_at ?? new Date().toISOString() };
     // Absence of new attribution evidence must not erase an existing observed identity.
-    if (!event.account_id && previous?.account_confidence === 'observed') {
-      next.account_id = previous.account_id;
-      next.account_email = previous.account_email;
-      next.account_confidence = previous.account_confidence;
+    if (previous?.account_confidence === 'observed') {
+      if (!event.account_id) {
+        next.account_id = previous.account_id;
+        next.account_email = previous.account_email;
+        next.account_confidence = previous.account_confidence;
+      }
+      if (previous.account_type && previous.account_type !== 'unknown' && (!event.account_type || event.account_type === 'unknown')) {
+        next.account_type = previous.account_type;
+      }
     }
     if (previous && JSON.stringify(previous) === JSON.stringify(next)) return;
     this.usageLedgerEvents.set(key, next);
@@ -882,7 +879,7 @@ export class UsageStatsManager {
   }
 
   /**
-   * 账号切换/退出前置固化 Hook：强制扫描当前活跃会话数据库并立即固化到 UsageLedger。
+   * 账号切换前置固化：并发扫描近期活跃会话库并在结束后一次性固化到 UsageLedger。
    */
   async captureCurrentActiveSessions(accountContext?: { id?: string; email?: string }): Promise<{ captured: number }> {
     if (accountContext) {
@@ -891,16 +888,28 @@ export class UsageStatsManager {
     await this.loadPersistentFileCache();
     await this.loadUsageLedger();
     const dbPaths = await this.discoverDatabaseFiles();
+    const nowMs = Date.now();
+    const activePaths = dbPaths.filter(p => {
+      const st = this.discoveredStats.get(p);
+      if (!st || !this.fileCache.has(p)) return true;
+      return nowMs - Math.max(st.mtimeMs, st.walMtimeMs) <= 30 * 60_000;
+    });
     let captured = 0;
-    for (const p of dbPaths) {
-      const res = await this.scanDatabaseEvents(p, true).catch(() => null);
-      if (res && res.events.length > 0) {
-        captured += res.events.length;
+    let cursor = 0;
+    await Promise.all(Array.from({ length: Math.min(8, activePaths.length) }, async () => {
+      while (cursor < activePaths.length) {
+        const p = activePaths[cursor++]!;
+        const res = await this.scanDatabaseEvents(p, true).catch(() => null);
+        if (res && res.events.length > 0) {
+          captured += res.events.length;
+        }
       }
-      if (this.largeLedger) { await this.saveUsageLedger(); this.usageLedgerEvents.clear(); }
-    }
+    }));
     if (this.usageLedgerDirty) {
       await this.saveUsageLedger();
+    }
+    if (this.largeLedger) {
+      this.usageLedgerEvents.clear();
     }
     this.invalidateCache();
     return { captured };
@@ -1083,13 +1092,20 @@ export class UsageStatsManager {
     this.pricingWarnings = [];
     const merged: Record<string, ApiPricingEntry> = Object.assign(Object.create(null), DEFAULT_API_PRICES);
 
-    // 1. 尝试合并本地远程缓存
+    // 1. 尝试合并本地远程缓存（禁止早于内置目录日期的旧远端缓存降级覆盖较新的官方目录）
     try {
       const rawRemote = await readFile(this.remotePricingCachePath, 'utf8');
       const parsedRemote = JSON.parse(rawRemote);
       const remotePrices = parsedRemote && typeof parsedRemote === 'object' && parsedRemote.prices ? parsedRemote.prices : parsedRemote;
+      const remoteVer = typeof parsedRemote?.feedVersion === 'string' ? parsedRemote.feedVersion.trim() : '';
+      const isOlderDatedFeed = /^\d{4}-\d{2}-\d{2}$/.test(remoteVer)
+        && /^\d{4}-\d{2}-\d{2}$/.test(CATALOG_PRICING_VERSION)
+        && remoteVer < CATALOG_PRICING_VERSION;
       if (remotePrices && typeof remotePrices === 'object' && !Array.isArray(remotePrices)) {
-        this.mergePricingEntries(merged, remotePrices, '远程价格条目待修复：');
+        const filteredRemote = isOlderDatedFeed
+          ? Object.fromEntries(Object.entries(remotePrices).filter(([k]) => !Object.hasOwn(merged, k)))
+          : remotePrices;
+        this.mergePricingEntries(merged, filteredRemote, '远程价格条目待修复：');
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
@@ -1123,6 +1139,41 @@ export class UsageStatsManager {
     return resolved;
   }
 
+  private canonicalActivePricingKeys(modelIds?: Iterable<string> | null): Set<string> {
+    const source = modelIds !== undefined && modelIds !== null ? Array.from(modelIds) : (this.activeOfficialModels ?? []);
+    const keys = new Set<string>();
+    for (const rawId of source) {
+      const trimmed = String(rawId).trim();
+      if (!trimmed) continue;
+      const matched = matchPricingKeys(trimmed);
+      if (matched) keys.add(matched);
+      keys.add(normalizeModelId(trimmed));
+    }
+    if (keys.size === 0) {
+      for (const key of FEED_MODEL_KEYS) keys.add(key);
+    }
+    return keys;
+  }
+
+  /**
+   * 仅返回当前 Antigravity 官方包含模型对应的生效价格基准，不包含已下线历史模型；
+   * 历史事件计价仍通过 getRawPricingTable() / rateLocks 独立保留，互不影响。
+   */
+  async getActivePricingTable(
+    timestampSeconds = Math.floor(Date.now() / 1000),
+    activeModelIds?: Iterable<string> | null
+  ): Promise<Record<string, ApiPricing>> {
+    const raw = await this.getRawPricingTable();
+    const allowedKeys = this.canonicalActivePricingKeys(activeModelIds);
+    const resolved: Record<string, ApiPricing> = Object.create(null);
+    for (const key of Object.keys(raw)) {
+      if (!allowedKeys.has(key)) continue;
+      const p = this.resolvePricing(raw, key, timestampSeconds);
+      if (p) resolved[key] = p;
+    }
+    return resolved;
+  }
+
   async syncRemotePricing(feedUrl?: string, force = false): Promise<{ synced: boolean; error?: string; count?: number; sourceUrl?: string; version?: string; healedCount?: number }> {
     const candidateUrls = feedUrl
       ? [feedUrl]
@@ -1133,7 +1184,7 @@ export class UsageStatsManager {
       : this.fallbackPricingUrls;
 
     const now = Date.now();
-    if (!force && now - this.lastRemoteSyncAt < 86_400_000) {
+    if (!force && now < this.nextAutoSyncAt) {
       return { synced: false, error: '检查频率限制（24小时）' };
     }
 
@@ -1150,16 +1201,25 @@ export class UsageStatsManager {
         const feedVersion = (data && typeof data === 'object' && typeof data.version === 'string') ? data.version : 'unknown';
         await atomicJson(this.remotePricingCachePath, {
           version: 1,
-          syncedAt: new Date().toISOString(),
+          syncedAt: new Date(now).toISOString(),
           sourceUrl: targetUrl,
           feedVersion,
           prices: validated,
         });
         this.lastRemoteSyncAt = now;
+        this.lastCheckAt = now;
+        this.nextAutoSyncAt = now + 86_400_000;
+        this.syncStateLoaded = true;
         this.lastSyncSuccess = true;
+        this.lastCheckSuccess = true;
         this.lastSyncError = null;
         this.lastSyncedSourceUrl = targetUrl;
         this.lastSyncedVersion = feedVersion;
+        await atomicJson(this.pricingSyncStatePath, {
+          lastCheckAt: now,
+          lastCheckSuccess: true,
+          lastSyncError: null,
+        }).catch(() => {});
         this.cachedSummariesByAccount.clear();
         this.lastAggregationKeysByAccount.clear();
         let healedCount = 0;
@@ -1175,43 +1235,80 @@ export class UsageStatsManager {
       }
     }
 
-    // 所有候选源均尝试失败
-    this.lastRemoteSyncAt = now - 86_400_000 + 300_000;
+    // 所有候选源均尝试失败：保留上次成功同步时间，仅推进检查时间戳与 5 分钟重试冷却
+    this.nextAutoSyncAt = now + 300_000;
+    this.lastCheckAt = now;
+    this.syncStateLoaded = true;
     this.lastSyncSuccess = false;
+    this.lastCheckSuccess = false;
     this.lastSyncError = lastError?.message ?? String(lastError);
+    await atomicJson(this.pricingSyncStatePath, {
+      lastCheckAt: now,
+      lastCheckSuccess: false,
+      lastSyncError: this.lastSyncError,
+    }).catch(() => {});
     return { synced: false, error: this.lastSyncError ?? undefined };
   }
 
   async getPricingSyncStatus(): Promise<{
     autoSyncEnabled: boolean;
     lastSyncAt: number;
+    lastCheckAt: number;
     lastSyncSuccess: boolean;
+    lastCheckSuccess: boolean;
     lastSyncError: string | null;
     feedVersion: string;
     sourceUrl: string;
     modelCount: number;
   }> {
-    if (!this.lastRemoteSyncAt) {
+    if (!this.syncStateLoaded) {
+      this.syncStateLoaded = true;
+      if (!this.lastRemoteSyncAt) {
+        try {
+          const raw = await readFile(this.remotePricingCachePath, 'utf8');
+          const data = JSON.parse(raw);
+          if (data && data.syncedAt) {
+            this.lastRemoteSyncAt = Date.parse(data.syncedAt) || 0;
+            this.lastSyncSuccess = true;
+            this.lastSyncedSourceUrl = data.sourceUrl ?? '';
+            this.lastSyncedVersion = data.feedVersion ?? '';
+          }
+        } catch {}
+      }
       try {
-        const raw = await readFile(this.remotePricingCachePath, 'utf8');
-        const data = JSON.parse(raw);
-        if (data && data.syncedAt) {
-          this.lastRemoteSyncAt = Date.parse(data.syncedAt) || 0;
-          this.lastSyncSuccess = true;
-          this.lastSyncedSourceUrl = data.sourceUrl ?? '';
-          this.lastSyncedVersion = data.feedVersion ?? '';
+        const rawCheck = await readFile(this.pricingSyncStatePath, 'utf8');
+        const checkData = JSON.parse(rawCheck);
+        if (checkData && typeof checkData === 'object') {
+          if (typeof checkData.lastCheckAt === 'number' && Number.isFinite(checkData.lastCheckAt)) {
+            this.lastCheckAt = checkData.lastCheckAt;
+          }
+          if (typeof checkData.lastCheckSuccess === 'boolean') {
+            this.lastCheckSuccess = checkData.lastCheckSuccess;
+          }
+          if (typeof checkData.lastSyncError === 'string' || checkData.lastSyncError === null) {
+            this.lastSyncError = checkData.lastSyncError;
+          }
         }
       } catch {}
     }
-    const rawPricing = await this.getRawPricingTable();
+    const activeTable = await this.getActivePricingTable();
+    const rawVersion = this.lastSyncedVersion || PRICING_METADATA.version;
+    const effectiveVersion = /^\d{4}-\d{2}-\d{2}$/.test(rawVersion)
+      && /^\d{4}-\d{2}-\d{2}$/.test(PRICING_METADATA.version)
+      && rawVersion < PRICING_METADATA.version
+      ? PRICING_METADATA.version
+      : rawVersion;
+    const effectiveCheckAt = Math.max(this.lastCheckAt, this.lastRemoteSyncAt);
     return {
       autoSyncEnabled: this.autoRemotePricingSync,
       lastSyncAt: this.lastRemoteSyncAt,
+      lastCheckAt: effectiveCheckAt,
       lastSyncSuccess: this.lastSyncSuccess,
+      lastCheckSuccess: this.lastCheckAt ? this.lastCheckSuccess : this.lastSyncSuccess,
       lastSyncError: this.lastSyncError,
-      feedVersion: this.lastSyncedVersion || PRICING_METADATA.version,
+      feedVersion: effectiveVersion,
       sourceUrl: this.lastSyncedSourceUrl || this.remotePricingUrl,
-      modelCount: Object.keys(rawPricing).length,
+      modelCount: Object.keys(activeTable).length,
     };
   }
 
@@ -1347,10 +1444,52 @@ export class UsageStatsManager {
     } catch (error) { return { ok: false, rows: [], error: (error as Error).message }; }
   }
 
+  private isTransientSqliteReadError(message = ''): boolean {
+    return /跨批读取期间变化|busy|locked|no such table|连接已关闭|超出单批预算|unable to open/i.test(message);
+  }
+
+  private async isInitializingOrRemovedDb(dbPath: string, errorMessage = ''): Promise<boolean> {
+    const stat = await lstat(dbPath).catch((err: NodeJS.ErrnoException) => (err?.code === 'ENOENT' ? null : undefined));
+    if (stat === null) return true;
+    if (stat && /no such table/i.test(errorMessage) && (stat.size <= 4096 || Date.now() - stat.mtimeMs < 60_000)) {
+      return true;
+    }
+    return false;
+  }
+
   /**
-   * 解析单数据库中的 Token 生成事件（按文件 mtimeMs、size 与 WAL 变动增量缓存）
+   * 解析单数据库中的 Token 生成事件（按文件 mtimeMs、size 与 WAL 变动增量缓存；遇并发读写或新建初始化库自动退避重试）
    */
   async scanDatabaseEvents(dbPath: string, bypassCache = false, signal?: AbortSignal): Promise<{
+    events: GenerationEvent[];
+    generationsScanned: number;
+    skippedLargeRecords: number;
+    hasError?: boolean;
+    error?: string;
+    usedCached?: boolean;
+    cacheHit?: boolean;
+  }> {
+    let lastResult = await this.scanDatabaseEventsOnce(dbPath, bypassCache, signal);
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      if (!lastResult.hasError || signal?.aborted || !this.isTransientSqliteReadError(lastResult.error)) break;
+      await new Promise(resolve => setTimeout(resolve, attempt * 100));
+      if (signal?.aborted) break;
+      lastResult = await this.scanDatabaseEventsOnce(dbPath, true, signal);
+    }
+    if (lastResult.hasError && !signal?.aborted && await this.isInitializingOrRemovedDb(dbPath, lastResult.error)) {
+      const cached = this.fileCache.get(dbPath);
+      return {
+        events: cached?.events ?? [],
+        generationsScanned: cached?.generationsScanned ?? 0,
+        skippedLargeRecords: cached?.skippedLargeRecords ?? 0,
+        hasError: false,
+        usedCached: Boolean(cached),
+      };
+    }
+    return lastResult;
+  }
+
+  private async scanDatabaseEventsOnce(dbPath: string, bypassCache = false, signal?: AbortSignal): Promise<{
     events: GenerationEvent[];
     generationsScanned: number;
     skippedLargeRecords: number;
@@ -1488,10 +1627,11 @@ export class UsageStatsManager {
 
       // Only requests first observed after a positively observed identity can be attributed.
       // Unknown timestamps and pre-start history remain unknown, regardless of database mtime.
-      const canAttributeToCurrent = Boolean(this.currentAccountContext && timestamp > 0
-        && timestamp >= this.accountContextObservedAtSec);
-      const accountId = canAttributeToCurrent ? this.currentAccountContext?.id : undefined;
-      const accountEmail = canAttributeToCurrent ? this.currentAccountContext?.email : undefined;
+      const observedCtx = this.lookupObservedContext(timestamp);
+      const canAttributeToCurrent = Boolean(observedCtx);
+      const accountId = observedCtx?.id;
+      const accountEmail = observedCtx?.email;
+      const accountType = canAttributeToCurrent ? (observedCtx?.account_type ?? 'unknown') : undefined;
       const execution = ProtobufReader.findField(blob, 4)?.toString('hex') ?? '';
       const legacyKey = createHash('sha256').update(JSON.stringify([
         basename(dbPath), row.idx, execution || undefined, lockModelKey, rawInput, cachedTokens, cacheWriteTokens, outputTokens,
@@ -1510,6 +1650,7 @@ export class UsageStatsManager {
         total_tokens: totalTokens,
         timestamp_seconds: timestamp,
         ...(accountId ? { account_id: accountId, account_email: accountEmail } : (accountEmail ? { account_email: accountEmail } : {})),
+        ...(accountType ? { account_type: accountType } : {}),
       };
       if (timestamp === 0) {
         const indices = ProtobufReader.stepIndices(blob);
@@ -1548,6 +1689,13 @@ export class UsageStatsManager {
           const linked = item.indices.map(idx => stepTimes.get(idx)).filter((step): step is NonNullable<typeof step> => !!step);
           if (linked.length === 1 && item.execution && linked[0]!.execution?.equals(item.execution) && linked[0]!.usage?.equals(item.usage)) {
             item.event.timestamp_seconds = linked[0]!.timestamp;
+            const obs = this.lookupObservedContext(item.event.timestamp_seconds);
+            if (obs) {
+              item.event.account_id = obs.id;
+              item.event.account_email = obs.email;
+              item.event.account_type = obs.account_type;
+              item.event.account_confidence = 'observed';
+            }
           }
         }
       }
@@ -1674,11 +1822,15 @@ export class UsageStatsManager {
     const accKey = accountId || 'all';
     const nowMs = Date.now();
     const cachedByAcc = this.cachedSummariesByAccount.get(accKey);
-    if (!forceRefresh && cachedByAcc && nowMs < cachedByAcc.expiresAt && this.periodKey === this.calendarKey()) {
+    if (!forceRefresh && cachedByAcc && nowMs < cachedByAcc.expiresAt && this.periodKey === this.calendarKey() && cachedByAcc.data.failed_databases_count === 0) {
       return cachedByAcc.data;
     }
 
     await this.loadPersistentFileCache();
+    if (forceRefresh && this.ledgerUnavailable && !this.ledgerCorrupt) {
+      this.ledgerUnavailable = false;
+      this.storageWarnings.delete('用量总账未能保存，原始数据已保留；统计尚未持久化，请检查磁盘与权限');
+    }
     const dbPaths = await this.discoverDatabaseFiles();
     const allEvents: GenerationEvent[] = [];
     let generationsScanned = 0;
@@ -1693,16 +1845,34 @@ export class UsageStatsManager {
     while(nextDatabase<dbPaths.length) {
       if(signal.aborted){allCacheHits=false;break;}
       const p=dbPaths[nextDatabase++]!;
-      const bypassFileCache = forceRefresh && Boolean(this.fileCache.get(p)?.hasError);
+      const bypassFileCache = forceRefresh || Boolean(this.fileCache.get(p)?.hasError);
       const res = await this.scanDatabaseEvents(p, bypassFileCache, signal);
       if (!res.cacheHit) allCacheHits = false;
-      for (const ev of res.events) allEvents.push(ev);
-      if (this.largeLedger || allEvents.length > 50_000) {
-        this.largeLedger = true;
-        for (const event of allEvents) this.upsertLedger(event);
-        await this.saveUsageLedger();
-        allEvents.length = 0;
-        this.usageLedgerEvents.clear();
+      if (this.largeLedger && !this.ledgerUnavailable) {
+        if (!res.cacheHit || !this.largeLedgerBaselinePresent) {
+          for (const event of res.events) this.upsertLedger(event);
+        }
+        if (this.pendingLedgerEvents.size >= 10_000) {
+          await this.saveUsageLedger();
+          if (this.ledgerUnavailable) {
+            for (const ev of res.events) allEvents.push(ev);
+          } else {
+            this.usageLedgerEvents.clear();
+          }
+        }
+      } else {
+        for (const ev of res.events) allEvents.push(ev);
+        if (allEvents.length > 50_000 && !this.ledgerUnavailable) {
+          this.largeLedger = true;
+          const batch = allEvents.splice(0, allEvents.length);
+          for (const event of batch) this.upsertLedger(event);
+          await this.saveUsageLedger();
+          if (this.ledgerUnavailable) {
+            for (const ev of batch) allEvents.push(ev);
+          } else {
+            this.usageLedgerEvents.clear();
+          }
+        }
       }
       generationsScanned += res.generationsScanned;
       skippedLargeRecords += res.skippedLargeRecords;
@@ -1763,18 +1933,21 @@ export class UsageStatsManager {
       const prior = this.cachedSummariesByAccount.get(accKey)?.data;
       const existingSnapshot = prior?.snapshot_id ? this.snapshots.get(prior.snapshot_id) : undefined;
       if (prior && existingSnapshot?.ledger && this.lastAggregationKeysByAccount.get(accKey) === aggregateKey && await this.ledger.renew(existingSnapshot.ledger)) {
-        const availability = failedDatabasesCount > 0 || skippedLargeRecords > 0 || this.storageWarnings.size > 0 || prior.unknown_time_records ? 'partial' : 'complete';
-        const reused: TokenUsageSummary = { ...prior, availability, has_error: availability !== 'complete', hasError: availability !== 'complete',
+        const availability = failedDatabasesCount > 0 || skippedLargeRecords > 0 || this.storageWarnings.size > 0 || prior.unknown_time_records || prior.historical_amount_receipts?.unmatchedCount ? 'partial' : 'complete';
+        const hasReadError = this.ledgerCorrupt || this.archivedUnavailable || failedDatabasesCount > 0 || skippedLargeRecords > 0 || (prior.unknown_time_records ?? 0) > 0;
+        const reused: TokenUsageSummary = { ...prior, availability, has_error: hasReadError, hasError: hasReadError,
           failed_databases_count: failedDatabasesCount, database_diagnostics: diagnostics, last_attempt_at: Math.floor(Date.now() / 1000), pricing_warnings: [...this.pricingWarnings, ...this.storageWarnings] };
         existingSnapshot.expires = Date.now() + 600000;
         existingSnapshot.summary = reused;
-        this.cachedSummariesByAccount.set(accKey, { data: reused, expiresAt: Date.now() + 30000 });
+        this.cachedSummariesByAccount.set(accKey, { data: reused, expiresAt: Date.now() + (failedDatabasesCount > 0 ? 2000 : 30000) });
         return reused;
       }
       const aggregated = await this.ledger.aggregate({ prices: rawPricing, accountId, accounts: this.knownAccounts, liveFiles: dbPaths.map(path => basename(path)), now: Math.floor(Date.now() / 1000) });
       if (aggregated.ledger_review_records) this.storageWarnings.add('旧JSON含缺少来源或归属证据的记录，原件已保留；请查看只读账本预览');
       const availability = failedDatabasesCount > 0 || skippedLargeRecords > 0 || this.storageWarnings.size > 0 || aggregated.unknown_time_records || aggregated.historical_amount_receipts?.unmatchedCount ? 'partial' : 'complete';
-      const result: TokenUsageSummary = { ...aggregated, availability, has_error: availability !== 'complete', hasError: availability !== 'complete',
+      const hasReadError = this.ledgerCorrupt || this.archivedUnavailable || failedDatabasesCount > 0 || skippedLargeRecords > 0 || (aggregated.unknown_time_records ?? 0) > 0;
+      const result: TokenUsageSummary = { ...aggregated, availability, has_error: hasReadError, hasError: hasReadError,
+        priced_models: aggregated.all_time.priced_models, unpriced_models: aggregated.all_time.unpriced_models,
         databases_scanned: dbPaths.length, databases_discovered: this.lastDiscoveredDatabaseCount || dbPaths.length,
         generations_scanned: generationsScanned, skipped_large_records: skippedLargeRecords, failed_databases_count: failedDatabasesCount,
         database_diagnostics: diagnostics, scan_scope_description: '本机索引用量总账（含已离线记录）', pricing_warnings: [...this.pricingWarnings, ...this.storageWarnings] };
@@ -1784,7 +1957,7 @@ export class UsageStatsManager {
       this.snapshots.set(id, { summary: result, ledger: previous?.ledger ?? aggregated.ledger_snapshot, events: [], prices: {}, rawPricing,
         expires: Date.now() + 600000, pins: previous?.pins ?? 0 });
       this.lastAggregationKeysByAccount.set(accKey, JSON.stringify([await this.ledger.version(), this.calendarKey(), rawPricing, accountId ?? 'all', this.knownAccounts]));
-      this.cachedSummariesByAccount.set(accKey, { data: result, expiresAt: Date.now() + 30000 });
+      this.cachedSummariesByAccount.set(accKey, { data: result, expiresAt: Date.now() + (failedDatabasesCount > 0 ? 2000 : 30000) });
       this.periodKey = this.calendarKey();
       this.usageLedgerEvents.clear();
       this.pruneSnapshots();
@@ -1803,6 +1976,9 @@ export class UsageStatsManager {
       if (ev.event_key) seenEventKeys.add(ev.event_key);
     }
     const currentLegacyKeys = new Set(allEvents.map(event => event.legacy_event_key).filter(Boolean));
+    for (const ledgerEv of this.usageLedgerEvents.values()) {
+      if (ledgerEv.legacy_event_key) currentLegacyKeys.add(ledgerEv.legacy_event_key);
+    }
     const liveSourceFiles = new Set(dbPaths.map(path => basename(path)));
     const representedFiles = new Set([...dbPaths.map(path => basename(path)), ...[...this.archivedByDb.keys()].map(path => basename(path))]);
     const mergedLedgerDbs = new Set<string>();
@@ -1970,7 +2146,7 @@ export class UsageStatsManager {
     const tomorrowDate = new Date(todayDate); tomorrowDate.setDate(tomorrowDate.getDate()+1);
     const tomorrowStart = Math.floor(tomorrowDate.getTime()/1000);
 
-    // 7天与30天采用本地自然日零点边界，确保总量与每日趋势 100% 对账 (N08)
+    // 7天与30天采用本地自然日零点边界，确保总量与每日趋势 100% 对账
     const sevenDaysDate = new Date(todayDate);
     sevenDaysDate.setDate(sevenDaysDate.getDate() - 6);
     const sevenDaysStart = Math.floor(sevenDaysDate.getTime() / 1000);
@@ -2184,12 +2360,12 @@ export class UsageStatsManager {
       priced_models: allTimePeriod.priced_models,
       unpriced_models: allTimePeriod.unpriced_models,
       failed_databases_count: failedDatabasesCount,
-      has_error: this.storageWarnings.size > 0 || failedDatabasesCount > 0 || allEvents.some(e=>e.timestamp_seconds<=0),
-      hasError: this.storageWarnings.size > 0 || failedDatabasesCount > 0 || allEvents.some(e=>e.timestamp_seconds<=0),
-      availability: (failedDatabasesCount > 0 && allEvents.length === 0) || (failedDatabasesCount >= dbPaths.length && dbPaths.length > 0 && liveEventsCount === 0) ? 'unavailable'
-        : cachedDatabasesCount === dbPaths.length && dbPaths.length > 0 ? 'cached' : this.storageWarnings.size > 0 || failedDatabasesCount > 0 || skippedLargeRecords > 0 || allEvents.some(e=>e.timestamp_seconds<=0) ? 'partial' : 'complete',
-      unknown_time_records: allEvents.filter(e=>e.timestamp_seconds<=0).length,
-      unknown_time_tokens: allEvents.filter(e=>e.timestamp_seconds<=0).reduce((n,e)=>n+e.total_tokens,0),
+      has_error: this.ledgerCorrupt || this.archivedUnavailable || failedDatabasesCount > 0 || skippedLargeRecords > 0 || effectiveEvents.some(e=>e.timestamp_seconds<=0),
+      hasError: this.ledgerCorrupt || this.archivedUnavailable || failedDatabasesCount > 0 || skippedLargeRecords > 0 || effectiveEvents.some(e=>e.timestamp_seconds<=0),
+      availability: (failedDatabasesCount > 0 && effectiveEvents.length === 0) || (failedDatabasesCount >= dbPaths.length && dbPaths.length > 0 && liveEventsCount === 0) ? 'unavailable'
+        : cachedDatabasesCount === dbPaths.length && dbPaths.length > 0 ? 'cached' : this.storageWarnings.size > 0 || failedDatabasesCount > 0 || skippedLargeRecords > 0 || effectiveEvents.some(e=>e.timestamp_seconds<=0) ? 'partial' : 'complete',
+      unknown_time_records: effectiveEvents.filter(e=>e.timestamp_seconds<=0).length,
+      unknown_time_tokens: effectiveEvents.filter(e=>e.timestamp_seconds<=0).reduce((n,e)=>n+e.total_tokens,0),
       database_diagnostics: diagnostics,
       snapshot_id: (() => {
         const hash = createHash('sha256');
@@ -2214,7 +2390,7 @@ export class UsageStatsManager {
     if (aggKey) {
       this.lastAggregationKeysByAccount.set(accKey, aggKey);
     }
-    this.cachedSummariesByAccount.set(accKey, { data: summary, expiresAt: Date.now() + 30_000 });
+    this.cachedSummariesByAccount.set(accKey, { data: summary, expiresAt: Date.now() + (failedDatabasesCount > 0 ? 2000 : 30000) });
     if (!this.snapshots.has(summary.snapshot_id!)) {
       this.snapshots.set(summary.snapshot_id!, { events: allEvents, prices: pricing, rawPricing, summary, expires: Date.now()+600000, pins: 0 });
     } else {
@@ -2228,81 +2404,5 @@ export class UsageStatsManager {
     }
     this.pruneSnapshots();
     return summary;
-  }
-}
-
-/**
- * 纯 TS Protobuf 二进制编码器 (用于测试与结构打包)
- */
-export class ProtobufWriter {
-  static encodeVarint(value: number | bigint): Buffer {
-    let v = typeof value === 'bigint' ? value : BigInt(Math.floor(value));
-    const bytes: number[] = [];
-    while (v >= 0x80n) {
-      bytes.push(Number(v & 0x7fn) | 0x80);
-      v >>= 7n;
-    }
-    bytes.push(Number(v & 0x7fn));
-    return Buffer.from(bytes);
-  }
-
-  static encodeField(fieldNumber: number, wireType: number, payload: Buffer): Buffer {
-    const tag = (fieldNumber << 3) | wireType;
-    const tagBuf = this.encodeVarint(tag);
-    if (wireType === 0) {
-      return Buffer.concat([tagBuf, payload]);
-    } else if (wireType === 2) {
-      const lenBuf = this.encodeVarint(payload.length);
-      return Buffer.concat([tagBuf, lenBuf, payload]);
-    }
-    return Buffer.concat([tagBuf, payload]);
-  }
-
-  static encodeString(fieldNumber: number, text: string): Buffer {
-    return this.encodeField(fieldNumber, 2, Buffer.from(text, 'utf8'));
-  }
-
-  static encodeLengthDelimited(fieldNumber: number, payload: Buffer): Buffer {
-    return this.encodeField(fieldNumber, 2, payload);
-  }
-
-  static encodeVarintField(fieldNumber: number, value: number | bigint): Buffer {
-    return this.encodeField(fieldNumber, 0, this.encodeVarint(value));
-  }
-
-  static encodeUint64(fieldNumber: number, value: number | bigint): Buffer {
-    return this.encodeVarintField(fieldNumber, value);
-  }
-
-  static createGenerationMetadata(
-    modelId: string,
-    inputTokens: number,
-    outputTokens: number,
-    cachedTokens = 0
-  ): Buffer {
-    const fields: Buffer[] = [
-      this.encodeString(1, modelId),
-      this.encodeUint64(2, inputTokens),
-      this.encodeUint64(3, outputTokens),
-    ];
-    if (cachedTokens > 0) {
-      fields.push(this.encodeUint64(4, cachedTokens));
-    }
-    return Buffer.concat(fields);
-  }
-
-  static createOAuthTokenInfo(token: any, _email?: string): Buffer {
-    const fields: Buffer[] = [
-      this.encodeString(1, token.access_token || ''),
-      this.encodeString(3, token.refresh_token || ''),
-    ];
-    if (token.expiry_timestamp) {
-      const timePayload = this.encodeUint64(1, token.expiry_timestamp);
-      fields.push(this.encodeField(4, 2, timePayload));
-    }
-    if (token.is_gcp_tos) {
-      fields.push(this.encodeUint64(6, 1));
-    }
-    return Buffer.concat(fields);
   }
 }

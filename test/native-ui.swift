@@ -1,7 +1,9 @@
 import Cocoa
 
 @main struct NativeUIFixture {
+    static var assertionCount = 0
     static func check(_ condition: Bool, _ message: String) {
+        assertionCount += 1
         if !condition { FileHandle.standardError.write(Data((message+"\n").utf8)); exit(1) }
     }
     static func pump() {
@@ -951,9 +953,54 @@ import Cocoa
             check(page.statusSummary.stringValue.contains("读取失败"), "Failure feedback must be present")
             fail = false; page.fetch(force: true); pump()
             check(!page.statusSummary.stringValue.contains("读取失败"), "Same snapshot success must clear an earlier failure")
-            page.selectedAccountId = "account-b"
+            page.periodSegment.selectedSegment = 1
             fail = true; page.fetch(force: true); pump()
-            check(!page.exportButton.isEnabled, "An account mismatch must disable stale export")
+            check(!page.exportButton.isEnabled, "A period mismatch must disable stale export")
+            if let overview = assistant.dashboardPage {
+                overview.renderSummary([
+                    "accounts": ["activeEmail": "test@example.invalid", "activeName": "Test", "activeTier": "PRO", "isLiveVerified": true],
+                    "usage": ["todayTokens": 100, "totalTokens": 1000, "estimatedUsd": 0.1, "allTimeEstimatedUsd": 1.0, "requestCount": 1, "totalRequestCount": 10, "databasesScanned": 378, "databasesDiscovered": 378, "failedDatabasesCount": 0, "skippedLargeRecords": 0, "unknownTimeRecords": 0, "hasError": false, "availability": "partial"]
+                ], isStaleFallback: false)
+                check(overview.usageQualityLabel.isHidden, "Overview usageQualityLabel must remain hidden when 378/378 DBs succeeded with 0 failed/skipped/unknown despite partial historical availability")
+            }
+            page.updateReadStatus(["databasesScanned": 378, "databasesDiscovered": 378, "failedDatabasesCount": 0, "skippedLargeRecords": 0, "unknownTimeRecords": 0, "unpricedModels": 0, "availability": "partial", "pricing_warnings": ["旧JSON含缺少来源或归属证据的记录，原件已保留；请查看只读账本预览", "历史金额凭据缺少原始用量或时间，已单独保留待核对，不计入Token和请求数"]])
+            check(page.footerBox.isHidden, "Usage footerBox must remain hidden in healthy state even with read-only legacy archive notes")
+            page.updateReadStatus(["databasesScanned": 377, "databasesDiscovered": 378, "failedDatabasesCount": 1, "skippedLargeRecords": 0, "unknownTimeRecords": 0, "unpricedModels": 0, "availability": "partial"])
+            check(!page.footerBox.isHidden && page.statusSummary.stringValue.contains("1"), "Usage footerBox must appear when failedDatabasesCount > 0")
+            let pricingSheet = PricingSyncSheetController(app: isolated)
+            pricingSheet.apply(payload: [
+                "synced": true,
+                "count": 2,
+                "version": "2026-11-13",
+                "status": ["lastCheckAt": 1794539810722.0, "modelCount": 2],
+                "prices": [
+                    "gemini-3.8-flash": [
+                        "input": 0.75, "output": 3.75, "cached": 0.075,
+                        "provenance": ["platform": "Google Cloud 标准 Global API", "checkedAt": "2026-11-12", "validUntil": "2026-12-31T23:59:59Z", "sourceUrl": "https://cloud.google.com/vertex-ai/generative-ai/pricing"]
+                    ],
+                    "gemini-4-hydrogen": [
+                        "input": 1.5, "output": 7.5, "cached": 0.075, "cacheWrite": 0,
+                        "provenance": ["platform": "Google Cloud 标准 Global API", "checkedAt": "2026-11-13", "sourceUrl": "https://cloud.google.com/model-garden/pricing?hl=en"]
+                    ]
+                ],
+                "pricingStatus": ["gemini-3.8-flash": "confirmed", "gemini-4-hydrogen": "confirmed"],
+            ])
+            check(pricingSheet.sheet.contentView != nil, "PricingSyncSheetController must populate native sheet view")
+            check(pricingSheet.subtitleLabel.isHidden && pricingSheet.subtitleLabel.stringValue.isEmpty, "PricingSyncSheetController must hide header subtitle on normal synced state")
+            check(pricingSheet.summaryPill.title.hasPrefix("已同步 ") && pricingSheet.summaryPill.title.hasSuffix("· 2 款"), "PricingSyncSheetController pill must display latest sync time and active count: \(pricingSheet.summaryPill.title)")
+            check(!pricingSheet.historicalNoteLabel.isHidden && pricingSheet.historicalNoteLabel.stringValue.contains("已下架模型"), "PricingSyncSheetController must explain historical pricing retention")
+            check(pricingSheet.latestTextSummary.contains("官方定价 2026-11-12 · 优惠至 2026-12-31") && !pricingSheet.latestTextSummary.contains("核对 2026"), "PricingSyncSheetController must use Plan 1 date wording")
+            pricingSheet.apply(payload: [
+                "synced": false,
+                "error": "offline",
+                "status": ["lastCheckAt": 1794539910722.0, "modelCount": 1],
+                "prices": [
+                    "gemini-4-hydrogen": ["input": 1.5, "output": 7.5, "cached": 0.075]
+                ],
+                "pricingStatus": ["gemini-4-hydrogen": "confirmed"],
+            ])
+            check(!pricingSheet.subtitleLabel.isHidden && pricingSheet.subtitleLabel.stringValue == "检查提示：offline", "PricingSyncSheetController must show concise failure reason without unit suffix")
+            check(pricingSheet.summaryPill.title.hasPrefix("已检查 ") && pricingSheet.summaryPill.title.hasSuffix("· 1 款"), "PricingSyncSheetController pill must display failed check time and active count: \(pricingSheet.summaryPill.title)")
             let privateBackup = state.appendingPathComponent("private-account-backup.json")
             try writePrivateAccountBackup(Data("synthetic-only".utf8), to: privateBackup)
             let permissions = (try FileManager.default.attributesOfItem(atPath: privateBackup.path)[.posixPermissions] as? NSNumber)?.intValue ?? 0
@@ -977,9 +1024,72 @@ import Cocoa
             for (input, expected) in [(999, "999"), (1000, "1K"), (999499, "999K"), (999500, "1M"), (999999, "1M"), (1_000_000, "1M"), (999_500_000, "1B")] {
                 check(InterfaceText.formatCompactTokens(input) == expected, "Compact number boundary must match HUD: \(input)")
             }
+            let appPaths = ["/Applications/Antigravity.app"]
+            check(
+                Assistant.hasRunningAntigravityProcess(
+                    psOutput: "/Applications/Antigravity.app/Contents/MacOS/Electron\n",
+                    appPaths: appPaths
+                ) == true,
+                "Executable inside Antigravity.app/Contents must count as running"
+            )
+            check(
+                Assistant.hasRunningAntigravityProcess(
+                    psOutput: "/bin/zsh -c ls /Applications/Antigravity.app/Contents/Resources\n",
+                    appPaths: appPaths
+                ) == false,
+                "Unrelated process mentioning app path in arguments must not block switching"
+            )
+            isolated.suppressLifecycleAutoQuit(seconds: 60.0)
+            let longDeadline = isolated.suppressLifecycleAutoQuitUntil
+            isolated.suppressLifecycleAutoQuit(seconds: 5.0)
+            check(
+                isolated.suppressLifecycleAutoQuitUntil >= longDeadline,
+                "Shorter lifecycle auto-quit suppression must not shorten an existing longer deadline"
+            )
         }
 
-        let result:[String:Any] = ["stableOnlySelectionPassed":true,"nativeLayouts":captures.count,"captures":captures,"menuCaptures":4,"safeSwitchSharedFlowPassed":true,"emailWidthPassed":true,"partialPricingPassed":true,"scope":"isolated synthetic AppKit fixture; not installed-app acceptance"]
+        // Exercise the real countdown view, rather than a JS reimplementation of its old colors.
+        let countdown = QuotaBarView(percentage: 80, resetText: "6天12小时后重置")
+        check(countdown.resetLabel.textColor == Design.secondary, "Normal countdown stays neutral")
+        countdown.update(percentage: 5, resetText: "3小时后重置")
+        check(countdown.resetLabel.textColor == Design.secondary, "Low percentage does not turn a normal reset time into an urgent notice")
+        countdown.update(percentage: 50, resetText: "即将重置")
+        check(countdown.resetLabel.textColor != Design.secondary, "Imminent reset uses warning color")
+        countdown.update(percentage: 50, resetText: "重置时间已过")
+        check(countdown.resetLabel.textColor != Design.secondary, "Expired reset uses warning color")
+
+        // Production account quota updates reuse card views, including unchanged snapshots.
+        do {
+            let page = assistant.accountsPage!
+            let windows = ["gemini":["fiveHour":bucket(80),"weekly":bucket(90)],"claude":["fiveHour":bucket(100),"weekly":bucket(70)]]
+            let base: [String: Any] = ["id":"gate-account", "email":"gate@example.invalid", "revision":"gate-revision", "familyWindows":windows]
+            page.fetch(["accounts":[base], "activeId":"gate-account"])
+            let cards = page.cardsStack.arrangedSubviews
+            page.fetch(["accounts":[base], "activeId":"gate-account"])
+            check(zip(cards,page.cardsStack.arrangedSubviews).allSatisfy { $0 === $1 }, "Identical snapshots retain card views")
+            func quotaViews(_ view: NSView) -> [QuotaBarView] { (view as? QuotaBarView).map{[$0]} ?? view.subviews.flatMap{quotaViews($0)} }
+            for (family, key, percent, title) in [("gemini","fiveHour",40.0,"Gemini · 5 小时"),("gemini","weekly",85.0,"Gemini · 每周"),("claude","fiveHour",50.0,"Claude/GPT · 5 小时")] {
+                var changed = base
+                var nextWindows = windows; nextWindows[family]?[key] = bucket(percent)
+                changed["familyWindows"] = nextWindows
+                page.fetch(["accounts":[changed], "activeId":"gate-account"])
+                check(quotaViews(page.view).contains { $0.titleLabel.stringValue == title && $0.percentageKnown && $0.percentage == Int(percent) }, "Production card refresh observes \(family)/\(key)")
+                check(page.cardsStack.arrangedSubviews.count == cards.count && zip(cards,page.cardsStack.arrangedSubviews).allSatisfy { $0 === $1 }, "Account quota changes reuse existing card views")
+            }
+        }
+
+        // Production dashboard identity handling includes mismatch, missing identity and offline states.
+        do {
+            let page = assistant.dashboardPage!
+            for (verified, liveEmail, expectedStatus) in [(true,"other@example.invalid","账号不一致"),(true,"gate@example.invalid",""),(true,"",""),(false,"","")] {
+                page.renderSummary(["accounts":["activeEmail":"gate@example.invalid", "isLiveVerified":verified, "liveAccountEmail":liveEmail]], isStaleFallback:false)
+                check(page.accountStatusLabel.stringValue == expectedStatus, "Production dashboard identity status for \(liveEmail)")
+                check(page.activeEmailLabel.stringValue == "gate@example.invalid", "Identity warning preserves saved email")
+                check(page.currentAccountPill.title == (verified ? "当前账号" : "已选记录"), "Offline state cannot claim a verified current account")
+            }
+        }
+
+        let result:[String:Any] = ["stableOnlySelectionPassed":true,"nativeLayouts":captures.count,"captures":captures,"menuCaptures":4,"safeSwitchSharedFlowPassed":true,"emailWidthPassed":true,"partialPricingPassed":true,"nativeAssertions":assertionCount,"scope":"isolated synthetic AppKit fixture; not installed-app acceptance"]
         try JSONSerialization.data(withJSONObject:result,options:[.prettyPrinted,.sortedKeys]).write(to:output.appendingPathComponent("native-ui-results.json"))
         window.orderOut(nil)
         print("24 current-page native layouts and 4 menu states; fixture checks passed")

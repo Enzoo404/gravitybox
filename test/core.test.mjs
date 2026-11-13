@@ -33,7 +33,7 @@ test('未知网页、OAuth 页面与非应用标签不允许注入', () => {
   for (const path of ['/c/not-a-conversation','/api/stream','/browser','/preview','/oauth/callback']) assert.equal(allowedTarget({ type: 'page', url: 'https://127.0.0.1:4321'+path }), false);
 });
 test('其他本机服务不能冒充 Antigravity 页面服务', async () => {
-  const server = createServer((req, res) => res.end('test'));
+  const server = createServer((_req, res) => res.end('test'));
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   try {
     const port = server.address().port;
@@ -147,7 +147,7 @@ test('当前支持明确版本，未来版本必须等待适配', () => {
 });
 
 test('Controller 弹性模式：后台异步比对界面包指纹，发现新词自动生成待译清单', async () => {
-  const server = createServer((req, res) => {
+  const server = createServer((_req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/javascript' });
     res.end('A.createElement("h1", null, "Brand New Unseen Feature"); A.createElement(t, { label: "Unknown Tool Item" });');
   });
@@ -179,5 +179,76 @@ test('Controller 弹性模式：后台异步比对界面包指纹，发现新词
   } finally {
     server.close();
     await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('Controller 重启恢复：sync 清理无法恢复的未就绪会话，resume 重置退避计数器', async () => {
+  const targetUrl = 'https://127.0.0.1:43210/';
+  let detachClosed = false;
+  let targetsPayload = [{
+    id: 'page-1',
+    type: 'page',
+    url: targetUrl,
+    webSocketDebuggerUrl: 'ws://127.0.0.1:43210/devtools/page/page-1',
+  }];
+  const server = createServer((req, res) => {
+    res.setHeader('Connection', 'close');
+    if (req.url === '/json/list') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(targetsPayload));
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  const port = server.address().port;
+  const controller = new Controller({
+    appPath: '/Applications/Antigravity.app',
+    profile: '/nonexistent',
+    dictionary: { schema: 1, version: 'test', entries: { Settings: '设置' } },
+    fixture: { port, origin: 'https://127.0.0.1:43210' },
+    geminiDir: '/nonexistent',
+    hudEnabled: false,
+    onStatus: () => {},
+  });
+
+  try {
+    controller['browser'] = { close() {} };
+    controller['endpoint'] = { port, browserURL: `ws://127.0.0.1:${port}/devtools/browser/1`, pid: 1, appVersion: '2.25.0', legacyPatch: false };
+    controller['paused'] = false;
+    controller['pages'].set('page-1', {
+      targetId: 'page-1',
+      url: targetUrl,
+      contextId: undefined,
+      detaching: false,
+      updateChain: Promise.resolve(),
+      cdp: {
+        send: async (method) => {
+          if (method === 'Page.getFrameTree') throw new Error('stale-session');
+          return {};
+        },
+        evaluate: async () => undefined,
+        close() { detachClosed = true; },
+      },
+    });
+
+    await controller.sync();
+
+    assert.equal(detachClosed, true);
+    assert.equal(controller['pages'].size, 0);
+
+    targetsPayload = [];
+    controller['reconnectionDelay'] = 30000;
+    controller['unverifiedWindowRetries'] = 12;
+    controller['paused'] = true;
+    await controller.resume();
+
+    assert.equal(controller['reconnectionDelay'], 1000);
+    assert.equal(controller['unverifiedWindowRetries'], 0);
+  } finally {
+    await controller.stop();
+    server.closeAllConnections?.();
+    server.close();
   }
 });

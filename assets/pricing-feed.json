@@ -1,144 +1,9 @@
 {
-  "version": "2026-11-12",
+  "version": "2026-11-13",
   "schema": 1,
-  "updatedAt": "2026-11-12T00:00:00Z",
+  "updatedAt": "2026-11-13T00:00:00Z",
   "source": "https://raw.githubusercontent.com/Enzoo404/gravitybox/main/assets/pricing-feed.json",
   "prices": {
-    "gemini-2.5-flash": [
-      {
-        "model": "gemini-2.5-flash",
-        "input": 0.3,
-        "output": 2.5,
-        "cached": 0.03,
-        "validFrom": "2026-11-12T00:00:00Z",
-        "validUntil": null,
-        "provenance": {
-          "sourceUrl": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
-          "platform": "Google Cloud 标准 Global API",
-          "conditions": "Google Cloud 标准文本参考价；2026-11-12为本地核价起点，不代表官方调价日期",
-          "checkedAt": "2026-11-12",
-          "validFrom": "2026-11-12T00:00:00Z",
-          "validUntil": null,
-          "verification": "confirmed"
-        }
-      }
-    ],
-    "gemini-2.5-pro": [
-      {
-        "model": "gemini-2.5-pro",
-        "validFrom": null,
-        "validUntil": null,
-        "input": 1.25,
-        "output": 10,
-        "cached": 0.125,
-        "provenance": {
-          "sourceUrl": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
-          "platform": "Google Cloud 标准 Global API",
-          "conditions": "沿用历史基准；不代表所有区域、长上下文或缓存写入单价；需按来源逐项核对",
-          "checkedAt": null,
-          "validFrom": null,
-          "validUntil": null,
-          "verification": "historical"
-        }
-      }
-    ],
-    "gemini-3.1-pro": [
-      {
-        "model": "gemini-3.1-pro",
-        "validFrom": null,
-        "validUntil": null,
-        "input": 2,
-        "output": 12,
-        "cached": 0.2,
-        "provenance": {
-          "sourceUrl": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
-          "platform": "Google Cloud 标准 Global API",
-          "conditions": "Google Cloud 官方 Gemini 3.1 Pro 标准文本基准 (<=200k Tokens)",
-          "checkedAt": "2026-11-02",
-          "validFrom": null,
-          "validUntil": null,
-          "verification": "confirmed"
-        }
-      }
-    ],
-    "claude-3-5-sonnet": [
-      {
-        "model": "claude-3-5-sonnet",
-        "validFrom": null,
-        "validUntil": null,
-        "input": 3,
-        "output": 15,
-        "cached": 0.3,
-        "cacheWrite": 3.75,
-        "provenance": {
-          "sourceUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
-          "platform": "Anthropic 标准 API",
-          "conditions": "沿用历史基准；不代表所有区域、长上下文或缓存写入单价；需按来源逐项核对",
-          "checkedAt": null,
-          "validFrom": null,
-          "validUntil": null,
-          "verification": "historical"
-        }
-      }
-    ],
-    "claude-3-5-haiku": [
-      {
-        "model": "claude-3-5-haiku",
-        "validFrom": null,
-        "validUntil": null,
-        "input": 1,
-        "output": 5,
-        "cached": 0.1,
-        "cacheWrite": 1.25,
-        "provenance": {
-          "sourceUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
-          "platform": "Anthropic 标准 API",
-          "conditions": "Anthropic 官方 Claude 3.5 Haiku 标准文本基准",
-          "checkedAt": "2026-11-12",
-          "validFrom": null,
-          "validUntil": null,
-          "verification": "confirmed"
-        }
-      }
-    ],
-    "gpt-4o": [
-      {
-        "model": "gpt-4o",
-        "validFrom": null,
-        "validUntil": null,
-        "input": 2.5,
-        "output": 10,
-        "cached": 1.25,
-        "provenance": {
-          "sourceUrl": "https://developers.openai.com/api/docs/pricing",
-          "platform": "OpenAI 标准 API",
-          "conditions": "沿用历史基准；不代表所有区域、长上下文或缓存写入单价；需按来源逐项核对",
-          "checkedAt": null,
-          "validFrom": null,
-          "validUntil": null,
-          "verification": "historical"
-        }
-      }
-    ],
-    "gpt-4o-mini": [
-      {
-        "model": "gpt-4o-mini",
-        "validFrom": null,
-        "validUntil": null,
-        "input": 0.15,
-        "output": 0.6,
-        "cached": 0.075,
-        "provenance": {
-          "sourceUrl": "https://developers.openai.com/api/docs/pricing",
-          "platform": "OpenAI 标准 API",
-          "conditions": "沿用历史基准；不代表所有区域、长上下文或缓存写入单价；需按来源逐项核对",
-          "checkedAt": null,
-          "validFrom": null,
-          "validUntil": null,
-          "verification": "historical"
-        }
-      }
-    ],
     "gemini-3.8-flash": [
       {
         "model": "gemini-3.8-flash",
@@ -148,7 +13,7 @@
         "output": 3.75,
         "cached": 0.075,
         "provenance": {
-          "sourceUrl": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
+          "sourceUrl": "https://cloud.google.com/model-garden/pricing?hl=en",
           "platform": "Google Cloud 标准 Global API",
           "conditions": "文本基准；输入/输出采用限时优惠；缓存采用缓存读取基准，优惠截至2026-12-31",
           "checkedAt": "2026-11-02",
@@ -164,7 +29,7 @@
         "output": 7.5,
         "cached": 0.15,
         "provenance": {
-          "sourceUrl": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
+          "sourceUrl": "https://cloud.google.com/model-garden/pricing?hl=en",
           "platform": "Google Cloud 标准 Global API",
           "conditions": "文本基准；恢复为标准全量定价（2027-01-01生效）",
           "checkedAt": "2026-11-02",
@@ -181,7 +46,7 @@
         "output": 10,
         "cached": 0.1,
         "provenance": {
-          "sourceUrl": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
+          "sourceUrl": "https://cloud.google.com/model-garden/pricing?hl=en",
           "platform": "Google Cloud 标准 Global API",
           "conditions": "Google Cloud 官方推广期标准 Global API 文本基准（优惠截至2026-11-30）",
           "checkedAt": "2026-11-02",
@@ -197,7 +62,7 @@
         "output": 20,
         "cached": 0.2,
         "provenance": {
-          "sourceUrl": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
+          "sourceUrl": "https://cloud.google.com/model-garden/pricing?hl=en",
           "platform": "Google Cloud 标准 Global API",
           "conditions": "Google Cloud 官方 Argon 标准定价（2026-12-01生效）",
           "checkedAt": "2026-11-02",
@@ -205,38 +70,39 @@
         }
       }
     ],
-    "gemini-4-carbon": [
+    "gemini-4-hydrogen": [
       {
-        "model": "gemini-4-carbon",
-        "input": 2,
-        "output": 10,
-        "cached": 0.1,
-        "provenance": {
-          "sourceUrl": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
-          "platform": "Google Cloud 标准 Global API",
-          "conditions": "参考 Gemini 4 系列标准 Global API 文本基准估算",
-          "checkedAt": "2026-11-02",
-          "validUntil": "2026-12-01T00:00:00Z",
-          "verification": "historical"
-        },
+        "model": "gemini-4-hydrogen",
         "validFrom": null,
-        "validUntil": "2026-12-01T00:00:00Z"
+        "validUntil": "2027-01-11T23:59:59Z",
+        "input": 1.5,
+        "output": 7.5,
+        "cached": 0.075,
+        "cacheWrite": 0,
+        "provenance": {
+          "sourceUrl": "https://cloud.google.com/model-garden/pricing?hl=en",
+          "platform": "Google Cloud 标准 Global API",
+          "conditions": "Google Cloud 官方 Gemini 4 Hydrogen 标准 Global API 文本基准（<=200k Tokens；缓存写入 $1.875 自 2027-01-12 起生效）",
+          "checkedAt": "2026-11-13",
+          "validUntil": "2027-01-11T23:59:59Z",
+          "verification": "confirmed"
+        }
       },
       {
-        "model": "gemini-4-carbon",
-        "input": 4,
-        "output": 20,
-        "cached": 0.2,
+        "model": "gemini-4-hydrogen",
+        "validFrom": "2027-01-12T00:00:00Z",
+        "validUntil": null,
+        "input": 1.5,
+        "output": 7.5,
+        "cached": 0.075,
+        "cacheWrite": 1.875,
         "provenance": {
-          "sourceUrl": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
+          "sourceUrl": "https://cloud.google.com/model-garden/pricing?hl=en",
           "platform": "Google Cloud 标准 Global API",
-          "conditions": "参考 Gemini 4 系列标准 Global API 文本基准估算",
-          "checkedAt": "2026-11-02",
-          "validUntil": null,
-          "verification": "historical"
-        },
-        "validFrom": "2026-12-01T00:00:00Z",
-        "validUntil": null
+          "conditions": "Google Cloud 官方 Gemini 4 Hydrogen 标准 Global API 文本基准（<=200k Tokens；含缓存写入 $1.875）",
+          "checkedAt": "2026-11-13",
+          "verification": "confirmed"
+        }
       }
     ],
     "claude-opus-5-5": [
@@ -304,6 +170,25 @@
           "conditions": "Anthropic 官方 Claude Sonnet 5.5 标准 API 最新降价",
           "checkedAt": "2026-11-02",
           "verification": "confirmed"
+        }
+      }
+    ],
+    "gpt-oss-120b": [
+      {
+        "model": "gpt-oss-120b",
+        "validFrom": null,
+        "validUntil": null,
+        "input": 0.15,
+        "output": 0.6,
+        "cached": 0.075,
+        "provenance": {
+          "sourceUrl": "https://developers.openai.com/api/docs/pricing",
+          "platform": "开放权重模型 API 参考基准",
+          "conditions": "参考同类开放权重 120B 模型公开 API 基准估算",
+          "checkedAt": "2026-10-23",
+          "validFrom": null,
+          "validUntil": null,
+          "verification": "historical"
         }
       }
     ]

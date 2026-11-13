@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import 'node:crypto';
+
 import { AccountsManager } from '../dist/accounts.js';
 import { commitAccountAndIndex } from '../dist/files.js';
 

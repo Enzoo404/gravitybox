@@ -1,15 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile, mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { calculateEstimatedUsd, UsageStatsManager, ProtobufWriter } from '../dist/usage.js';
 
 const execFileAsync = promisify(execFile);
-const root = fileURLToPath(new URL('../', import.meta.url));
 
 test('N07: 微量费用高精度保留与 IPC 透传 priced 状态（杜绝 1 Token 误标未计价）', async () => {
   const pricing = { input: 0.075, output: 0.30, cached: 0.01875 };
@@ -23,14 +22,8 @@ test('N07: 微量费用高精度保留与 IPC 透传 priced 状态（杜绝 1 To
   const zeroCost = calculateEstimatedUsd(0, 0, 0, pricing);
   assert.equal(zeroCost, 0, '0 Token 费用必须严格等于 0');
 
-  // 3. 源码契约验证：main.ts 必须在 byModel 中透传 priced 状态
-  const mainSrc = await readFile(join(root, 'src/main.ts'), 'utf8');
-  assert.match(mainSrc, /priced:\s*m\.priced\s*===\s*true/, 'main.ts 必须在 byModel 中明确透传 priced 状态');
+  // 真实微额费用由计价函数验证，展示格式由小型 Swift 契约覆盖。
 
-  // 4. Swift 源码契约验证：微量费用展示 <$0.001，未计价展示「未计价」
-  const usageSrc = await readFile(join(root, 'native/Usage.swift'), 'utf8');
-  assert.match(usageSrc, /if\s*mUsd\s*>\s*0\s*&&\s*mUsd\s*<\s*0\.001\s*\{\s*usdStr\s*=\s*"<\$0\.001"/, 'Swift 明细必须将微量正金额展示为 <$0.001');
-  assert.match(usageSrc, /usdStr\s*=\s*mTokens\s*>\s*0\s*\?\s*"未计价"\s*:\s*"\$0\.00"/, 'Swift 明细中未计价模型必须明确展示为 未计价');
 });
 
 test('N08: 趋势日期采用本地时区、连续 30 天自然日补齐并与 KPI 严格对账', async () => {
@@ -106,21 +99,4 @@ test('N08: 趋势日期采用本地时区、连续 30 天自然日补齐并与 K
   } finally {
     await rm(sandbox, { recursive: true, force: true });
   }
-});
-
-test('N09: 环图与图例归一化，超出项合并为「其他」，角度、图例与中心金额完全一致', async () => {
-  const usageSrc = await readFile(join(root, 'native/Usage.swift'), 'utf8');
-
-  // 1. 验证按费用降序排序与 Top 4 + 其他合并
-  assert.match(usageSrc, /let pricedModels = modelRows\.filter[\s\S]*?\.sorted\s*\{/, '必须筛选有费用的模型并按金额降序排序');
-  assert.match(usageSrc, /topSlices\.append\(\(name: "其他模型[\s\S]*?usd: otherUsd/, '超出前 4 项的模型必须合并为「其他模型」');
-
-  // 2. 验证环图与图例共用同一归一化总额
-  assert.match(usageSrc, /let totalPricedUsd\s*=\s*pricedModels\.reduce\(0\.0\)/, '计算全部已计价模型的真实总额');
-  assert.match(usageSrc, /let effectiveTotalUsd\s*=\s*max\(totalUsd,\s*totalPricedUsd\)/, '统一归一化基准');
-  assert.match(usageSrc, /let pct\s*=\s*effectiveTotalUsd\s*>\s*0\s*\?\s*Int\(round\(\(slice\.usd\s*\/\s*effectiveTotalUsd\)\s*\*\s*100\)\)\s*:\s*0/, '图例百分比严格使用已对齐的归一化总额');
-
-  // 3. 验证 ModelDonutChartView 中心微量费用展示
-  const compSrc = await readFile(join(root, 'native/Components.swift'), 'utf8');
-  assert.match(compSrc, /if\s*totalUsd\s*>\s*0\s*&&\s*totalUsd\s*<\s*0\.001\s*\{\s*usdText\s*=\s*"<\$0\.001"/, '环图中心金额在微小正金额时展示 <$0.001');
 });

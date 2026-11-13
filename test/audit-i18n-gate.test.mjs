@@ -49,23 +49,20 @@ test('I01 门禁：界面包来源不可验证时 evaluateGate 必须失败', ()
 test('I01 门禁：伪造 appVersion/bundleSha256 被 verifyBundleSource 拒绝，官方哈希单独不足以通过', async () => {
   const dir = await tempDir('gb-audit-src-');
   try {
-    const forgedVersion = await verifyBundleSource({ appVersion: '9.9.9', bundleSha256: pinned, source: 'x' }, {});
-    assert.equal(forgedVersion.verified, false);
-    assert.match(forgedVersion.reason, /不在受支持/);
-    const forgedHash = await verifyBundleSource({ appVersion: '2.24.0', bundleSha256: SHA_ZERO, source: 'x' }, {});
-    assert.equal(forgedHash.verified, false);
-    assert.match(forgedHash.reason, /官方指纹|不一致|无法/);
-    const missingHash = await verifyBundleSource({ appVersion: '2.24.0', source: 'x' }, {});
-    assert.equal(missingHash.verified, false);
-    assert.match(missingHash.reason, /bundleSha256/);
-    const unverifiable = await verifyBundleSource({ appVersion: '2.24.0', bundleSha256: pinned, source: 'not-a-bundle' }, {});
-    assert.equal(unverifiable.verified, false, '只有声明值、没有可重算来源时必须失败');
-    /* I02 修正：官方哈希只是约束，没有实际字节时不得 verified（这是本轮 P1 缺口）。 */
-    const hashOnly = await verifyBundleSource({ appVersion: '2.24.0', bundleSha256: pinned, source: 'x' }, { expectSha256: pinned });
-    assert.equal(hashOnly.verified, false, '只有官方哈希、没有实际界面包字节时必须 fail-closed');
-    assert.match(hashOnly.reason, /不能替代字节证明|无法证明|无法读取/);
-    const expectMismatch = await verifyBundleSource({ appVersion: '2.24.0', bundleSha256: pinned, source: 'x' }, { expectSha256: SHA_ZERO });
-    assert.equal(expectMismatch.verified, false);
+    const base = { appVersion: '2.24.0', bundleSha256: pinned, source: 'x' };
+    const rejected = [
+      [{ ...base, appVersion: '9.9.9' }, {}, /不在受支持/],
+      [{ ...base, bundleSha256: SHA_ZERO }, {}, /官方指纹|不一致|无法/],
+      [{ appVersion: '2.24.0', source: 'x' }, {}, /bundleSha256/],
+      [{ ...base, source: 'not-a-bundle' }, {}],
+      [base, { expectSha256: pinned }, /不能替代字节证明|无法证明|无法读取/],
+      [base, { expectSha256: SHA_ZERO }],
+    ];
+    for (const [record, options, reason] of rejected) {
+      const result = await verifyBundleSource(record, options);
+      assert.equal(result.verified, false, JSON.stringify({ record, options }));
+      if (reason) assert.match(result.reason, reason);
+    }
     const wrongBundle = await writeExtraction(dir);
     await writeFile(join(dir, 'main.js'), 'not the real bundle');
     const wrongFile = await verifyBundleSource(JSON.parse(await readFile(wrongBundle, 'utf8')), { bundlePath: join(dir, 'main.js') });

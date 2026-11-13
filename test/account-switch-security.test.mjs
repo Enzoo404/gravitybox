@@ -11,7 +11,6 @@ import { AccountsManager, MockKeychainAdapter } from '../dist/accounts.js';
 const run = promisify(execFile);
 
 function makeAccount(id, email, opts = {}) {
-  const now = Math.floor(Date.now() / 1000);
   return {
     id,
     email,

@@ -21,6 +21,7 @@ export interface ActivePaneSession {
   lastUpdatedAt: number;
   lastMetricsKey: string;
   lastActivityAt: number;
+  autoHealAttempts?: number;
 }
 
 const ACTIVITY_GRACE_WINDOW_MS = 15_000;
@@ -56,7 +57,7 @@ export class CdpHudBridge implements ICdpHudBridge {
         geminiDir: options?.geminiDir,
         conversationsDir: options?.conversationsDir,
       });
-    const interval = options?.pollIntervalMs ?? 500;
+    const interval = options?.pollIntervalMs ?? 250;
     this.basePollIntervalMs = interval;
     if (interval > 0) {
       this.pollTimer = setInterval(() => {
@@ -252,7 +253,12 @@ export class CdpHudBridge implements ICdpHudBridge {
     }
 
     const fingerprint = JSON.stringify({
-      session: metrics.session,
+      session: {
+        ...metrics.session,
+        currentTurnDurationSeconds: Math.round(metrics.session.currentTurnDurationSeconds ?? 0),
+        currentTurnModelDurationSeconds: Math.round(metrics.session.currentTurnModelDurationSeconds ?? 0),
+        currentTurnToolDurationSeconds: Math.round(metrics.session.currentTurnToolDurationSeconds ?? 0),
+      },
       tokens: metrics.tokens,
       context: metrics.context,
       availability: metrics.availability,
@@ -274,6 +280,20 @@ export class CdpHudBridge implements ICdpHudBridge {
       latestSession.metricsSequence = nextSeq;
       latestSession.lastMetricsKey = fingerprint;
       latestSession.lastUpdatedAt = Date.now();
+      latestSession.isStreaming = Boolean(latestSession.foregroundStreaming || metrics.isStreaming);
+      latestSession.activityPhase = metrics.activityPhase ?? (latestSession.isStreaming ? 'generating' : 'idle');
+      if (metrics.isStreaming || metrics.isSubagentRunning) {
+        latestSession.lastActivityAt = Date.now();
+      }
+      if (metrics.availability === 'partial' || metrics.availability === 'cached') {
+        const attempts = latestSession.autoHealAttempts ?? 0;
+        if (attempts < 5) {
+          latestSession.autoHealAttempts = attempts + 1;
+          latestSession.lastActivityAt = Date.now();
+        }
+      } else {
+        latestSession.autoHealAttempts = 0;
+      }
     }
   }
 

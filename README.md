@@ -252,16 +252,21 @@ cd gravitybox
 npm ci
 npm run doctor
 
-# 2. 编译 TypeScript 后端并运行单元测试
-npm run build
+# 2. 运行默认安装前门禁（含 TS 编译、单元/集成与小型原生行为测试、浏览器、Swift 与全版本词典）
 npm test
 
-# 3. 运行完整发布门禁（含 TS 编译、单元测试、浏览器回归、Swift 编译与免 vendor 词典门禁）
-node tools/verify.mjs --no-vendor
+# 3. 门禁通过后直接打包（复核源码与产物指纹，避免再次执行整套测试）
+node tools/package-mac.mjs
 
-# 4. 编译原生应用并打包生成 DMG 安装镜像
+# 或一条命令完成完整门禁及打包
 npm run package:mac
 ```
+
+`npm test` 与 `npm run verify` 使用同一条默认门禁；免 vendor 模式可用 `npm test -- --no-vendor`。日常迭代可用 `npm run test:fast`（非原生测试）、`npm run test:native`（小型 Swift 行为测试）或 `npm run test:unit`（单元/集成及小型原生行为测试），这些局部检查均不生成发布通过记录。
+
+完整原生 UI 夹具（主题、尺寸、布局截图及合成界面交互）保留为按需入口 `npm run test:native-ui`，默认门禁、CI 和打包前验证均不运行；此命令不会生成发布通过记录。安装后的真实界面与操作仍需人工验收。词典单项测试在缺少 vendor 时仅检查最新提取清单的基本结构，全部受支持版本的冻结快照完整性与词典覆盖率由发布门禁统一检查。
+
+默认测试围绕账号与事务、配额、计量与费率、词典与用户内容保护、IPC、生命周期和发行完整性组织。历史混合用例已归并为对应领域的 `*-contracts.test.mjs`；固定布局/CSS 写法、逐句译文与测试内手写的产品算法副本不纳入门禁。故障注入、跨进程 WAL 并发、原子回滚及大记录有界读取继续保留；几何边界使用确定性输入。
 
 ---
 

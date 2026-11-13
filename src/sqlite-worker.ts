@@ -61,7 +61,7 @@ function executeHudScan(req: HudWorkerScanRequest): { result: HudWorkerScanResul
 
   try {
     // 单语句自动提交 (Auto-Commit)，严禁长事务 BEGIN，确保宿主 wal_checkpoint 零阻塞
-    db.exec('PRAGMA query_only = ON; PRAGMA busy_timeout = 250;');
+    db.exec('PRAGMA query_only = ON; PRAGMA busy_timeout = 800;');
 
     let hasDataColumn = req.knownColumns?.hasDataColumn;
     let hasRenderInfoColumn = req.knownColumns?.hasRenderInfoColumn;

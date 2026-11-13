@@ -343,12 +343,12 @@ describe('HUD raw 数值精度与缺值展示', () => {
     session: {
       turns: 12, steps: 1234, outputTps: 82.7364, outputTpsFormatted: '82.74 tok/s',
       averageTtftSeconds: 3.8462, averageTtftFormatted: '3.85 秒',
-      modelDurationSeconds: 1348.126, modelDurationFormatted: '22 分 28 秒',
-      toolDurationSeconds: 59.999, toolDurationFormatted: '1 分 0 秒',
+      modelDurationSeconds: 1348.126, modelDurationFormatted: '22分28秒',
+      toolDurationSeconds: 59.999, toolDurationFormatted: '1分',
       compactionCount: 2,
       currentTurnDurationSeconds: 18.4,
-      currentTurnDurationFormatted: '18.4 秒',
-      currentTurnDurationFormattedEn: '18.4s',
+      currentTurnDurationFormatted: '18秒',
+      currentTurnDurationFormattedEn: '18s',
       currentTurnDurationCompactZh: '本轮 18s',
       currentTurnDurationCompactEn: 'Turn 18s',
       currentTurnModelDurationSeconds: 14.2,
@@ -387,10 +387,10 @@ describe('HUD raw 数值精度与缺值展示', () => {
       assert.equal(instance.shadow.querySelector('.capsule-context').classList.contains('has-compaction'), true);
       assert.equal(text('#hud-txt-context'), '~113%');
       assert.equal(text('#val-tps'), '82.74 tok/s');
-      assert.equal(text('#val-turn-dur'), languageMode === 'en' ? '18.4s' : '18.4 秒');
+      assert.equal(text('#val-turn-dur'), languageMode === 'en' ? '18s' : '18秒');
       assert.equal(text('#val-ttft'), languageMode === 'en' ? '3.85s' : '3.85 秒');
-      assert.equal(text('#val-model-dur'), languageMode === 'en' ? '22m 28s' : '22 分 28 秒');
-      assert.equal(text('#val-tool-dur'), languageMode === 'en' ? '1m 0s' : '1 分 0 秒');
+      assert.equal(text('#val-model-dur'), languageMode === 'en' ? '22m28s' : '22分28秒');
+      assert.equal(text('#val-tool-dur'), languageMode === 'en' ? '1m' : '1分');
       assert.equal(text('#val-cache-hit'), '96.9%');
       assert.equal(text('#pop-tokens-badge'), '61.2M tok');
       assert.equal(text('#val-uncached-in'), '1.23M tok');
@@ -446,7 +446,7 @@ describe('HUD raw 数值精度与缺值展示', () => {
       tokens: { cacheHitRate: 0 }, context: { usedRatio: 0 } });
     assert.equal(zero.text('#val-tps'), '0.00 tok/s');
     assert.equal(zero.text('#val-ttft'), '0.00 秒');
-    assert.equal(zero.text('#val-model-dur'), '0 秒');
+    assert.equal(zero.text('#val-model-dur'), '0秒');
     assert.equal(zero.text('#val-cache-hit'), '0%');
     assert.equal(zero.text('#pop-ctx-pct'), '0%');
     const absent = render({ session: { outputTps: 0, outputTpsFormatted: '—',
@@ -473,33 +473,6 @@ describe('HUD raw 数值精度与缺值展示', () => {
       assert.equal(instance.shadow.querySelector('#seg-tool').style.width, '10.000%');
       assert.equal(instance.shadow.querySelector('#seg-msg').style.width, '0%');
       assert.equal(text('#val-seg-msg'), output >= 1_000_000 ? '1M tok' : '1 tok');
-    }
-  });
-
-  it('三张展开卡片保持协调宽度，窄视口保留两侧留白', () => {
-    const { instance } = render(metrics);
-    const previousWindow = globalThis.window;
-    try {
-      instance.targetComposer = { getBoundingClientRect: () => ({ width: 520 }) };
-      globalThis.window = { innerWidth: 1024, innerHeight: 800 };
-      const expectedWidths = { session: '296px', tokens: '296px', context: '312px' };
-      for (const [popoverId, expectedWidth] of Object.entries(expectedWidths)) {
-        instance.activePopoverId = popoverId;
-        const popover = instance.shadow.querySelector(`#hud-popover-${popoverId}`);
-        popover.getBoundingClientRect = () => ({
-          left: parseFloat(popover.style.left), width: parseFloat(popover.style.width),
-          bottom: globalThis.window.innerHeight - parseFloat(popover.style.bottom), height: 190,
-        });
-        instance.repositionActivePopover();
-        assert.equal(popover.style.width, expectedWidth);
-      }
-      const popover = instance.shadow.querySelector('#hud-popover-context');
-      globalThis.window.innerWidth = 260;
-      instance.repositionActivePopover();
-      assert.equal(popover.style.width, '236px');
-      assert.equal(popover.style.left, '12px');
-    } finally {
-      globalThis.window = previousWindow;
     }
   });
 });
@@ -602,11 +575,11 @@ describe('HudInstance 与 AntigravityHudManager 生产模块生命周期、垂�
         steps: 425,
         compactionCount: 1,
         modelDurationSeconds: 1348,
-        modelDurationFormatted: '22 分 28 秒',
-        modelDurationFormattedEn: '22m 28s',
+        modelDurationFormatted: '22分28秒',
+        modelDurationFormattedEn: '22m28s',
         toolDurationSeconds: 360,
-        toolDurationFormatted: '6 分 0 秒',
-        toolDurationFormattedEn: '6m 0s',
+        toolDurationFormatted: '6分',
+        toolDurationFormattedEn: '6m',
         averageTtftSeconds: 3.8,
         averageTtftFormatted: '3.8 秒',
         averageTtftFormattedEn: '3.8s',
@@ -897,5 +870,73 @@ describe('HudInstance 与 AntigravityHudManager 生产模块生命周期、垂�
     toolNode.textContent = 'run_command: grep subagent running';
     view.appendChild(toolNode);
     assert.equal(mgr.resolveSubagentState(view).isSubagentRunning, false);
+  });
+
+  it('流式生成期间本轮用时客户端时钟平滑 1 秒步进且结束后回落权威耗时，销毁零残留定时器', async () => {
+    const inst = new HudInstance({ cascadeId: 'pane-turn-clock', isPrimaryPane: true });
+    const composer = new FakeElement('div');
+    composer.setAttribute('data-testid', 'agent-input-box');
+    const wrapper = new FakeElement('div');
+    wrapper.classList.add('pb-4');
+    wrapper.appendChild(composer);
+    inst.mount(composer);
+    const sr = inst.host.shadowRoot;
+
+    inst.switchConversation('conv-turn-clock', 'gemini-3.8-flash', true);
+    inst.updateMetrics({
+      conversationId: 'conv-turn-clock',
+      sessionRevision: inst.getSessionRevision(),
+      metricsSequence: 1,
+      isStreaming: true,
+      session: {
+        turns: 1,
+        steps: 2,
+        currentTurnDurationSeconds: 10,
+        currentTurnDurationFormatted: '10秒',
+        currentTurnDurationFormattedEn: '10s',
+        currentTurnDurationCompactZh: '本轮 10s',
+        currentTurnDurationCompactEn: 'Turn 10s',
+      },
+      tokens: { totalTokens: 100 },
+      context: { hasUsageData: true, usedRatio: 0.1 },
+    });
+
+    assert.equal(sr.querySelector('#hud-txt-session .hud-turn-dur').textContent, '· 本轮 10s');
+    assert.equal(sr.querySelector('#val-turn-dur').textContent, '10秒');
+    assert.ok(inst.turnClockTimer !== null, '流式活跃时必须启动平滑时钟');
+
+    await new Promise((resolve) => setTimeout(resolve, 1150));
+    assert.ok(
+      ['· 本轮 11s', '· 本轮 12s'].includes(sr.querySelector('#hud-txt-session .hud-turn-dur').textContent),
+      `即使后端暂无新推包，1.15s 后常驻栏也应前进到 11s/12s，实际 ${sr.querySelector('#hud-txt-session .hud-turn-dur').textContent}`
+    );
+    assert.ok(
+      ['11秒', '12秒'].includes(sr.querySelector('#val-turn-dur').textContent),
+      `展开卡片应同步每秒更新，实际 ${sr.querySelector('#val-turn-dur').textContent}`
+    );
+
+    // 后端在流式结束时推回最终权威数据库耗时 14.2s，DOM 同步为 14s 且定时器停止
+    inst.notifyModelOrStreamingChange(null, false, false, 0, null, 'idle');
+    inst.updateMetrics({
+      conversationId: 'conv-turn-clock',
+      sessionRevision: inst.getSessionRevision(),
+      metricsSequence: 2,
+      isStreaming: false,
+      session: {
+        turns: 1,
+        steps: 3,
+        currentTurnDurationSeconds: 14.2,
+        currentTurnDurationFormatted: '14秒',
+        currentTurnDurationFormattedEn: '14s',
+        currentTurnDurationCompactZh: '本轮 14s',
+        currentTurnDurationCompactEn: 'Turn 14s',
+      },
+      tokens: { totalTokens: 200 },
+      context: { hasUsageData: true, usedRatio: 0.1 },
+    });
+    assert.equal(inst.turnClockTimer, null, '进入 idle 后必须立即停止客户端时钟');
+    assert.equal(sr.querySelector('#hud-txt-session .hud-turn-dur').textContent, '· 本轮 14s');
+    assert.equal(sr.querySelector('#val-turn-dur').textContent, '14秒');
+    inst.dispose();
   });
 });

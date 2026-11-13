@@ -25,7 +25,7 @@ const LEGACY_LAYER_FILE = /^增量补全-(\d+\.\d+\.\d+)\.json$/;
 /**
  * 合并历史碎片层到统一增量层。
  *
- * B17：只压平“受支持版本”的碎片层。未知/未来版本的专用译文保留在原文件（加载器会按 targetVersion 过滤），
+ * 只压平“受支持版本”的碎片层。未知/未来版本的专用译文保留在原文件（加载器会按 targetVersion 过滤），
  * 避免把只对某个新版本有效的译文推广成全版本生效。非版本名（如 `增量补全-legacy.json`）仍按原行为合并。
  * 默认受支持版本取自 `SUPPORTED_BUNDLES`，测试/迁移工具可用 `supportedVersions` 覆盖。
  */
@@ -90,7 +90,7 @@ async function migrateLegacyLocked(userDir:string, options:{supportedVersions?:I
       throw new Error('迁移核对失败：写入内容哈希或条数与预期不一致');
     }
 
-    // 成功迁移的旧文件：保留在可恢复的 .migrated 备份中，若已存在同名恢复副本则使用唯一后缀禁止覆盖 (N07)
+    // 成功迁移的旧文件：保留在可恢复的 .migrated 备份中，若已存在同名恢复副本则使用唯一后缀禁止覆盖
     for (const file of successfullyValidatedFiles) {
       try {
         const defaultBackup = join(userDir, `${file}.migrated`);
@@ -104,7 +104,7 @@ async function migrateLegacyLocked(userDir:string, options:{supportedVersions?:I
   } catch {}
 }
 
-/* ------------------------------------------------------------------ 增量补全层：按 key / 按批次删除与撤销 (B18) */
+/* ------------------------------------------------------------------ 增量补全层：按 key / 按批次删除与撤销 */
 
 export const INCREMENTAL_DICTIONARY_FILE = '增量补全.json';
 export const incrementalDictionaryPath = (userDir: string) => join(userDir, INCREMENTAL_DICTIONARY_FILE);
@@ -182,7 +182,7 @@ export async function readIncrementalEntries(userDir: string): Promise<{ entries
 }
 
 /**
- * 从增量补译层删除指定词条（B18）。这是“错误自动译文只能覆盖不能删”问题的存储 API：
+ * 从增量补译层删除指定词条。这是“错误自动译文只能覆盖不能删”问题的存储 API：
  * 按 key 删除、按批次（传一组 key + batchId）删除、dryRun 预览、expectedDigest CAS、删除前撤销快照。
  * 写入使用原子写 + 写后核对；增量层损坏时抛错且不触碰原文件。
  */
@@ -421,7 +421,7 @@ export class DictionaryStore extends EventEmitter {
   private closed = false;
   targetVersion?:string;
   /**
-   * 切换目标版本并重载词典（B19）。**尝试过重载但失败时抛错并回滚 targetVersion**：
+   * 切换目标版本并重载词典。**尝试过重载但失败时抛错并回滚 targetVersion**：
    * 调用方可以继续使用上一份有效词典，但不会把失败当成“已切换成功”，也不会静默拿到旧词典。
    * 版本未变化时不重载（启动时已用 fallback 降级的情况由 lastError + 'invalid' 事件上报，不在这里重复抛错，
    * 否则会破坏“损坏词典仍保持连接/最后有效词典”的既有恢复路径）。

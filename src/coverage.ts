@@ -101,7 +101,7 @@ export function coverageTranslationLookup(dictionary: Dictionary): CoverageTrans
 }
 
 /**
- * 解析词条译文（B16）：先按已知场景精确命中 `@ui:<route>|<kind>|<原文>`，再退回普通键；
+ * 解析词条译文：先按已知场景精确命中 `@ui:<route>|<kind>|<原文>`，再退回普通键；
  * 没有场景信息（资源扫描阶段）时，只要词典里存在该原文的场景译文且译文一致，也算已翻译——
  * 避免“已有场景译文却被判 missing、再次进入补译候选”。多个场景译文互相冲突时返回 ambiguous（人工核对，不算缺失）。
  */
@@ -275,7 +275,7 @@ export function createCoverage(sources: CoverageSource[], dictionary: Dictionary
   const found = new Map<string,CoverageEntry>();
   for (const resource of sources) for (const item of extractCoverageStrings(resource.source)) {
     const id = `${resource.scope}:${item.key}`; const old = found.get(id); if (old) { if (!old.sources.includes(resource.id)) old.sources.push(resource.id); if (item.confidence === 'ui') old.confidence = 'ui'; old.kind ??= item.kind; continue; }
-    /* B16：资源扫描阶段没有 route/kind，也要把 @ui: 场景译文算作已翻译，避免重复判 missing/再次补译。 */
+    /* 资源扫描阶段没有 route/kind，也要把 @ui: 场景译文算作已翻译，避免重复判 missing/再次补译。 */
     const resolved = resolveCoverageTranslation(item.key, lookup);
     const translation = resolved.translation;
     let status = resolved.ambiguous ? 'review' : classifyCoverage(item.key,translation,item.template);
@@ -294,7 +294,7 @@ export function createCoverage(sources: CoverageSource[], dictionary: Dictionary
 }
 
 /**
- * B14/B15：把 status 与 observed 分成两个计数轴，并给出**互不重复**的终态计数：
+ * 把 status 与 observed 分成两个计数轴，并给出**互不重复**的终态计数：
  * - `counts`：每词条一个桶（实机观察优先：verified/untranslated；未观察按扫描状态），sum === entries.length；
  * - `statusCounts`：纯扫描状态（不受实机观察影响）；
  * - `observedCounts`：实机观察值（verified/untranslated），单独计数。
@@ -318,7 +318,7 @@ export function recountCoverage(report: CoverageReport) {
   report.observedCounts = observedCounts;
 }
 
-/** 覆盖率口径快照：总览与覆盖页共用同一来源（B15），并带应用版本/生成时间/词典版本。 */
+/** 覆盖率口径快照：总览与覆盖页共用同一来源，并带应用版本/生成时间/词典版本。 */
 export type CoverageMetrics = {
   available: boolean;
   appVersion: string;

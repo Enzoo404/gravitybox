@@ -38,7 +38,9 @@ test('cleared model timing requires completion evidence; compact units carry bef
   assert.equal(result.session.modelDurationSeconds, 2); assert.equal(result.session.outputTps, 25);
   assert.equal(buildConversationHudMetrics({ steps: [{ ...row, finishedGeneratingSeconds: null }] }).session.modelDurationSeconds, 0);
   assert.equal(compactNumber(999500), '1M'); assert.equal(compactNumber(995000, 2), '1M');
-  assert.equal(compactNumber(999500000), '1B'); assert.equal(durationText(4826), '1 小时 20 分 26 秒');
+  assert.equal(compactNumber(999500000), '1B'); assert.equal(durationText(4826), '1小时20分26秒');
+  assert.equal(durationText(3600), '1小时'); assert.equal(durationText(3600, 'en'), '1h');
+  assert.equal(durationText(60), '1分'); assert.equal(durationText(61), '1分1秒');
 });
 test('changed historical metadata with same length plus append cannot evade a warm cache', async t => {
   const dir = await setup(t), path = join(dir, 'history.db'), db = new DatabaseSync(path);
@@ -127,4 +129,32 @@ test('legacy rate-locks format is automatically and losslessly migrated to slim 
   const restarted = new UsageStatsManager({ geminiDir: dir, stateDir: dir });
   const summaryAfterRestart = await restarted.getUsageSummary(true);
   assert.ok(summaryAfterRestart);
+});
+
+test('流式未写完用量与刚创建的空子库不会误判为 partial 就绪异常', async t => {
+  const dir = await setup(t), conv = join(dir, 'antigravity', 'conversations');
+  await mkdir(conv, { recursive: true });
+  const engine = new ConversationMetricsEngine({ geminiDir: dir, stateDir: dir });
+
+  const childId = '11111111-2222-4333-8444-555555555555';
+  await writeFile(join(conv, `${childId}.db`), '');
+
+  const parentId = 'streaming-parent';
+  const db = new DatabaseSync(join(conv, `${parentId}.db`));
+  db.exec('CREATE TABLE steps(idx INTEGER PRIMARY KEY,step_type INTEGER,status INTEGER,metadata BLOB); CREATE TABLE gen_metadata(idx INTEGER PRIMARY KEY,data BLOB);');
+  const streamingStepMeta = Buffer.concat([
+    timestamp(1, 100),
+    W.encodeString(5, 'gemini-3.8-flash-control'),
+  ]);
+  db.prepare('INSERT INTO steps VALUES(?,?,?,?)').run(0, 15, 2, streamingStepMeta);
+  const subagentMeta = W.encodeLengthDelimited(32, Buffer.concat([
+    W.encodeString(1, 'child agent'),
+    W.encodeString(4, childId),
+  ]));
+  db.prepare('INSERT INTO steps VALUES(?,?,?,?)').run(1, 20, 3, subagentMeta);
+  db.close();
+
+  const metrics = await engine.getConversationMetrics({ conversationId: parentId });
+  assert.equal(metrics.availability, 'ready');
+  assert.equal(metrics.session.steps, 2);
 });

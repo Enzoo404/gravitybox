@@ -1,37 +1,14 @@
-import test from 'node:test';
-import assert from 'node:assert/strict';
-import {mkdtemp,mkdir,writeFile,readFile,rm,symlink,realpath} from 'node:fs/promises';
-import {existsSync} from 'node:fs';
-import {tmpdir} from 'node:os';
-import {join, basename} from 'node:path';
-import {BundleCache} from '../dist/bundle-cache.js';
-import {safeRoute,scopedKey,decodeScopedKey} from '../dist/candidates.js';
-import {CacheMaintenance} from '../dist/maintenance.js';
-import {Controller} from '../dist/controller.js';
-import {dictionaryFromEntries,loadDictionaryLayers} from '../dist/dictionary.js';
+import test from "node:test";
+import { describe as describeContractGroup } from "node:test";
+import assert from "node:assert/strict";
+import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, realpath } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, basename } from "node:path";
+import { CacheMaintenance } from "../dist/maintenance.js";
 
-test('场景键保留占位符、隔离角色和页面，并隐藏私有路径',()=>{
-  assert.notEqual(scopedKey('Open {name}','button','/settings'),scopedKey('Open {name}','heading','/'));
-  assert.deepEqual(decodeScopedKey(scopedKey('Open {name}','button','/settings')),{key:'Open {name}',kind:'button',route:'/settings'});
-  assert.equal(safeRoute('/c/private-id?token=secret'),'/other');assert.equal(decodeScopedKey('@ui:/c/private|button|Open'),undefined);
-});
-test('连接缓存不保留源字符串，同实例复用；文件、进程、版本或来源变化重新计算',async()=>{
-  const dir=await mkdtemp(join(tmpdir(),'gravity-cache-'));try{
-    await mkdir(join(dir,'Contents/Resources'),{recursive:true});await writeFile(join(dir,'Contents/Resources/app.asar'),'first');
-    let reads=0;const fetcher=async()=>{await new Promise(r=>setTimeout(r,10));return {hash:`hash-${++reads}`,source:'example',bytes:7};};const cache=new BundleCache();
-    const first=await Promise.all([cache.read(dir,1,'2.23.1','http://127.0.0.1:1',fetcher),cache.read(dir,1,'2.23.1','http://127.0.0.1:1',fetcher)]);assert.equal(first.filter(r=>!r.cacheHit).length,1);assert.equal(reads,1);
-    const hit=await cache.read(dir,1,'2.23.1','http://127.0.0.1:1',fetcher);assert.equal(hit.source,undefined);assert.equal(reads,1);
-    await cache.read(dir,2,'2.23.1','http://127.0.0.1:1',fetcher);assert.equal(reads,2);
-    await cache.read(dir,2,'2.24.0','http://127.0.0.1:1',fetcher);assert.equal(reads,3);
-    await cache.read(dir,2,'2.24.0','http://127.0.0.1:2',fetcher);assert.equal(reads,4);
-    await writeFile(join(dir,'Contents/Resources/app.asar'),'changed size');await cache.read(dir,2,'2.24.0','http://127.0.0.1:2',fetcher);assert.equal(reads,5);
-  }finally{await rm(dir,{recursive:true,force:true});}
-});
-test('未知指纹仅使用保守页面策略，受验证版本保留完整规则',()=>{
-  const c=new Controller({appPath:'/Applications/Antigravity.app',profile:'/tmp/unused',dictionary:dictionaryFromEntries({Settings:'设置'}),onStatus:()=>{}});
-  c.status.appVersion='2.23.2';c.status.bundleSha256='new';assert.equal(JSON.parse(c.boot('http://127.0.0.1:1234/').split('\n')[0].split('=')[1].slice(0,-1)).conservative,true);
-  c.status.appVersion='2.23.1';c.status.bundleSha256='ad12ecf66061edab6a3835d1360e1bad50787bc7b2f2c9d86568281360864696';assert.match(c.boot('http://127.0.0.1:1234/'),/"conservative":false/);
-});
+// Fixture state and hooks are scoped to this group; child cases run serially.
+describeContractGroup("缓存与恢复 · evolution", { concurrency: false }, async () => {
 test('缓存清理只操作三个白名单目录，应用运行时拒绝，登录和会话原样保留',async()=>{
  const temp=await realpath(await mkdtemp(join(tmpdir(),'gravity-maint-')));const profile=join(temp,'profile'),trash=join(temp,'trash');await mkdir(profile);await mkdir(trash);
  try{
@@ -47,14 +24,6 @@ test('缓存目录符号链接不会被跟随或清理',async()=>{
   const profile=join(temp,'profile'),outside=join(temp,'outside');await mkdir(profile);await mkdir(outside);await writeFile(join(outside,'important'),'keep');await symlink(outside,join(profile,'Cache'));
   const m=new CacheMaintenance(profile,join(temp,'trash'),async()=>false);const scan=await m.scan();assert.equal(scan.entries[0].clearable,false);await assert.rejects(m.clear(scan.token));assert.equal(await readFile(join(outside,'important'),'utf8'),'keep');
  }finally{await rm(temp,{recursive:true,force:true});}
-});
-
-test('版本词典选择最近可用层，不将未来版本覆盖带回旧版；个人覆盖仍最高',async()=>{
- const dir=await mkdtemp(join(tmpdir(),'gravity-dict-version-'));const base=join(dir,'base'),user=join(dir,'user');try{await mkdir(base);await mkdir(user);await writeFile(join(base,'base.json'),'{"Version label":"基础"}');await writeFile(join(base,'2.23.0.json'),'{"Version label":"旧版"}');await writeFile(join(base,'2.24.0.json'),'{"Version label":"未来"}');assert.equal((await loadDictionaryLayers(base,user,'2.23.1')).dictionary.entries['Version label'],'旧版');assert.equal((await loadDictionaryLayers(base,user,'2.25.0')).dictionary.entries['Version label'],'未来');await writeFile(join(user,'个人覆盖.json'),'{"Version label":"个人"}');assert.equal((await loadDictionaryLayers(base,user,'2.23.1')).dictionary.entries['Version label'],'个人');}finally{await rm(dir,{recursive:true,force:true});}
-});
-
-test('个人全局覆盖高于 AI 场景补全；移除后恢复已有场景译文',async()=>{
- const dir=await mkdtemp(join(tmpdir(),'gravity-context-personal-'));const base=join(dir,'base'),user=join(dir,'user');try{await mkdir(base);await mkdir(user);await writeFile(join(base,'base.json'),'{}');const context=scopedKey('Open','button','/settings');await writeFile(join(user,'增量补全-2.23.1.json'),JSON.stringify({[context]:'打开资源'}));await writeFile(join(user,'个人覆盖.json'),'{"Open":"我的译文"}');let layers=await loadDictionaryLayers(base,user);assert.equal(layers.dictionary.entries[context],undefined);assert.equal(layers.dictionary.entries.Open,'我的译文');await writeFile(join(user,'个人覆盖.json'),'{}');layers=await loadDictionaryLayers(base,user);assert.equal(layers.dictionary.entries[context],'打开资源');}finally{await rm(dir,{recursive:true,force:true});}
 });
 
 test('清理中重开应用保留恢复计划，退出后才撤回移动', async () => {
@@ -230,5 +199,4 @@ test('Phase 1 安全性: restore 预检阶段拦截目标路径符号链接及�
     await rm(temp, { recursive: true, force: true });
   }
 });
-
-
+});

@@ -219,7 +219,7 @@ test('并发刷新单飞防重（Single Flight）、Token Rotation 与并发修�
   let delayedResolve;
   const tokenPromise = new Promise(res => { delayedResolve = res; });
 
-  const fetchImpl = async (url, options) => {
+  const fetchImpl = async (url) => {
     if (url.includes('/token')) {
       tokenRefreshes++;
       await tokenPromise; // 模拟网络延迟

@@ -557,18 +557,33 @@ test('本轮用时 (Current Turn Duration) 精准切分与模型/工具耗时分
   assert.equal(Number(result.session.currentTurnModelDurationSeconds.toFixed(1)), 14.2);
   assert.equal(Number(result.session.currentTurnToolDurationSeconds.toFixed(1)), 4.2);
   assert.equal(Number(result.session.currentTurnDurationSeconds.toFixed(1)), 18.4);
-  assert.equal(result.session.currentTurnDurationFormatted, '18.4 秒');
-  assert.equal(result.session.currentTurnDurationFormattedEn, '18.4s');
+  assert.equal(result.session.currentTurnDurationFormatted, '18秒');
+  assert.equal(result.session.currentTurnDurationFormattedEn, '18s');
   assert.equal(result.session.currentTurnDurationCompactZh, '本轮 18s');
   assert.equal(result.session.currentTurnDurationCompactEn, 'Turn 18s');
 });
 
-test('本轮用时进位不产生 60.0 秒，超 1 小时按小时显示，且非活跃旧库不推算 now-start', () => {
-  assert.equal(formatTurnDurationCard(59.96, 'zh'), '1 分 0.0 秒');
-  assert.equal(formatTurnDurationCard(119.96, 'en'), '2m 0.0s');
-  assert.equal(formatTurnDurationCard(3661.2, 'zh'), '1 小时 1 分 1.2 秒');
-  assert.equal(formatTurnDurationCompact(3661, 'zh'), '本轮 1小时1分');
+test('本轮用时常驻栏与展开卡片格式规则（s/m/h 与汉字时分秒，省略零分零秒，非活跃旧库不推算 now-start）', () => {
+  assert.equal(formatTurnDurationCompact(0, 'zh'), '本轮 0s');
+  assert.equal(formatTurnDurationCompact(1, 'zh'), '本轮 1s');
+  assert.equal(formatTurnDurationCompact(59, 'zh'), '本轮 59s');
+  assert.equal(formatTurnDurationCompact(60, 'zh'), '本轮 1m');
+  assert.equal(formatTurnDurationCompact(637, 'zh'), '本轮 10m');
+  assert.equal(formatTurnDurationCompact(3600, 'zh'), '本轮 1h');
+  assert.equal(formatTurnDurationCompact(3661, 'zh'), '本轮 1h1m');
   assert.equal(formatTurnDurationCompact(3661, 'en'), 'Turn 1h1m');
+
+  assert.equal(formatTurnDurationCard(0, 'zh'), '0秒');
+  assert.equal(formatTurnDurationCard(18.4, 'zh'), '18秒');
+  assert.equal(formatTurnDurationCard(59.96, 'zh'), '1分');
+  assert.equal(formatTurnDurationCard(61, 'zh'), '1分1秒');
+  assert.equal(formatTurnDurationCard(119.96, 'en'), '2m');
+  assert.equal(formatTurnDurationCard(3600, 'zh'), '1小时');
+  assert.equal(formatTurnDurationCard(3600, 'en'), '1h');
+  assert.equal(formatTurnDurationCard(3601, 'zh'), '1小时1秒');
+  assert.equal(formatTurnDurationCard(3660, 'zh'), '1小时1分');
+  assert.equal(formatTurnDurationCard(3661.2, 'zh'), '1小时1分1秒');
+  assert.equal(formatTurnDurationCard(3661.2, 'en'), '1h1m1s');
 
   const staleDbMetrics = metrics(
     [
@@ -578,4 +593,38 @@ test('本轮用时进位不产生 60.0 秒，超 1 小时按小时显示，且�
     { isStreaming: false, allowDbActiveStepInference: false }
   );
   assert.equal(staleDbMetrics.session.currentTurnDurationSeconds, 0);
+});
+
+test('长耗时工具运行超5分钟且带占位end时间戳、即使DOM进入空闲也不得回退冻结本轮用时', async (t) => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gb-hud-long-tool-'));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  const convId = 'long-running-tool';
+  const dbPath = path.join(tmp, `${convId}.db`);
+  const nowSec = Date.now() / 1000;
+  const toolStartSec = nowSec - 600; // 工具已持续运行 10 分钟 (>5 分钟)
+
+  const db = new DatabaseSync(dbPath);
+  db.exec('CREATE TABLE steps(idx INTEGER PRIMARY KEY,step_type INTEGER,status INTEGER,metadata BLOB); CREATE TABLE gen_metadata(idx INTEGER PRIMARY KEY,data BLOB);');
+  db.prepare('INSERT INTO steps VALUES(0,14,3,NULL)').run();
+  const modelMeta = Buffer.from([...seconds(1, toolStartSec - 188), ...seconds(7, toolStartSec)]);
+  db.prepare('INSERT INTO steps VALUES(1,15,3,?)').run(modelMeta);
+  const runningToolMeta = Buffer.from([...seconds(1, toolStartSec), ...seconds(7, toolStartSec + 0.002)]);
+  db.prepare('INSERT INTO steps VALUES(2,132,2,?)').run(runningToolMeta);
+  db.close();
+
+  const tenMinAgo = new Date(Date.now() - 600_000);
+  fs.utimesSync(dbPath, tenMinAgo, tenMinAgo);
+
+  const engine = new ConversationMetricsEngine({ conversationsDir: tmp });
+  const result = await engine.getConversationMetrics({
+    conversationId: convId,
+    isStreaming: false,
+    activityPhase: 'idle',
+  });
+  assert.equal(result.isStreaming, true);
+  assert.equal(result.activityPhase, 'executing');
+  assert.ok(
+    result.session.currentTurnDurationSeconds >= 780,
+    `应持续累计 188s + 600s (>=780s)，不能回退冻结在 188s，实际 ${result.session.currentTurnDurationSeconds}`
+  );
 });

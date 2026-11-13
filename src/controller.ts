@@ -133,6 +133,8 @@ export class Controller {
         const watcher = watch(profileDir, (_event, name) => {
           if (String(name) === 'DevToolsActivePort' && !this.stopped && !this.dormant) {
             clearTimeout(this.reconnection);
+            this.reconnectionDelay = 1000;
+            this.unverifiedWindowRetries = 0;
             void this.tryConnect().catch(() => this.retry());
           }
         });
@@ -189,9 +191,10 @@ export class Controller {
       browser.on('Target.targetCreated', () => this.scheduleSync());
       browser.on('Target.targetInfoChanged', () => this.scheduleSync());
       browser.on('Target.targetDestroyed', () => this.scheduleSync());
-      browser.on('disconnected', () => { void this.disconnectPages(); this.browser = undefined; if (!this.stopped) { this.publish('waiting', '连接中断，等待应用恢复'); this.retry(); } });
+      browser.on('disconnected', () => { void this.disconnectPages(); this.browser = undefined; if (!this.stopped) { this.reconnectionDelay = 1000; this.unverifiedWindowRetries = 0; this.publish('waiting', '连接中断，等待应用恢复'); this.retry(); } });
       await browser.send('Target.setDiscoverTargets', { discover: true });
       this.reconnectionDelay = 1000;
+      this.unverifiedWindowRetries = 0;
       await this.sync();
     } catch (error) {
       this.browser?.close(); this.browser = undefined;
@@ -235,10 +238,17 @@ export class Controller {
       for (const [id, session] of this.pages) {
         const target = permitted.find(target => target.id === id);
         if (!target || this.dormant) { await this.detach(session); this.pages.delete(id); }
-        else if (target.url !== session.url) {
-          session.url = target.url;
-          await this.refreshRegistration(session);
-          await this.queueBootstrap(session, false);
+        else if (target.url !== session.url || (session.contextId === undefined && !session.detaching)) {
+          try {
+            if (target.url !== session.url) {
+              session.url = target.url;
+              await this.refreshRegistration(session);
+            }
+            await this.queueBootstrap(session, false);
+          } catch {
+            await this.detach(session);
+            this.pages.delete(id);
+          }
         }
       }
       this.status.errors = [];
@@ -258,9 +268,19 @@ export class Controller {
           if (this.dormant || this.stopped) { cdp.close(); break; }
           this.pages.set(target.id, session);
           cdp.on('disconnected', () => {this.hudBridge.detachTarget(target.id);if(!session.detaching&&this.pages.get(target.id)===session){this.pages.delete(target.id);this.scheduleSync();}});
-          cdp.on('Page.frameNavigated', (event) => { if (!event.frame?.parentId) { this.hudBridge.detachTargetPanes(target.id); session.contextId = undefined; void this.queueBootstrap(session); } });
+          cdp.on('Page.frameNavigated', (event) => {
+            if (!event.frame?.parentId) {
+              this.hudBridge.detachTargetPanes(target.id);
+              session.contextId = undefined;
+              void this.queueBootstrap(session).catch(() => this.scheduleSync(1500));
+            }
+          });
           cdp.on('Page.navigatedWithinDocument', () => this.scheduleSync());
-          cdp.on('Runtime.executionContextsCleared', () => { this.hudBridge.detachTargetPanes(target.id); session.contextId = undefined; });
+          cdp.on('Runtime.executionContextsCleared', () => {
+            this.hudBridge.detachTargetPanes(target.id);
+            session.contextId = undefined;
+            if (!session.detaching && !this.dormant && !this.stopped) this.scheduleSync(300);
+          });
           await cdp.send('Page.enable'); await cdp.send('Runtime.enable');
           await cdp.send('Runtime.addBinding',{name:'__agzhLanguageChanged',executionContextName:WORLD});
           await this.hudBridge.attachToTarget(target.id, cdp, () => session.contextId, WORLD);
@@ -272,8 +292,9 @@ export class Controller {
           this.status.errors.push((error as Error).message==='新版页面结构尚未识别，已跳过该窗口'?(error as Error).message:'一个窗口注入失败');
         }
       }
-      if (!this.dormant && !this.stopped && permitted.length > 0 && this.pages.size < permitted.length) {
-        if (this.unverifiedWindowRetries < 6) {
+      const hasUnreadyPage = [...this.pages.values()].some(session => !session.detaching && session.contextId === undefined);
+      if (!this.dormant && !this.stopped && permitted.length > 0 && (this.pages.size < permitted.length || hasUnreadyPage)) {
+        if (this.unverifiedWindowRetries < 20) {
           this.unverifiedWindowRetries++;
           this.scheduleSync(1500);
         }
@@ -498,6 +519,8 @@ export class Controller {
     // Recreate the isolated runtime so translation starts from the chosen mode.
     if (this.paused && this.pages.size) await this.disconnectPages();
     this.paused = false;
+    this.reconnectionDelay = 1000;
+    this.unverifiedWindowRetries = 0;
     this.bootCache.clear();
     try {
       if (this.browser) await this.sync();
@@ -584,7 +607,7 @@ export class Controller {
       const lookup=coverageTranslationLookup(this.options.dictionary);
       for(const entry of this.coverage.entries){
         if(entry.status==='native')continue;
-        /* B16：先按已知场景精确命中 @ui:<route>|<kind>|<原文>，再退回普通键/任意场景译文。 */
+        /* 先按已知场景精确命中 @ui:<route>|<kind>|<原文>，再退回普通键/任意场景译文。 */
         const resolved=resolveCoverageTranslation(entry.key,lookup,coverageScopes(entry));
         const next=resolved.translation;
         if(next!==entry.translation){delete entry.observed;delete entry.observations;}
@@ -765,7 +788,7 @@ export class Controller {
     for(const item of Array.isArray(rows)?rows:[]){
       if(!isSafeCandidate(item?.key)||!UI_KINDS.has(item?.kind)||item.source!=='runtime-ui')continue;
       const route=safeRoute(item.route),kind=item.kind;
-      /* B16：已有普通键或 @ui:<route>|<kind>| 场景译文的串，不再判 missing、也不进补译候选。 */
+      /* 已有普通键或 @ui:<route>|<kind>| 场景译文的串，不再判 missing、也不进补译候选。 */
       const resolved=resolveCoverageTranslation(item.key,lookup,[{route,kind}]);
       const asText=(value:string)=>value.replace(/\s+/g,' ').trim().toLowerCase();
       const translated=!!resolved.translation&&asText(resolved.translation)!==asText(item.key);

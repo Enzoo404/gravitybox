@@ -4,8 +4,12 @@ import { createServer } from 'node:http';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { resolvePricingForTimestamp, UsageStatsManager, calculateEstimatedUsd } from '../dist/usage.js';
+import { resolvePricingForTimestamp, UsageStatsManager, calculateEstimatedUsd, matchPricingKeys, ProtobufWriter } from '../dist/usage.js';
 import { MODEL_PRICES } from '../dist/model-catalog.js';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { mkdir } from 'node:fs/promises';
+const execFileAsync = promisify(execFile);
 
 test('时序费率解析：正确命中历史时段与当前时段', () => {
   const opus = MODEL_PRICES['claude-opus-5-5'];
@@ -71,8 +75,15 @@ test('跨时段真实事件累计：历史事件金额永久冻结，不随调�
   assert.equal(totalCost, 9.0);
 });
 
-test('远程价格同步：优雅处理无网络或非法响应，绝不抛错阻断', async () => {
-  const manager = new UsageStatsManager({ remotePricingUrl: 'http://127.0.0.1:9999/nonexistent.json' });
+test('远程价格同步：优雅处理无网络或非法响应，绝不抛错阻断', async t => {
+  const temp = await mkdtemp(join(tmpdir(), 'gravitybox-pricing-offline-'));
+  t.after(() => rm(temp, { recursive: true, force: true }));
+  const manager = new UsageStatsManager({
+    stateDir: temp,
+    geminiDir: join(temp, 'gemini'),
+    remotePricingUrl: 'http://127.0.0.1:9999/nonexistent.json',
+    fallbackPricingUrls: [],
+  });
   const result = await manager.syncRemotePricing(undefined, true);
   assert.equal(result.synced, false);
   assert.ok(typeof result.error === 'string');
@@ -103,7 +114,7 @@ test('远程价格同步：请求头报告当前构建版本，测试缓存与�
 test('多源容灾：主源失败时自动无感故障切换至备用源，并完整沉淀元数据', async () => {
   const temp = await mkdtemp(join(tmpdir(), 'gravitybox-pricing-fallback-'));
   let serverHits = 0;
-  const mockServer = createServer((req, res) => {
+  const mockServer = createServer((_req, res) => {
     serverHits++;
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
@@ -179,7 +190,6 @@ test('全自动智能补齐未计价（零按钮、用户无感）：仅补齐�
   // 1. 手动注入账本：1 条已锁定的正常计价记录 ($5.00) + 1 条历史未计价记录 ($0.00)
   const lockedKey = 'a'.repeat(64);
   const unpricedKey = 'b'.repeat(64);
-  const now = Math.floor(Date.now() / 1000);
   
   // 模拟 rateLocks
   manager.rateLocks = {
@@ -196,4 +206,108 @@ test('全自动智能补齐未计价（零按钮、用户无感）：仅补齐�
   assert.equal(manager.rateLocks[unpricedKey], undefined, '未计价记录旧锁已被释放以允许重新匹配新价');
 
   await rm(temp, { recursive: true, force: true });
+});
+
+test('Hydrogen 定价、xhigh 后缀匹配与 Antigravity 动态模型过滤（不影响历史计价）', async t => {
+  assert.equal(matchPricingKeys('gemini-4-hydrogen'), 'gemini-4-hydrogen');
+  assert.equal(matchPricingKeys('gemini-4-hydrogen-xhigh'), 'gemini-4-hydrogen');
+  assert.equal(matchPricingKeys('Gemini 4 Hydrogen (High)'), 'gemini-4-hydrogen');
+
+  const hydrogen = MODEL_PRICES['gemini-4-hydrogen'];
+  assert.ok(hydrogen && !Array.isArray(hydrogen), 'gemini-4-hydrogen 必须存在内置单价');
+  assert.equal(hydrogen.input, 1.5);
+  assert.equal(hydrogen.output, 7.5);
+  assert.equal(hydrogen.cached, 0.075);
+  assert.equal(hydrogen.cacheWrite, 0);
+  const beforeCacheWriteSec = Math.floor(Date.parse('2026-11-13T12:00:00Z') / 1000);
+  const afterCacheWriteSec = Math.floor(Date.parse('2027-01-12T12:00:00Z') / 1000);
+  const resolvedBefore = resolvePricingForTimestamp(hydrogen, beforeCacheWriteSec, 'gemini-4-hydrogen');
+  const resolvedAfter = resolvePricingForTimestamp(hydrogen, afterCacheWriteSec, 'gemini-4-hydrogen');
+  assert.equal(resolvedBefore?.cacheWrite, 0);
+  assert.equal(resolvedAfter?.cacheWrite, 1.875);
+  assert.equal(calculateEstimatedUsd(1_000_000, 100_000, 2_000_000, resolvedBefore, 500_000), 1.5 + 0.75 + 0.15);
+  assert.equal(calculateEstimatedUsd(1_000_000, 100_000, 2_000_000, resolvedAfter, 500_000), 1.5 + 0.75 + 0.15 + 0.9375);
+
+  const temp = await mkdtemp(join(tmpdir(), 'gravitybox-active-pricing-'));
+  t.after(() => rm(temp, { recursive: true, force: true }));
+  const manager = new UsageStatsManager({
+    stateDir: temp,
+    geminiDir: join(temp, 'gemini'),
+    remotePricingUrl: 'http://127.0.0.1:9999/nonexistent.json',
+    fallbackPricingUrls: [],
+  });
+
+  // 模拟 Antigravity 当前官方仅提供 3 个非禁用系列
+  manager.setActiveOfficialModels([
+    'gemini-4-hydrogen-xhigh',
+    'gemini-4-hydrogen-high',
+    'gemini-4-argon-medium',
+    'claude-opus-5-5-medium',
+  ]);
+  const active = await manager.getActivePricingTable();
+  assert.deepEqual(Object.keys(active).sort(), ['claude-opus-5-5', 'gemini-4-argon', 'gemini-4-hydrogen']);
+
+  // 已移除的模型（如 gpt-4o / claude-3-5-sonnet）不出现在当前价格基准，但历史计价仍可解析
+  assert.equal(active['gpt-4o'], undefined);
+  assert.equal(active['claude-3-5-sonnet'], undefined);
+  const raw = await manager.getRawPricingTable();
+  const pastPrice = manager.resolvePricing(raw, 'gpt-4o', Math.floor(Date.parse('2025-06-01T00:00:00Z') / 1000));
+  assert.equal(pastPrice?.input, 2.5);
+
+  // 检查更新失败时，lastCheckAt 仍刷新为当前检查时间且 modelCount 动态对应生效基准款数
+  const before = Date.now();
+  await manager.syncRemotePricing(undefined, true);
+  const status = await manager.getPricingSyncStatus();
+  assert.equal(status.lastCheckSuccess, false);
+  assert.ok(status.lastCheckAt >= before, '失败检查后 lastCheckAt 仍需更新为当前检查时间');
+  assert.equal(status.modelCount, 3, 'modelCount 必须与当前官方包含模型基准数量一致');
+});
+
+test('已下架历史模型从价格基准过滤后，历史 SQLite 用量费用仍准确核算且无未计价告警', async t => {
+  const temp = await mkdtemp(join(tmpdir(), 'gravitybox-retired-usage-'));
+  t.after(() => rm(temp, { recursive: true, force: true }));
+  const convDir = join(temp, 'antigravity', 'conversations');
+  await mkdir(convDir, { recursive: true });
+  const dbPath = join(convDir, 'retired-history.db');
+
+  const nowSec = Math.floor(Date.now() / 1000);
+  const octSec = Math.floor(Date.parse('2026-10-15T12:00:00Z') / 1000);
+  const mkBlob = (modelId, inputTok, outputTok, cachedTok, stamp) => {
+    const usageMsg = Buffer.concat([
+      ProtobufWriter.encodeVarintField(2, inputTok),
+      ProtobufWriter.encodeVarintField(3, outputTok),
+      ProtobufWriter.encodeVarintField(5, cachedTok),
+    ]);
+    const timing = ProtobufWriter.encodeLengthDelimited(4, ProtobufWriter.encodeVarintField(1, stamp));
+    const wrapped = Buffer.concat([
+      ProtobufWriter.encodeString(19, modelId),
+      ProtobufWriter.encodeLengthDelimited(4, usageMsg),
+      ProtobufWriter.encodeLengthDelimited(9, timing),
+    ]);
+    return ProtobufWriter.encodeLengthDelimited(1, wrapped).toString('hex');
+  };
+
+  await execFileAsync('/usr/bin/sqlite3', [
+    dbPath,
+    `CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER, metadata BLOB, status INTEGER, step_payload BLOB);
+     CREATE TABLE gen_metadata (idx INTEGER PRIMARY KEY, data BLOB);
+     INSERT INTO gen_metadata (idx, data) VALUES (1, X'${mkBlob('gpt-4o', 1_000_000, 0, 0, octSec)}');
+     INSERT INTO gen_metadata (idx, data) VALUES (2, X'${mkBlob('gemini-3.8-flash-n', 1_000_000, 0, 0, octSec)}');
+     INSERT INTO gen_metadata (idx, data) VALUES (3, X'${mkBlob('gemini-4-hydrogen-xhigh', 1_000_000, 0, 0, nowSec)}');`,
+  ]);
+
+  const manager = new UsageStatsManager({ geminiDir: temp, stateDir: temp });
+  // 模拟 Antigravity 当前仅保留 gemini-4-hydrogen，gpt-4o 与 gemini-3.8-flash-n 已下架
+  manager.setActiveOfficialModels(['gemini-4-hydrogen-xhigh']);
+  const active = await manager.getActivePricingTable();
+  assert.deepEqual(Object.keys(active), ['gemini-4-hydrogen']);
+
+  const summary = await manager.getUsageSummary(true);
+  assert.equal(summary.all_time.unpriced_models, 0);
+  assert.equal(summary.all_time.priced_models, 3);
+  const byModel = new Map(summary.all_time.by_model.map(r => [r.model, r]));
+  assert.equal(byModel.get('gpt-4o')?.estimated_usd, 2.5);
+  assert.equal(byModel.get('gemini-3.8-flash-n')?.estimated_usd, 0.75);
+  assert.equal(byModel.get('gemini-4-hydrogen-xhigh')?.estimated_usd, 1.5);
+  assert.equal(summary.all_time.estimated_usd, 4.75);
 });

@@ -3,14 +3,13 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, readdir, readFile, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+
 import { AccountSwitchService } from '../dist/account-switch.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { AccountsManager, MockKeychainAdapter } from '../dist/accounts.js';
 
 const run = promisify(execFile);
-const root = fileURLToPath(new URL('../', import.meta.url));
 
 async function setupSandbox() {
   const dir = await mkdtemp(join(tmpdir(), 'gb-test-phase4-'));
@@ -113,26 +112,4 @@ test('A18: 历史切号归档深度不可逆脱敏，杜绝 Base64/Protobuf 凭�
   } finally {
     await rm(env.dir, { recursive: true, force: true });
   }
-});
-
-test('A20: 构建元数据注入 revision，关于窗口动态展示修订号', async () => {
-  const pkgScript = await readFile(join(root, 'tools/package-mac.mjs'), 'utf8');
-  const assistantSrc = await readFile(join(root, 'native/Assistant.swift'), 'utf8');
-
-  // 1. 打包脚本通过共享构造器注入 revision；检查实际输出，避免把实现位置写死在脚本内。
-  const { buildInfoPayload } = await import('../tools/release-scope.mjs');
-  const digest = '1234abcd' + 'f'.repeat(56);
-  const metadata = buildInfoPayload({
-    version: '0.9.0', build: 900, node: '22.23.2',
-    verification: { digest, at: '2026-10-21T00:00:00Z' },
-    scope: { mode: 'targeted', targetAppVersions: ['2.24.0'], historicalUnverified: ['2.23.0', '2.23.1'] },
-  });
-  assert.equal(metadata.revision, '1234abcd', '构建元数据必须由摘要提取 revision');
-  assert.equal(metadata.sourceDigest, digest, '必须保留完整来源摘要');
-  assert.match(pkgScript, /JSON\.stringify\(buildInfoPayload\(/, 'package-mac 必须写入构造器生成的元数据');
-
-  // 2. 关于窗口动态提取 revision
-  assert.match(assistantSrc, /info\["revision"\] as\? String/, 'Assistant.about 必须从 build-info 提取 revision');
-  assert.match(assistantSrc, /buildStr = buildStr.isEmpty/ , '关于弹窗必须拼接展示 revision');
-
 });

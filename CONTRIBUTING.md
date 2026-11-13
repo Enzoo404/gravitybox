@@ -45,10 +45,7 @@ cd gravitybox
 npm ci
 npm run setup:dev
 
-# 3. 编译 TypeScript 与静态资源
-npm run build
-
-# 4. 运行全量单元与集成测试
+# 3. 运行完整门禁（自动编译 TypeScript 与静态资源）
 npm test
 ```
 
@@ -77,9 +74,13 @@ npm test
 
 ### 单元与集成测试 (Unit & Integration Tests)
 ```bash
-npm test
+npm run test:unit
 ```
-包含 300+ 个核心测试用例，覆盖账号并发事务、双周期额度熔合、Protobuf/SQLite 解码与用量计费算法。
+覆盖账号并发事务、双周期额度熔合、Protobuf/SQLite 解码、用量计费算法与小型原生行为测试。仅检查非原生测试可用 `npm run test:fast`，仅检查小型原生行为测试可用 `npm run test:native`；这些局部检查不生成发布通过记录。
+
+历史审计和按日期分散的混合用例按生产领域归并在 `*-contracts.test.mjs`。必要的失败路径和数据保全断言继续执行；各夹具组保持独立作用域并串行运行子用例，隔离时钟与文件系统替换。固定外观、源码实现拼写和手写算法副本已裁剪，随机几何压力测试改为确定性边界。原生快照合并及总览时效中尚无独立轻量夹具的两项守卫继续保留在状态契约测试中。
+
+完整原生 UI 夹具不纳入默认测试枚举、CI 或打包前门禁。修改原生界面需要合成夹具辅助检查时，可按需运行 `npm run test:native-ui`，该命令不生成发布通过记录；安装后的实际界面及操作仍由人工验收。
 
 ### 浏览器端回归测试 (Browser Regression)
 ```bash
@@ -92,9 +93,9 @@ macOS ARM64 开发环境与 CI 使用固定版本的 Chrome Headless Shell，下
 
 ### 自动化发布门禁 (Release Gate)
 ```bash
-npm run verify
+npm test
 ```
-运行完整的流水线门禁：编译 TypeScript、单元测试、浏览器测试、Swift 原生编译检查、以及免 vendor 模式的词典覆盖率门禁（`tools/coverage-report.mjs --gate`）。
+与 `npm run verify` 共用默认发布流水线：清理孤儿构建产物、编译 TypeScript、合并运行时、核对价格资产、单元/集成及小型原生行为测试、浏览器测试、发行版 Swift 原生编译、全部受支持版本的词典覆盖率门禁。可用 `npm test -- --no-vendor` 显式采用冻结快照校验。词典单项测试在无 vendor 时仅检查最新清单基本结构，全版本快照完整性与覆盖率在发布门禁检查一次。通过后可直接运行 `node tools/package-mac.mjs`，打包器会再次核对源码与产物指纹，无需重复测试。
 
 ---
 
@@ -118,7 +119,7 @@ npm run verify
 1. Fork 官方仓库至个人账号。
 2. 基于 `main` 分支拉取开发分支（例如 `feat/your-feature-name`）。
 3. 编写代码并增加对应的单元测试或浏览器测试。
-4. 运行 `npm test` 与 `npm run verify`，确保所有门禁 100% 绿色通过。
+4. 运行 `npm test`，确保完整门禁通过，无需再重复运行 `npm run verify`。
 5. 推送至个人分支并向 `Enzoo404/gravitybox:main` 发起 Pull Request。
 6. CI 自动化检查通过后，核心维护者将对 PR 进行 Review 并合并。
 

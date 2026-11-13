@@ -2625,7 +2625,7 @@ final class MenuPanelController: NSViewController {
         let failed = intVal(summary, "failedDatabasesCount")
         let skipped = intVal(summary, "skippedLargeRecords")
         let unknown = intVal(summary, "unknownTimeRecords")
-        if failed > 0 || skipped > 0 || unknown > 0 {
+        if failed > 0 || skipped > 0 || unknown > 0 || (discovered > 0 && scanned < discovered) {
             usageScopeLabel.stringValue = InterfaceText.usageScope(scanned: scanned, discovered: discovered, failed: failed, skipped: skipped, unknown: unknown)
             usageScopeLabel.textColor = accessibleWarningColor()
             usageScopeLabel.isHidden = false

@@ -13,6 +13,8 @@ import type {
 import { resolveModelCapacity } from './model-catalog.js';
 import { runHudDbScanInWorker } from '../sqlite-read.js';
 import type { HudWorkerRawStepRow } from '../sqlite-worker.js';
+import { decodeVarint64, skipProtobufField } from '../protobuf.js';
+export { decodeVarint64 };
 
 const UUID_REGEX_GLOBAL = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
 const ACTIVE_STEP_STATUSES = new Set([1, 2, 8, 9]);
@@ -24,48 +26,8 @@ const SUBAGENT_TOOL_NAMES = new Set([
   'spawn_subagent',
 ]);
 const MAX_CACHED_CONVERSATIONS = 24;
-const ACTIVE_DB_RECENCY_MS = 5 * 60 * 1000;
+const ACTIVE_DB_RECENCY_MS = 60 * 60 * 1000;
 const INLINE_BLOB_LIMIT_BYTES = 65_536;
-
-/**
- * 64 位 BigInt 无符号 Varint 解码，彻底规避 32 位有符号位移溢出（如 2026+ 时间戳）
- */
-export function decodeVarint64(buf: Uint8Array, cursor: { pos: number }): bigint {
-  let result = 0n;
-  let shift = 0n;
-  while (cursor.pos < buf.length && shift <= 63n) {
-    const b = BigInt(buf[cursor.pos++]!);
-    result |= (b & 0x7fn) << shift;
-    shift += 7n;
-    if ((b & 0x80n) === 0n) break;
-  }
-  return result;
-}
-
-/**
- * 安全跳过未知或非目标 Protobuf wireType 字段，防止游标错位或死循环
- */
-function skipProtobufField(buf: Uint8Array, cursor: { pos: number }, wireType: number): boolean {
-  if (wireType === 0) {
-    decodeVarint64(buf, cursor);
-    return cursor.pos <= buf.length;
-  }
-  if (wireType === 1) {
-    cursor.pos += 8;
-    return cursor.pos <= buf.length;
-  }
-  if (wireType === 2) {
-    const len = Number(decodeVarint64(buf, cursor));
-    if (!Number.isSafeInteger(len) || len < 0 || cursor.pos + len > buf.length) return false;
-    cursor.pos += len;
-    return true;
-  }
-  if (wireType === 5) {
-    cursor.pos += 4;
-    return cursor.pos <= buf.length;
-  }
-  return false;
-}
 
 /**
  * 解析 Protobuf Timestamp / Duration (field 1: 秒数 int64/uint64, field 2: 纳秒数 int32)
@@ -727,48 +689,34 @@ export function formatThousandsTokens(tokens: number): string {
 }
 
 /**
- * 格式化用时 (如 1348 秒 -> "22 分 28 秒", 360 秒 -> "6 分 0 秒", 0 秒 -> "0 秒")
+ * 格式化用时 (如 1348 秒 -> "22分28秒", 360 秒 -> "6分", 3600 秒 -> "1小时", 0 秒 -> "0秒")
  */
 export function formatDurationSeconds(seconds: number, lang: 'zh' | 'en' = 'zh'): string { return durationText(seconds, lang); }
 
 /**
- * 格式化本轮用时展开卡片展示 (保留 1 位小数，如 18.4 秒，>=60s 进位为分，>=3600s 进位为小时)
+ * 格式化本轮用时展开卡片展示 (整数秒，省略零分/零秒；中文使用汉字时分秒，英文使用 h/m/s)
  */
 export function formatTurnDurationCard(seconds: number, lang: 'zh' | 'en' = 'zh'): string {
   if (!Number.isFinite(seconds) || seconds < 0) return '—';
-  const totalTenths = Math.max(0, Math.round(seconds * 10));
-  const totalWholeSeconds = Math.floor(totalTenths / 10);
-  const tenthsDigit = totalTenths % 10;
-  const hours = Math.floor(totalWholeSeconds / 3600);
-  const minutes = Math.floor((totalWholeSeconds % 3600) / 60);
-  const remSeconds = `${totalWholeSeconds % 60}.${tenthsDigit}`;
-  if (hours > 0) {
-    return lang === 'en'
-      ? `${hours}h ${minutes}m ${remSeconds}s`
-      : `${hours} 小时 ${minutes} 分 ${remSeconds} 秒`;
-  }
-  if (minutes > 0) {
-    return lang === 'en' ? `${minutes}m ${remSeconds}s` : `${minutes} 分 ${remSeconds} 秒`;
-  }
-  return lang === 'en' ? `${remSeconds}s` : `${remSeconds} 秒`;
+  return durationText(seconds, lang);
 }
 
 /**
- * 格式化本轮用时常驻栏紧凑展示 (先舍入再进位，如 "本轮 18s" / "本轮 1小时5分")
+ * 格式化本轮用时常驻栏紧凑展示 (单位统一 s/m/h，省略零分；<60s 显示秒，>=60s 只显示分钟/小时，不显示秒)
  */
 export function formatTurnDurationCompact(seconds: number, lang: 'zh' | 'en' = 'zh'): string {
   if (!Number.isFinite(seconds) || seconds < 0) return lang === 'en' ? 'Turn 0s' : '本轮 0s';
   const rounded = Math.max(0, Math.round(seconds));
+  const prefix = lang === 'en' ? 'Turn ' : '本轮 ';
   if (rounded < 60) {
-    return lang === 'en' ? `Turn ${rounded}s` : `本轮 ${rounded}s`;
+    return `${prefix}${rounded}s`;
   }
   const hours = Math.floor(rounded / 3600);
   const minutes = Math.floor((rounded % 3600) / 60);
-  const rest = rounded % 60;
   if (hours > 0) {
-    return lang === 'en' ? `Turn ${hours}h${minutes}m` : `本轮 ${hours}小时${minutes}分`;
+    return `${prefix}${hours}h${minutes > 0 ? `${minutes}m` : ''}`;
   }
-  return lang === 'en' ? `Turn ${minutes}m${rest}s` : `本轮 ${minutes}分${rest}秒`;
+  return `${prefix}${minutes}m`;
 }
 
 export interface ComputeHudMetricsInput {
@@ -973,8 +921,7 @@ export function buildConversationHudMetrics(input: ComputeHudMetricsInput): Conv
         break;
       }
       const candidateStatus = candidate.status ?? 3;
-      const candidateEnd = candidate.t_end ?? candidate.endTimeSeconds;
-      if (!ACTIVE_STEP_STATUSES.has(candidateStatus) || candidateEnd != null) continue;
+      if (!ACTIVE_STEP_STATUSES.has(candidateStatus)) continue;
       const isCandidateSubagent =
         Boolean(candidate.isSubagentStep) ||
         candidateType === 127 ||
@@ -995,7 +942,8 @@ export function buildConversationHudMetrics(input: ComputeHudMetricsInput): Conv
     input.runningSubagentCount ?? 0, detectedRunningSubagents, input.isSubagentRunning ? 1 : 0
   );
   const isSubagentRunning = Boolean(input.isSubagentRunning || runningSubagentCount > 0);
-  const isStreaming = Boolean(input.isStreaming || isSubagentRunning);
+  const dbForegroundActive = input.allowDbActiveStepInference === true && latestActiveForegroundKind !== null;
+  const isStreaming = Boolean(input.isStreaming || isSubagentRunning || dbForegroundActive);
   let activityPhase: HudActivityPhase = 'idle';
   if (isStreaming) {
     if (latestActiveForegroundKind === 'model') {
@@ -1069,7 +1017,8 @@ export function buildConversationHudMetrics(input: ComputeHudMetricsInput): Conv
         currentTurnModelDurationSeconds += duration;
       } else if (
         validSeconds(start) &&
-        ((allowActiveInference && ACTIVE_STEP_STATUSES.has(rawStatus)) || (isStreaming && end == null))
+        ((allowActiveInference && ACTIVE_STEP_STATUSES.has(rawStatus)) ||
+          (isStreaming && (ACTIVE_STEP_STATUSES.has(rawStatus) || end == null)))
       ) {
         currentTurnModelDurationSeconds += Math.max(0, nowSeconds - start);
       }
@@ -1078,7 +1027,8 @@ export function buildConversationHudMetrics(input: ComputeHudMetricsInput): Conv
         currentTurnToolDurationSeconds += end! - start!;
       } else if (
         validSeconds(start) &&
-        ((allowActiveInference && ACTIVE_STEP_STATUSES.has(rawStatus)) || (isStreaming && end == null))
+        ((allowActiveInference && ACTIVE_STEP_STATUSES.has(rawStatus)) ||
+          (isStreaming && (ACTIVE_STEP_STATUSES.has(rawStatus) || end == null)))
       ) {
         currentTurnToolDurationSeconds += Math.max(0, nowSeconds - start);
       }
@@ -1242,6 +1192,7 @@ export class ConversationMetricsEngine {
   private readonly cache = new Map<string, CachedConversationState>();
   private readonly pendingReads = new Map<string, Promise<CachedConversationState | null>>();
   private sniffDirCache: { at: number; recentIds: string[] } | null = null;
+  private sniffDirListCache: { dirMtimeMs: number; dbEntries: Array<{ file: string; id: string }> } | null = null;
 
   constructor(options?: { geminiDir?: string; conversationsDir?: string }) {
     const baseGemini = options?.geminiDir ?? join(homedir(), '.gemini');
@@ -1322,23 +1273,35 @@ export class ConversationMetricsEngine {
       return existing;
     }
 
+    const scanParams = {
+      dbPath,
+      inlineBlobLimitBytes: INLINE_BLOB_LIMIT_BYTES,
+      knownColumns:
+        existing &&
+        existing.hasDataColumn !== undefined &&
+        existing.hasRenderInfoColumn !== undefined &&
+        existing.hasStepPayloadColumn !== undefined
+          ? {
+              hasDataColumn: existing.hasDataColumn,
+              hasRenderInfoColumn: existing.hasRenderInfoColumn,
+              hasStepPayloadColumn: existing.hasStepPayloadColumn,
+            }
+          : undefined,
+      cachedTrajectoryId: existing?.trajectoryId,
+    };
+
     try {
-      const workerRes = await runHudDbScanInWorker({
-        dbPath,
-        inlineBlobLimitBytes: INLINE_BLOB_LIMIT_BYTES,
-        knownColumns:
-          existing &&
-          existing.hasDataColumn !== undefined &&
-          existing.hasRenderInfoColumn !== undefined &&
-          existing.hasStepPayloadColumn !== undefined
-            ? {
-                hasDataColumn: existing.hasDataColumn,
-                hasRenderInfoColumn: existing.hasRenderInfoColumn,
-                hasStepPayloadColumn: existing.hasStepPayloadColumn,
-              }
-            : undefined,
-        cachedTrajectoryId: existing?.trajectoryId,
-      });
+      let workerRes: Awaited<ReturnType<typeof runHudDbScanInWorker>>;
+      try {
+        workerRes = await runHudDbScanInWorker(scanParams);
+      } catch (firstErr) {
+        const msg = (firstErr as Error)?.message ?? '';
+        if (!/busy|locked|投影失败|工作线程|预算|no such table|unable to open/i.test(msg)) {
+          throw firstErr;
+        }
+        await new Promise(resolve => setTimeout(resolve, 60));
+        workerRes = await runHudDbScanInWorker(scanParams);
+      }
 
       const {
         hasDataColumn,
@@ -1560,27 +1523,42 @@ export class ConversationMetricsEngine {
     if (!dbPathOverride && (isSubagentRunning || hasActiveSubagentStep)) {
       try {
         let recentIds: string[];
-        if (this.sniffDirCache && nowMs - this.sniffDirCache.at < 1000) {
+        if (this.sniffDirCache && nowMs - this.sniffDirCache.at < 2500) {
           recentIds = this.sniffDirCache.recentIds;
         } else {
-          const files = await readdir(this.conversationsDir).catch(() => [] as string[]);
+          const dirStat = await lstat(this.conversationsDir).catch(() => null);
+          let dbEntries: Array<{ file: string; id: string }>;
+          if (dirStat && this.sniffDirListCache && this.sniffDirListCache.dirMtimeMs === dirStat.mtimeMs) {
+            dbEntries = this.sniffDirListCache.dbEntries;
+          } else {
+            const files = await readdir(this.conversationsDir).catch(() => [] as string[]);
+            dbEntries = [];
+            for (const file of files) {
+              if (!file.endsWith('.db') || file.length < 39) continue;
+              const potentialChildId = file.slice(0, -3).toLowerCase();
+              if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(potentialChildId)) {
+                dbEntries.push({ file, id: potentialChildId });
+              }
+            }
+            if (dirStat) {
+              this.sniffDirListCache = { dirMtimeMs: dirStat.mtimeMs, dbEntries };
+            }
+          }
           const found: string[] = [];
-          for (const file of files) {
-            if (!file.endsWith('.db') || file.length < 39) continue;
-            const potentialChildId = file.slice(0, -3).toLowerCase();
-            if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(potentialChildId)) {
-              continue;
-            }
-            const fullChildPath = join(this.conversationsDir, file);
-            const [st, walSt] = await Promise.all([
-              lstat(fullChildPath).catch(() => null),
-              lstat(`${fullChildPath}-wal`).catch(() => null),
-            ]);
-            if (!st || !st.isFile() || st.isSymbolicLink()) continue;
-            const latestMtime = Math.max(st.mtimeMs, walSt?.mtimeMs ?? 0);
-            if (nowMs - latestMtime <= 30_000) {
-              found.push(potentialChildId);
-            }
+          for (let i = 0; i < dbEntries.length; i += 48) {
+            const batch = dbEntries.slice(i, i + 48);
+            await Promise.all(batch.map(async ({ file, id: potentialChildId }) => {
+              const fullChildPath = join(this.conversationsDir, file);
+              const [st, walSt] = await Promise.all([
+                lstat(fullChildPath).catch(() => null),
+                lstat(`${fullChildPath}-wal`).catch(() => null),
+              ]);
+              if (!st || !st.isFile() || st.isSymbolicLink()) return;
+              const latestMtime = Math.max(st.mtimeMs, walSt?.mtimeMs ?? 0);
+              if (nowMs - latestMtime <= 30_000) {
+                found.push(potentialChildId);
+              }
+            }));
           }
           recentIds = found;
           this.sniffDirCache = { at: nowMs, recentIds: found };
@@ -1618,8 +1596,8 @@ export class ConversationMetricsEngine {
           const childState = await this.readSingleDbState(childDbPath, childId);
           if (!childState) {
             if (edge.explicit) {
-              const fileExists = await lstat(childDbPath).then(() => true, () => false);
-              if (fileExists) failedChildCount++;
+              const childStat = await lstat(childDbPath).catch(() => null);
+              if (childStat && childStat.size > 4096) failedChildCount++;
             }
             continue;
           }
@@ -1655,7 +1633,7 @@ export class ConversationMetricsEngine {
               const step = childState.steps[idx]!;
               if (step.stepType === 14) break;
               if (step.stepType === 2 && step.status === 3) break;
-              if (ACTIVE_STEP_STATUSES.has(step.status) && step.endTimeSeconds == null) {
+              if (ACTIVE_STEP_STATUSES.has(step.status)) {
                 childActive = true;
                 break;
               }
@@ -1695,7 +1673,7 @@ export class ConversationMetricsEngine {
     const effectiveSubagentRunning = Boolean(isSubagentRunning || effectiveRunningSubagents > 0);
     const availability: HudDataAvailability = mainState.fromErrorFallback
       ? 'cached'
-      : failedChildCount > 0 || mainState.parentMetaReadError || combinedSteps.some(s => s.stepType === 15 && !s.hasUsage)
+      : failedChildCount > 0 || mainState.parentMetaReadError
       ? 'partial'
       : 'ready';
 
@@ -1716,7 +1694,7 @@ export class ConversationMetricsEngine {
       subagentCount: dbPathOverride ? undefined : verifiedChildIds.size,
       subagentSteps: totalSubagentSteps,
       totalStepsOverride: mainState.steps.length + totalSubagentSteps,
-      allowDbActiveStepInference: mainIsRecent,
+      allowDbActiveStepInference: mainIsRecent || isStreaming || effectiveSubagentRunning,
       modelId,
       genMetadata: mainState.genMetadata,
       contextSteps: normalizedContextSteps,

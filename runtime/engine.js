@@ -1481,7 +1481,7 @@
      predicate is what keeps translation and restoration in agreement: when they disagreed, a value
      flip-flopped between English and Chinese on every scan. */
   function translatable(node, attr, scan) {
-    if (attr) return attributeAllowed(node, attr, scan);
+    if (attr) return attributeAllowed(node, attr);
     return eligible(node.parentElement, scan);
   }
   function updateValue(node, attr = '', scan = 0) {
@@ -1544,7 +1544,7 @@
      is never touched, whereas a standalone <input placeholder="Search"> is a real UI string.
      An input that lives inside a conversation row or a code block still has no UI context, so it
      correctly stays English. */
-  function attributeAllowed(element, attribute, scan) {
+  function attributeAllowed(element, attribute) {
     if(routeExcluded||restrictedAdaptiveRoute())return false;
     if (!TRANSLATABLE_ATTRS.includes(attribute)) return false;
     if (!element || element.nodeType !== Node.ELEMENT_NODE) return false;
@@ -2004,7 +2004,7 @@
         if(template&&conservative&&!inSystemSettings(el,scan))return;
         if(conservative&&!attribute&&!template&&!isDialogPromptParagraph(el)&&!el?.closest('button,[role="button"],[role="tab"],[role="menuitem"],[role="tooltip"],label,h1,h2,h3,h4,[data-select-popup],[role="menu"],[role="listbox"],[role="option"]')&&!inSystemSettings(el,scan))return;
         const valid=template?isValidTemplateText(raw):isValidUiText(raw);
-        if(rows.size>=500||!visibleUi(el)||userNamed(el)||(attribute ? !attributeAllowed(el,attribute,scan) : blocked(el,scan)||(!template&&!el.closest(UI_SELECTOR)&&!inSystemSettings(el,scan)&&!isDialogPromptParagraph(el)))||pluginDescription(el)||!valid)return;
+        if(rows.size>=500||!visibleUi(el)||userNamed(el)||(attribute ? !attributeAllowed(el,attribute) : blocked(el,scan)||(!template&&!el.closest(UI_SELECTOR)&&!inSystemSettings(el,scan)&&!isDialogPromptParagraph(el)))||pluginDescription(el)||!valid)return;
         const key=normalize(raw),route=scopeRoute(el);
         if(isBrandName(key))return;
         /* An unsupported inline layout is still a candidate even when the dictionary holds an
@@ -2043,7 +2043,7 @@
         }
         for(const el of root.querySelectorAll('[title],[aria-label],[placeholder],[data-tooltip]')){
           if(performance.now()-collectStarted>12){lastCollectionTruncated=true;break collectRoots;}
-          for(const attr of TRANSLATABLE_ATTRS)if(el.hasAttribute(attr)&&attributeAllowed(el,attr,scan))add(el.getAttribute(attr),el,attr==='placeholder'?'placeholder':inferKind(el),attr);
+          for(const attr of TRANSLATABLE_ATTRS)if(el.hasAttribute(attr)&&attributeAllowed(el,attr))add(el.getAttribute(attr),el,attr==='placeholder'?'placeholder':inferKind(el),attr);
         }
       }maxSliceMs=Math.max(maxSliceMs,performance.now()-collectStarted);return [...rows.values()];
     },
@@ -2094,7 +2094,7 @@
           if (++visited > 50000 || performance.now()-auditStarted>80) { truncated = true; break auditRoots; }
           if (!visibleUi(el)) continue;
           for (const attr of TRANSLATABLE_ATTRS) {
-            if (!el.hasAttribute(attr) || !attributeAllowed(el,attr,scan)) continue;
+            if (!el.hasAttribute(attr) || !attributeAllowed(el,attr)) continue;
             const current = normalize(el.getAttribute(attr));
             const attributeSlot=nodeSlots.get(el)?.get(attr);
             const original = normalize(attributeSlot?.original ?? current), key = known.get(original);

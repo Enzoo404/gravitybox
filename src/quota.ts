@@ -1,7 +1,7 @@
 /**
  * 配额规范化 / 窗口融合纯 helper（无 I/O、无网络）。
  *
- * 设计原则（task-38）：
+ * 配额规范化与熔合设计原则：
  * - live（language_server RPC）与 cloud（cloudcode REST）共用同一套规范化。
  * - 模型自身 quotaInfo 与 family（Gemini/Claude/GPT/Argon/Carbon）窗口分离保存；legacy 字段
  *   percentage 仅作为 "effective=min(own, 相关 family 已知窗口)" 的兼容投影，own_* 保留真值。
@@ -165,11 +165,12 @@ export function classifyFamily(input: {
     : [input.groupName, identity, input.modelProvider].map(value => String(value ?? '').toLowerCase()).join(' ');
   if (text.includes('argon')) return 'argon';
   if (text.includes('carbon')) return 'carbon';
-  // 自动识别未来新上线的 Gemini 4+ 独立代号模型（如 gemini-4-neon 等），归为独立 'other' 而不污染基础 Gemini 池
+  // 自动识别未来新上线的 Gemini 4+ 独立代号模型（如 gemini-4-neon 等），归为独立 'other' 而不污染基础 Gemini 池；
+  // 明确归属基础 Gemini 共享池的型号（含 hydrogen）直接归为 'gemini'。
   const standaloneGeminiMatch = text.match(/\bgemini[\s_-]*[4-9](?:\.\d+)?[\s_-]+([a-z][a-z0-9]*)\b/i);
   if (standaloneGeminiMatch) {
     const codename = standaloneGeminiMatch[1]!.toLowerCase();
-    if (!['pro', 'flash', 'ultra', 'nano', 'lite', 'default', 'exp', 'preview', 'trial'].includes(codename)) {
+    if (!['pro', 'flash', 'ultra', 'nano', 'lite', 'default', 'exp', 'preview', 'trial', 'hydrogen'].includes(codename)) {
       return 'other';
     }
   }
@@ -839,19 +840,36 @@ export function buildStandaloneModels(
   }
 
   // 2. 自动发现 family === 'other' 的新上线独立模型（如未来的 Gemini 4 新代号模型或其它独立计费模型）
+  const sharedPools = [
+    familyWindows.gemini.fiveHour,
+    familyWindows.gemini.weekly,
+    familyWindows.claude.fiveHour,
+    familyWindows.claude.weekly,
+  ].filter((w): w is WindowStatus => Boolean(w && w.known && w.remaining !== null && w.resetTime));
+  const matchesSharedPool = (model: NormalizedModel): boolean => {
+    if (!model.own_percentage_known || model.own_percentage === null || !model.own_reset_time) return false;
+    return sharedPools.some(w =>
+      Math.abs(Math.round(w.remaining! * 100) - Math.round(model.own_percentage!)) <= 1
+      && w.resetTime === model.own_reset_time);
+  };
   const extraByBaseKey = new Map<string, { displayName: string; items: NormalizedModel[] }>();
   for (const model of models) {
     if (model.family !== 'other') continue;
     const rawId = (model.model_id || model.name || '').trim();
     if (!rawId) continue;
-    const baseKey = rawId
-      .toLowerCase()
-      .replace(/-(?:trial|preview|exp|disabled|tiered|latest)$/i, '')
+    let baseKey = rawId.toLowerCase();
+    while (/-(?:low|medium|high|xhigh|minimal|thinking|trial|preview|exp|disabled|tiered|latest)$/i.test(baseKey)) {
+      baseKey = baseKey.replace(/-(?:low|medium|high|xhigh|minimal|thinking|trial|preview|exp|disabled|tiered|latest)$/i, '');
+    }
+    baseKey = baseKey
       .replace(/[^a-z0-9.]+/g, '-')
       .replace(/^-+|-+$/g, '');
     if (!baseKey || seenKeys.has(baseKey)) continue;
     const displayName = model.display_name
-      ? model.display_name.replace(/\s+(?:Trial|Preview|Exp)$/i, '').trim()
+      ? model.display_name
+        .replace(/\s*\((?:Low|Medium|High|XHigh|Minimal|Thinking)\)\s*$/i, '')
+        .replace(/\s+(?:Trial|Preview|Exp|Low|Medium|High|XHigh)$/i, '')
+        .trim()
       : autoPrettyModelTitle(baseKey);
     const existing = extraByBaseKey.get(baseKey);
     if (existing) {
@@ -863,6 +881,7 @@ export function buildStandaloneModels(
 
   for (const [baseKey, entry] of extraByBaseKey.entries()) {
     if (seenKeys.has(baseKey)) continue;
+    if (entry.items.length > 0 && entry.items.every(matchesSharedPool)) continue;
     seenKeys.add(baseKey);
     const status = buildStandaloneFamilyStatus(
       entry.items,

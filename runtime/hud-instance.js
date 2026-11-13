@@ -103,10 +103,10 @@ function createDefaultMetrics(conversationId = 'default', sessionRevision = 1) {
       runningSubagentCount: 0,
       subagentSteps: 0,
       modelDurationSeconds: 0,
-      modelDurationFormatted: '0 秒',
+      modelDurationFormatted: '0秒',
       modelDurationFormattedEn: '0s',
       toolDurationSeconds: 0,
-      toolDurationFormatted: '0 秒',
+      toolDurationFormatted: '0秒',
       toolDurationFormattedEn: '0s',
       averageTtftSeconds: 0,
       averageTtftFormatted: '—',
@@ -114,8 +114,8 @@ function createDefaultMetrics(conversationId = 'default', sessionRevision = 1) {
       outputTps: 0,
       outputTpsFormatted: '—',
       currentTurnDurationSeconds: 0,
-      currentTurnDurationFormatted: '0.0 秒',
-      currentTurnDurationFormattedEn: '0.0s',
+      currentTurnDurationFormatted: '0秒',
+      currentTurnDurationFormattedEn: '0s',
       currentTurnDurationCompactZh: '本轮 0s',
       currentTurnDurationCompactEn: 'Turn 0s',
       currentTurnModelDurationSeconds: 0,
@@ -208,10 +208,13 @@ export class HudInstance {
     this.pinnedPopoverId = null;
     this.hoverEnterTimer = null;
     this.hoverLeaveTimer = null;
+    this.turnClockTimer = null;
+    this.turnClockAnchor = null;
     this.lastMetrics = createDefaultMetrics('default', 0);
   }
 
   resetToEmptyState() {
+    this.stopTurnClock();
     this.currentConvId = null;
     this.currentModelId = '';
     this.domIsStreaming = false;
@@ -273,6 +276,7 @@ export class HudInstance {
       this.childConversationIds = [];
     }
     if (changed) {
+      this.stopTurnClock();
       this.backendIsSubagentRunning = false;
       this.backendRunningSubagentCount = 0;
       this.backendActivityPhase = null;
@@ -688,7 +692,7 @@ export class HudInstance {
           <button type="button" class="capsule capsule-session" data-capsule-id="session" aria-haspopup="dialog" aria-expanded="false" aria-label="会话统计明细">
             <span class="hud-status-dot" aria-hidden="true"></span>
             <span class="capsule-text" id="hud-txt-session">
-              <span class="hud-turns">0 轮 </span><span class="hud-turn-dur">· 本轮 0s</span><span class="hud-speed"> · —</span><span class="hud-subagent-tag"></span>
+              <span class="hud-turns">0 轮 </span><span class="hud-turn-dur"><span class="hud-turn-dot">· </span><span class="hud-turn-text">本轮 0s</span></span><span class="hud-speed"> · —</span><span class="hud-subagent-tag"></span>
             </span>
           </button>
 
@@ -732,11 +736,11 @@ export class HudInstance {
           <div class="hud-popover-grid">
             <div class="hud-popover-row">
               <span class="hud-popover-label" id="lbl-model-dur">模型用时</span>
-              <span class="hud-popover-val" id="val-model-dur">0 秒</span>
+              <span class="hud-popover-val" id="val-model-dur">0秒</span>
             </div>
             <div class="hud-popover-row">
               <span class="hud-popover-label" id="lbl-tool-dur">工具调用用时</span>
-              <span class="hud-popover-val" id="val-tool-dur">0 秒</span>
+              <span class="hud-popover-val" id="val-tool-dur">0秒</span>
             </div>
             <div class="hud-popover-row">
               <span class="hud-popover-label" id="lbl-ttft">首 token 平均（TTFT）</span>
@@ -748,7 +752,7 @@ export class HudInstance {
             </div>
             <div class="hud-popover-row" id="row-turn-dur">
               <span class="hud-popover-label" id="lbl-turn-dur">本轮用时</span>
-              <span class="hud-popover-val" id="val-turn-dur">0.0 秒</span>
+              <span class="hud-popover-val" id="val-turn-dur">0秒</span>
             </div>
             <div class="hud-popover-row" id="row-subagent-status" hidden>
               <span class="hud-popover-label" id="lbl-subagent-status">子智能体状态</span>
@@ -976,6 +980,95 @@ export class HudInstance {
     }
   }
 
+  formatCompactTurnDuration(sec, isEn) {
+    const r = Math.max(0, Math.round(sec));
+    const p = isEn ? 'Turn ' : '本轮 ';
+    if (r < 60) return `${p}${r}s`;
+    const h = Math.floor(r / 3600);
+    const m = Math.floor((r % 3600) / 60);
+    if (h > 0) return `${p}${h}h${m > 0 ? `${m}m` : ''}`;
+    return `${p}${m}m`;
+  }
+
+  stopTurnClock() {
+    if (this.turnClockTimer) {
+      clearInterval(this.turnClockTimer);
+      this.turnClockTimer = null;
+    }
+    this.turnClockAnchor = null;
+  }
+
+  syncTurnClock(metrics, isWorkingNow) {
+    if (!isWorkingNow || !this.shadow) {
+      this.stopTurnClock();
+      return;
+    }
+    const s = metrics?.session || {};
+    const backendSec = isRawNumber(s.currentTurnDurationSeconds) ? Math.max(0, s.currentTurnDurationSeconds) : 0;
+    const turns = isRawNumber(s.turns) ? s.turns : 0;
+    const nowMs = Date.now();
+    if (!this.turnClockAnchor || turns > this.turnClockAnchor.turns) {
+      this.turnClockAnchor = { baseSeconds: backendSec, anchorMs: nowMs, turns, lastRenderedSec: Math.round(backendSec) };
+    } else {
+      const liveSec = this.turnClockAnchor.baseSeconds + (nowMs - this.turnClockAnchor.anchorMs) / 1000;
+      if (backendSec > liveSec + 0.5) {
+        this.turnClockAnchor = { baseSeconds: backendSec, anchorMs: nowMs, turns, lastRenderedSec: Math.round(backendSec) };
+      }
+    }
+    if (!this.turnClockTimer) {
+      this.turnClockTimer = setInterval(() => this.tickTurnClock(), 250);
+      if (typeof this.turnClockTimer?.unref === 'function') {
+        this.turnClockTimer.unref();
+      }
+    }
+  }
+
+  setTurnDurationText(label, showDot) {
+    if (!this.shadow) return;
+    const turnDurEl = this.shadow.querySelector('#hud-txt-session .hud-turn-dur');
+    if (!turnDurEl) return;
+    const resolvedShowDot =
+      showDot !== undefined
+        ? showDot
+        : Boolean(this.shadow.querySelector('#hud-txt-session .hud-turns')?.textContent);
+    const dotEl = this.shadow.querySelector('#hud-txt-session .hud-turn-dot');
+    const textEl = this.shadow.querySelector('#hud-txt-session .hud-turn-text');
+    if (dotEl && textEl) {
+      const nextDot = resolvedShowDot ? '· ' : '';
+      if (dotEl.textContent !== nextDot) {
+        dotEl.textContent = nextDot;
+      }
+      if (textEl.textContent !== label) {
+        textEl.textContent = label;
+      }
+      return;
+    }
+    const nextTurnText = resolvedShowDot ? `· ${label}` : label;
+    if (turnDurEl.textContent !== nextTurnText) {
+      turnDurEl.textContent = nextTurnText;
+    }
+  }
+
+  tickTurnClock() {
+    if (!this.turnClockAnchor || !this.shadow || !(this.isStreaming || this.isSubagentRunning)) {
+      this.stopTurnClock();
+      return;
+    }
+    const elapsedSec = this.turnClockAnchor.baseSeconds + (Date.now() - this.turnClockAnchor.anchorMs) / 1000;
+    const roundedSec = Math.max(0, Math.round(elapsedSec));
+    if (roundedSec === this.turnClockAnchor.lastRenderedSec) return;
+    this.turnClockAnchor.lastRenderedSec = roundedSec;
+    const isEn = this.languageMode === 'en';
+    this.setTurnDurationText(this.formatCompactTurnDuration(elapsedSec, isEn));
+    const valTurnDurEl = this.shadow.querySelector('#val-turn-dur');
+    if (valTurnDurEl) {
+      const nextCardText = durationText(elapsedSec, isEn ? 'en' : 'zh');
+      if (valTurnDurEl.textContent !== nextCardText) {
+        valTurnDurEl.textContent = nextCardText;
+      }
+    }
+  }
+
   applyMetricsToDom(metrics) {
     if (!this.shadow || !metrics) return;
     const isEn = this.languageMode === 'en';
@@ -1020,6 +1113,13 @@ export class HudInstance {
     const stepsPopCount = formatDetailCompactNumber(rawSteps);
     const activeSubagentsBar = formatCompactCount(activeSubagents);
     const isWorkingNow = Boolean(this.isStreaming || this.isSubagentRunning);
+    this.syncTurnClock(metrics, isWorkingNow);
+    const liveElapsedSec = isWorkingNow && this.turnClockAnchor
+      ? Math.max(
+          isRawNumber(s.currentTurnDurationSeconds) ? Math.max(0, s.currentTurnDurationSeconds) : 0,
+          this.turnClockAnchor.baseSeconds + (Date.now() - this.turnClockAnchor.anchorMs) / 1000
+        )
+      : (isRawNumber(s.currentTurnDurationSeconds) ? Math.max(0, s.currentTurnDurationSeconds) : null);
     const tpsText = (digits) =>
       s.outputTpsFormatted === '计算中...' ||
       (isWorkingNow && !(Number(s.samples?.timed) > 0) && s.outputTpsFormatted === '—')
@@ -1035,10 +1135,15 @@ export class HudInstance {
           : `${turnsBarCount} 轮 `;
     }
     if (turnDurEl) {
-      const compactDur = isEn
-        ? (s.currentTurnDurationCompactEn || (isRawNumber(s.currentTurnDurationSeconds) ? `Turn ${Math.round(s.currentTurnDurationSeconds)}s` : 'Turn 0s'))
-        : (s.currentTurnDurationCompactZh || (isRawNumber(s.currentTurnDurationSeconds) ? `本轮 ${Math.round(s.currentTurnDurationSeconds)}s` : '本轮 0s'));
-      turnDurEl.textContent = `· ${compactDur}`;
+      let compactDur;
+      if (isWorkingNow && liveElapsedSec !== null) {
+        compactDur = this.formatCompactTurnDuration(liveElapsedSec, isEn);
+      } else {
+        compactDur = isEn
+          ? (s.currentTurnDurationCompactEn || (liveElapsedSec !== null ? this.formatCompactTurnDuration(liveElapsedSec, true) : 'Turn 0s'))
+          : (s.currentTurnDurationCompactZh || (liveElapsedSec !== null ? this.formatCompactTurnDuration(liveElapsedSec, false) : '本轮 0s'));
+      }
+      this.setTurnDurationText(compactDur, Boolean(turnsEl?.textContent));
     }
     if (speedEl) speedEl.textContent = ` · ${tpsText(0)}`;
     if (subagentTagEl) {
@@ -1140,17 +1245,22 @@ export class HudInstance {
     setTxt('#lbl-tps', isEn ? 'Output Speed (TPS)' : '输出速度（TPS）');
     setTxt('#val-tps', tpsText(2));
     setTxt('#lbl-turn-dur', isEn ? 'Turn Duration' : '本轮用时');
+    const cardTurnSec = isWorkingNow && liveElapsedSec !== null ? liveElapsedSec : s.currentTurnDurationSeconds;
     const turnDurFormatted = isEn
-      ? (s.currentTurnDurationFormattedEn || (isRawNumber(s.currentTurnDurationSeconds) ? `${s.currentTurnDurationSeconds.toFixed(1)}s` : '—'))
-      : (s.currentTurnDurationFormatted || (isRawNumber(s.currentTurnDurationSeconds) ? `${s.currentTurnDurationSeconds.toFixed(1)} 秒` : '—'));
+      ? (isRawNumber(cardTurnSec) && (isWorkingNow || s.currentTurnDurationFormattedEn !== '—')
+        ? durationText(cardTurnSec, 'en')
+        : (s.currentTurnDurationFormattedEn || '—'))
+      : (isRawNumber(cardTurnSec) && (isWorkingNow || s.currentTurnDurationFormatted !== '—')
+        ? durationText(cardTurnSec, 'zh')
+        : (s.currentTurnDurationFormatted || '—'));
     setTxt('#val-turn-dur', turnDurFormatted);
-    const modelTurnSec = Number(s.currentTurnModelDurationSeconds || 0).toFixed(1);
-    const toolTurnSec = Number(s.currentTurnToolDurationSeconds || 0).toFixed(1);
+    const modelTurnSec = durationText(Number(s.currentTurnModelDurationSeconds || 0), isEn ? 'en' : 'zh');
+    const toolTurnSec = durationText(Number(s.currentTurnToolDurationSeconds || 0), isEn ? 'en' : 'zh');
     q('#val-turn-dur')?.setAttribute(
       'aria-description',
       isEn
-        ? `Model: ${modelTurnSec}s, Tools: ${toolTurnSec}s`
-        : `思考: ${modelTurnSec}s，工具: ${toolTurnSec}s`
+        ? `Model: ${modelTurnSec}, Tools: ${toolTurnSec}`
+        : `思考：${modelTurnSec}，工具：${toolTurnSec}`
     );
     const statusNoteEl = q('#hud-session-status-note');
     if (statusNoteEl) {
@@ -1395,7 +1505,7 @@ export class HudInstance {
         : (isEn ? 'No Data' : '暂无数据');
       for (const button of this.shadow.querySelectorAll('.capsule')) button.setAttribute('aria-label', isEn ? 'Data unavailable' : '数据暂不可用');
       setTxt('#hud-txt-session .hud-turns', '');
-      setTxt('#hud-txt-session .hud-turn-dur', sessionEmptyLabel);
+      this.setTurnDurationText(sessionEmptyLabel, false);
       setTxt('#hud-txt-session .hud-speed', '');
       for (const sel of ['#hud-txt-tokens .hud-tok-total','#hud-txt-tokens .hud-cache-val','#hud-txt-context','#pop-session-badge','#pop-tokens-badge','#val-cache-hit','#val-uncached-in','#val-cached-read','#val-output-tok','#val-model-dur','#val-tool-dur','#val-ttft','#val-tps','#val-turn-dur','#val-ctx-peak']) setTxt(sel, '—');
     }
@@ -1690,6 +1800,7 @@ export class HudInstance {
   }
 
   cleanupListeners() {
+    this.stopTurnClock();
     if (this.hoverEnterTimer) {
       clearTimeout(this.hoverEnterTimer);
       this.hoverEnterTimer = null;

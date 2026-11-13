@@ -59,6 +59,8 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     var usageManualRefreshPeriods = Set<String>()
     var usageFetchErrorsByPeriod: [String: String] = [:]
     private var usageWaitersByPeriod: [String: [(Result<[String: Any], Error>) -> Void]] = [:]
+    private var usageAutoHealAttemptsByPeriod: [String: Int] = [:]
+    private var usageAutoHealPendingPeriods = Set<String>()
     var singleAccountRefreshErrors: [String: String] = [:]
     private var popoverGlobalClickMonitor: Any?
     private var popoverLocalKeyMonitor: Any?
@@ -109,7 +111,7 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     private let stateWatchQueue = DispatchQueue(label: "local.gravitybox.state-watch", qos: .utility)
     private var stateWatchWorkItem: DispatchWorkItem?
     private var antigravityWasRunning = false
-    private var suppressLifecycleAutoQuitUntil: Date = .distantPast
+    private(set) var suppressLifecycleAutoQuitUntil: Date = .distantPast
     private var workspaceLaunchObserver: NSObjectProtocol?
     private var workspaceTerminateObserver: NSObjectProtocol?
     static var applicationChannel = "stable"
@@ -540,15 +542,18 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         }
     }
 
-    func fetchUsageSummary(period: String, force: Bool = false, allowCached: Bool = true, accountId: String? = nil, completion: ((Result<[String: Any], Error>) -> Void)? = nil) {
-        let effectiveAccountId = (accountId?.isEmpty == true) ? nil : accountId
-        let cacheKey = (effectiveAccountId == nil || effectiveAccountId == "all") ? period : "\(period)|\(effectiveAccountId!)"
+    func fetchUsageSummary(period: String, force: Bool = false, allowCached: Bool = true, completion: ((Result<[String: Any], Error>) -> Void)? = nil) {
+        let cacheKey = period
         if !force && allowCached,
            let cached = cachedUsageReportsByPeriod[cacheKey],
            let lastAt = usageLastFetchTimeByPeriod[cacheKey],
-           Date().timeIntervalSince(lastAt) < 15.0 {
+           Date().timeIntervalSince(lastAt) < 15.0,
+           ((cached["summary"] as? [String: Any])?["failedDatabasesCount"] as? Int ?? 0) == 0 {
             completion?(.success(cached))
             return
+        }
+        if force {
+            usageAutoHealAttemptsByPeriod[cacheKey] = 0
         }
         if let completion {
             usageWaitersByPeriod[cacheKey, default: []].append(completion)
@@ -570,14 +575,11 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         }
         var payload: [String: Any] = ["command": "usage_summary", "period": period]
         if force { payload["force"] = true }
-        if let acc = effectiveAccountId, acc != "all" {
-            payload["accountId"] = acc
-        }
         bridge.send(payload) { [weak self] response in
             guard let self else { return }
             if self.usagePendingForceByPeriod.remove(cacheKey) != nil {
                 self.usageInFlightByPeriod[cacheKey] = false
-                self.fetchUsageSummary(period: period, force: true, allowCached: false, accountId: effectiveAccountId)
+                self.fetchUsageSummary(period: period, force: true, allowCached: false)
                 return
             }
             self.usageInFlightByPeriod[cacheKey] = false
@@ -591,13 +593,29 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             case .success(let value):
                 self.usageFetchErrorsByPeriod[cacheKey] = nil
                 self.cachedUsageReportsByPeriod[cacheKey] = value
+                let failedCount = (value["summary"] as? [String: Any])?["failedDatabasesCount"] as? Int ?? 0
+                if failedCount == 0 {
+                    self.usageAutoHealAttemptsByPeriod[cacheKey] = 0
+                } else {
+                    #if !NATIVE_UI_TEST
+                    let attempts = self.usageAutoHealAttemptsByPeriod[cacheKey, default: 0]
+                    if attempts < 2 && !self.usageAutoHealPendingPeriods.contains(cacheKey) && self.reachable && !self.quitting {
+                        self.usageAutoHealAttemptsByPeriod[cacheKey] = attempts + 1
+                        self.usageAutoHealPendingPeriods.insert(cacheKey)
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+                            guard let self else { return }
+                            self.usageAutoHealPendingPeriods.remove(cacheKey)
+                            guard self.reachable && !self.quitting else { return }
+                            self.fetchUsageSummary(period: period, force: false, allowCached: false)
+                        }
+                    }
+                    #endif
+                }
                 if force && self.contentVisible && self.currentPage == 2 {
                     self.usagePage?.update(force: false)
                 }
             }
-            if effectiveAccountId == nil || effectiveAccountId == "all" {
-                self.menuPanelController?.onUsageReportUpdated(period: period, result: response)
-            }
+            self.menuPanelController?.onUsageReportUpdated(period: period, result: response)
             for waiter in waiters { waiter(response) }
         }
     }
@@ -710,15 +728,16 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             }
             let performSwitch = { [weak self] in
                 guard let self else { return }
+                self.suppressLifecycleAutoQuit(seconds: 60.0)
                 self.bridge.send(["command": "account_switch", "id": id, "target": "all", "autoRefreshToken": true]) { [weak self] response in
                     guard let self else { return }; self.accountSwitchInFlight = false
                     switch response {
                     case .failure(let error):
+                        if stableRunning { self.suppressLifecycleAutoQuit(seconds: 20.0); self.openAntigravity() }
                         self.showMessage("切换账号失败：" + error.localizedDescription, error: true)
-                        if stableRunning { self.openAntigravity() }
                     case .success(let value):
                         self.showMessage(value["message"] as? String ?? "已切换至账号：\(email)")
-                        if stableRunning { self.openAntigravity() }
+                        if stableRunning { self.suppressLifecycleAutoQuit(seconds: 20.0); self.openAntigravity() }
                         self.refresh(); self.accountsPage?.fetch(); self.overview?.fetch(); completion?()
                     }
                 }
@@ -792,8 +811,15 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             }
         }
     }
+    static func hasRunningAntigravityProcess(psOutput: String, appPaths: [String]) -> Bool {
+        psOutput.split(separator: "\n").contains { line in
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            return appPaths.contains { trimmed.hasPrefix($0 + "/Contents/") }
+        }
+    }
+
     func quitAntigravityAndWait(completion: @escaping (Bool) -> Void) {
-        suppressLifecycleAutoQuitUntil = Date().addingTimeInterval(15.0)
+        suppressLifecycleAutoQuit(seconds: 30.0)
         let allTargets = DesktopApplicationTarget.allTargets
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let appPaths = allTargets.map(\.path)
@@ -804,7 +830,7 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             func hasAntigravityProcesses() -> Bool {
                 let task = Process()
                 task.executableURL = URL(fileURLWithPath: "/bin/ps")
-                task.arguments = ["-ax", "-ww", "-o", "pid=,args="]
+                task.arguments = ["-ax", "-ww", "-o", "args="]
                 let pipe = Pipe()
                 task.standardOutput = pipe
                 task.standardError = FileHandle.nullDevice
@@ -813,18 +839,23 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
                     let data = pipe.fileHandleForReading.readDataToEndOfFile()
                     task.waitUntilExit()
                     let output = String(data: data, encoding: .utf8) ?? ""
-                    return output.split(separator: "\n").contains { line in
-                        appPaths.contains { line.contains($0 + "/Contents/") }
-                    }
+                    return Self.hasRunningAntigravityProcess(psOutput: output, appPaths: appPaths)
                 } catch { return false }
             }
             let start = Date()
-            while hasAntigravityProcesses() && Date().timeIntervalSince(start) < 8.5 {
+            var retriedTerminate = false
+            while hasAntigravityProcesses() && Date().timeIntervalSince(start) < 20.0 {
+                if !retriedTerminate && Date().timeIntervalSince(start) >= 2.0 {
+                    retriedTerminate = true
+                    for app in NSWorkspace.shared.runningApplications where DesktopApplicationTarget.matchesAny(app) && !app.isTerminated {
+                        _ = app.terminate()
+                    }
+                }
                 Thread.sleep(forTimeInterval: 0.15)
             }
             let exited = !hasAntigravityProcesses()
             DispatchQueue.main.async {
-                self?.suppressLifecycleAutoQuitUntil = Date().addingTimeInterval(8.0)
+                self?.suppressLifecycleAutoQuit(seconds: 20.0)
                 completion(exited)
             }
         }
@@ -1361,6 +1392,7 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         #if NATIVE_UI_TEST
         openedApplications += 1; return
         #else
+        suppressLifecycleAutoQuit(seconds: 20.0)
         let launchPath = DesktopApplicationTarget.preferredLaunchPath(fallbackChannel: Self.applicationChannel)
         NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: launchPath), configuration: NSWorkspace.OpenConfiguration()) { [weak self] _, error in if let error { DispatchQueue.main.async { self?.showMessage(error.localizedDescription, error: true) } } }
         #endif
@@ -1692,18 +1724,24 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         updateQuotaRefreshControls()
     }
     func showMessage(_ message: String, error: Bool = false) {
-                guard error, !message.isEmpty else { lastOperationError = nil; pageHost.setAccessibilityHelp(nil); return }
+        guard error, !message.isEmpty else { lastOperationError = nil; pageHost.setAccessibilityHelp(nil); return }
         lastOperationError = message
         pageHost.setAccessibilityHelp(message)
         #if !NATIVE_UI_TEST
-        guard let window, window.isVisible, presentedError == nil else { return }
-        var parent = window
-        while let sheet = parent.activeSheetWindow { parent = sheet }
+        guard presentedError == nil else { return }
         presentedError = message
         let alert = NSAlert(); alert.alertStyle = .warning
         alert.messageText = "操作未完成"; alert.informativeText = message
         alert.addButton(withTitle: "好")
-        alert.beginSheetModal(for: parent) { [weak self] _ in self?.presentedError = nil }
+        if let window, window.isVisible {
+            var parent = window
+            while let sheet = parent.activeSheetWindow { parent = sheet }
+            alert.beginSheetModal(for: parent) { [weak self] _ in self?.presentedError = nil }
+        } else {
+            NSApp.activate(ignoringOtherApps: true)
+            _ = alert.runModal()
+            presentedError = nil
+        }
         #endif
     }
     func watchState() {
@@ -1816,7 +1854,10 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         #endif
     }
     func suppressLifecycleAutoQuit(seconds: TimeInterval) {
-        suppressLifecycleAutoQuitUntil = Date().addingTimeInterval(seconds)
+        let candidate = Date().addingTimeInterval(seconds)
+        if candidate > suppressLifecycleAutoQuitUntil {
+            suppressLifecycleAutoQuitUntil = candidate
+        }
     }
     @objc func checkForUpdatesFromMenu() {
         if let active = window?.activeSheetWindow, active !== preferencesController?.updateSheet?.sheet {

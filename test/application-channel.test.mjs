@@ -19,7 +19,7 @@ import {
 } from '../dist/application-target.js';
 import { compareLayers } from '../dist/dictionary.js';
 import { UsageStatsManager } from '../dist/usage.js';
-import { AccountsManager, MockKeychainAdapter, cloudProviderContextFromCommand, syncAccountToKeychain, validCachedCloudProviderContext } from '../dist/accounts.js';
+import { AccountsManager, MockKeychainAdapter, cloudProviderContextFromCommand, validCachedCloudProviderContext } from '../dist/accounts.js';
 import { AccountSwitchService } from '../dist/account-switch.js';
 
 const temporary = async t => { const dir = await mkdtemp(join(tmpdir(), 'gb-channel-')); t.after(() => rm(dir, { recursive: true, force: true })); return dir; };

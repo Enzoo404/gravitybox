@@ -16,8 +16,13 @@
   "homepage": "https://github.com/Enzoo404/gravitybox#readme",
   "scripts": {
     "build": "node tools/clean-dist.mjs && tsc && node tools/copy-runtime.mjs",
-    "test": "npm run build && node --test test/*.test.mjs",
+    "test": "npm run build && node tools/sync-pricing-feed.mjs && node tools/run-tests.mjs",
+    "test:unit": "npm run build && node tools/run-tests.mjs",
+    "test:fast": "npm run build && node tools/run-tests.mjs --fast",
+    "test:native": "npm run build && node tools/run-tests.mjs --native",
+    "test:native-ui": "npm run build && node --test test/native-ui.mjs",
     "test:browser": "npm run build && node test/browser.mjs",
+    "check:swift": "node tools/native-build.mjs --typecheck",
     "start": "node dist/main.js",
     "package:mac": "npm run verify && node tools/package-mac.mjs",
     "package:mac:full": "npm run verify && node tools/package-mac.mjs",
@@ -49,7 +54,9 @@
     "verify:2.30.0": "node tools/verify.mjs --target-app-version 2.30.0",
     "package:mac:2.30.0": "npm run verify:2.30.0 && node tools/package-mac.mjs --target-app-version 2.30.0",
     "verify:2.31.0": "node tools/verify.mjs --target-app-version 2.31.0",
-    "package:mac:2.31.0": "npm run verify:2.31.0 && node tools/package-mac.mjs --target-app-version 2.31.0"
+    "package:mac:2.31.0": "npm run verify:2.31.0 && node tools/package-mac.mjs --target-app-version 2.31.0",
+    "verify:2.31.2": "node tools/verify.mjs --target-app-version 2.31.2",
+    "package:mac:2.31.2": "npm run verify:2.31.2 && node tools/package-mac.mjs --target-app-version 2.31.2"
   },
   "engines": {
     "node": ">=22.15.0 <23"

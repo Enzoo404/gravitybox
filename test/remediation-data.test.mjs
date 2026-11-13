@@ -39,6 +39,7 @@ test('F01: amount receipts never manufacture requests, tokens or dates; legacy e
   assert.equal(summary.all_time.totals.request_count, 0);
   assert.deepEqual(summary.historical_amount_receipts, { unmatchedCount: 1, unmatchedUsd: .05 });
   assert.equal(summary.availability, 'partial');
+  assert.equal(summary.has_error, false, 'legacy unmatched receipts alone must not set has_error when all DB reads succeed');
   assert.equal(existsSync(join(f.state, 'usage-ledger.json')), false);
 });
 
@@ -207,4 +208,60 @@ test('F04/F07: closed WAL database archives, clears and restores cleanly despite
   assert.equal((await usage.getUsageSummary(true)).all_time.totals.total_tokens, 150);
   await maintenance.restore(basename(cleared.restorePath));
   assert.equal((await usage.getUsageSummary(true)).all_time.totals.total_tokens, 150);
+});
+
+test('usage calibration: gemini-3.8-flash-control priced, event_aliases prevents double-counting, and largeLedger fallback never returns 0', async t => {
+  const f = await fixture(t);
+  const price = resolvePricingForTimestamp(DEFAULT_API_PRICES['gemini-3.8-flash-control'], Math.floor(Date.parse('2026-11-12T12:00:00Z') / 1000));
+  assert.deepEqual([price.input, price.output, price.cached], [0.75, 3.75, 0.075]);
+
+  const ts = Math.floor(Date.now() / 1000) - 60;
+  const legacyKey = 'f'.repeat(64);
+  const v2Key = 'e'.repeat(64);
+  const ledger = new UsageLedger(f.state);
+  // Seed legacy duplicate without db_file + upgraded v2 event linked via legacy_event_key
+  await ledger.save([
+    { event_key: legacyKey, model: 'gemini-3.8-flash-control', input_tokens: 1000, output_tokens: 500, cached_tokens: 0, total_tokens: 1500, timestamp_seconds: ts },
+    { event_key: v2Key, source_id: 'src-1', generation_index: 1, legacy_event_key: legacyKey, model: 'gemini-3.8-flash-control', input_tokens: 1000, output_tokens: 500, cached_tokens: 0, total_tokens: 1500, timestamp_seconds: ts },
+  ]);
+
+  const m = new UsageStatsManager({ stateDir: f.state, geminiDir: f.gemini });
+  const count50k = Array.from({ length: 50001 }, (_, i) => ({
+    event_key: (i + 100).toString(16).padStart(64, '0'),
+    source_id: 'pad',
+    generation_index: i + 100,
+    model: 'gemini-3.8-flash-control',
+    input_tokens: 1,
+    output_tokens: 0,
+    cached_tokens: 0,
+    total_tokens: 1,
+    timestamp_seconds: ts,
+  }));
+  for (let i = 0; i < count50k.length; i += 5000) await ledger.save(count50k.slice(i, i + 5000));
+
+  const s = await m.getUsageSummary(true);
+  assert.equal(s.all_time.totals.total_tokens, 50001 + 1500, 'event_aliases must deduplicate upgraded legacy rows without db_file');
+  assert.equal(s.unpriced_models, 0);
+  assert.equal(s.priced_models, 1);
+
+  // Verify same-email context update keeps observation floor across both consumer and enterprise_vertex
+  m.setCurrentAccountContext({ id: 'user@example.invalid', email: 'user@example.invalid', account_type: 'consumer' });
+  const beforeSec = m.accountContextObservedAtSec;
+  await new Promise(r => setTimeout(r, 1100));
+  m.setCurrentAccountContext({ id: 'uuid-1234', email: 'user@example.invalid', account_type: 'consumer' });
+  assert.equal(m.accountContextObservedAtSec, beforeSec);
+  m.setCurrentAccountContext({ id: 'uuid-1234', email: 'user@example.invalid', account_type: 'enterprise_vertex' });
+  assert.equal(m.accountContextObservedAtSec, beforeSec, 'same email switching between consumer and enterprise_vertex must keep observation floor');
+
+  // Verify persisted observation timeline survives manager restart for events after observation
+  const f2 = await fixture(t);
+  const firstMgr = new UsageStatsManager({ stateDir: f2.state, geminiDir: f2.gemini });
+  firstMgr.setCurrentAccountContext({ id: 'acc-live', email: 'live@example.invalid', account_type: 'enterprise_vertex' });
+  await new Promise(r => setTimeout(r, 1100));
+  const eventTs = Math.floor(Date.now() / 1000);
+  database(join(f2.conv, '33333333-3333-4333-8333-333333333333.db'), blob(100, 50, eventTs));
+  const secondMgr = new UsageStatsManager({ stateDir: f2.state, geminiDir: f2.gemini });
+  const resAfterRestart = await secondMgr.getUsageSummary(true, 'acc-live');
+  assert.equal(resAfterRestart.all_time.totals.total_tokens, 150);
+  assert.equal(resAfterRestart.all_time.totals.request_count, 1);
 });

@@ -586,7 +586,7 @@ final class DashboardPage: NSObject {
         return formatter
     }()
 
-    private func renderSummary(_ result: [String: Any], isStaleFallback: Bool) {
+    func renderSummary(_ result: [String: Any], isStaleFallback: Bool) {
         let signpost = PerformanceSignpost.begin("DashboardRenderSummary")
         defer { PerformanceSignpost.end("DashboardRenderSummary", signpost) }
         let formatter = Self.fetchTimeFormatter
@@ -761,9 +761,11 @@ final class DashboardPage: NSObject {
             let availability = usg["availability"] as? String ?? "complete"
             let unknown = intVal(usg, "unknownTimeRecords")
             let failed = intVal(usg, "failedDatabasesCount")
-            self.usageQualityLabel.stringValue = InterfaceText.usageScope(scanned: dbScanned, discovered: dbDiscovered, failed: failed, skipped: intVal(usg, "skippedLargeRecords"), unknown: unknown)
-            self.usageQualityLabel.isHidden = !hasErr && unknown == 0 && dbScanned == dbDiscovered && intVal(usg, "skippedLargeRecords") == 0 && availability == "complete"
-            self.usageQualityLabel.textColor = hasErr || unknown > 0 ? accessibleWarningColor() : .secondaryLabelColor
+            let skipped = intVal(usg, "skippedLargeRecords")
+            let showAuditScope = hasErr || failed > 0 || skipped > 0 || unknown > 0 || dbScanned < dbDiscovered || availability == "unavailable"
+            self.usageQualityLabel.stringValue = InterfaceText.usageScope(scanned: dbScanned, discovered: dbDiscovered, failed: failed, skipped: skipped, unknown: unknown)
+            self.usageQualityLabel.isHidden = !showAuditScope
+            self.usageQualityLabel.textColor = (hasErr || failed > 0 || skipped > 0 || unknown > 0) ? accessibleWarningColor() : .secondaryLabelColor
             if availability == "unavailable" {
                 self.renderUsageError("所选数据库均读取失败")
                 self.usageQualityLabel.stringValue = "统计暂不可用 · 前往用量页查看读取详情"

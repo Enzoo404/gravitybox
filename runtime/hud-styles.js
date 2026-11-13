@@ -318,7 +318,7 @@ export const HUD_STYLES_CSS = `
 }
 
 .hud-turn-dur {
-  color: var(--hud-text-primary);
+  color: inherit;
   font-feature-settings: 'tnum';
   font-variant-numeric: tabular-nums;
 }
@@ -415,6 +415,7 @@ export const HUD_STYLES_CSS = `
 }
 
 .hud-container.is-ultra-compact .hud-turns,
+.hud-container.is-ultra-compact .hud-turn-dot,
 .hud-container.is-ultra-compact .hud-speed,
 .hud-container.is-ultra-compact .hud-subagent-tag,
 .hud-container.is-ultra-compact .hud-tok-cache,
@@ -446,6 +447,7 @@ export const HUD_STYLES_CSS = `
     margin-right: 4px;
   }
   .hud-turns,
+  .hud-turn-dot,
   .hud-speed,
   .hud-subagent-tag,
   .hud-tok-cache,

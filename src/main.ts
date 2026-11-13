@@ -1,4 +1,4 @@
-import { ALLOWED_DATA_DIRECTORY_NAMES, allApplicationTargets, applicationChannel, savedApplicationChannel, applicationTarget, channelStateDirectory, detectInstalledChannels, type ApplicationChannel, type ApplicationTarget } from './application-target.js';
+import { ALLOWED_DATA_DIRECTORY_NAMES, applicationChannel, savedApplicationChannel, applicationTarget, channelStateDirectory, detectInstalledChannels, type ApplicationChannel, type ApplicationTarget } from './application-target.js';
 import { GoogleAccountLogin } from './account-oauth.js';
 import { AccountSwitchService } from './account-switch.js';
 import { AccountsManager, computeAccountRevision, projectAccountForIpc } from './accounts.js';
@@ -46,7 +46,7 @@ function formatResetTime(resetTime: number | null | undefined): string {
   return !isNaN(date.getTime()) ? `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}` : String(resetTime);
 }
 
-/** B13: 套餐枚举统一收口；空值/未知值一律回落到“待确认”，空串不得穿透 IPC。 */
+/** 套餐枚举统一收口；空值/未知值一律回落到“待确认”，空串不得穿透 IPC。 */
 export function normalizeSubscriptionTier(value: unknown): 'FREE' | 'PRO' | 'ULTRA' | '待确认' {
   if (typeof value !== 'string') return '待确认';
   const raw = value.trim();
@@ -62,15 +62,18 @@ export function normalizeSubscriptionTier(value: unknown): 'FREE' | 'PRO' | 'ULT
   return '待确认';
 }
 
-/** 合并本机实时语言服务配额与已保存账号配额：当实时探测未返回分组或套餐回退 FREE 时，保留已存分组与真实高级套餐。 */
+/** 合并本机实时语言服务配额与已保存账号配额：当实时探测未返回分组/已知配额（如企业 Vertex AI）或套餐回退 FREE 时，保留已存分组、模型配额与真实高级套餐。 */
 function mergeLiveQuotaWithSaved(savedQuota: any, liveQuota: any): any {
   if (!liveQuota) return savedQuota;
   if (!savedQuota) return liveQuota;
   const hasLiveGroups = Array.isArray(liveQuota.quota_groups) && liveQuota.quota_groups.length > 0;
+  const hasKnownLiveModels = Array.isArray(liveQuota.models) && liveQuota.models.some((m: any) => m?.percentage_known || m?.own_percentage_known);
+  const hasSavedModels = Array.isArray(savedQuota.models) && savedQuota.models.length > 0;
   return {
     ...savedQuota,
     ...liveQuota,
     quota_groups: hasLiveGroups ? liveQuota.quota_groups : (savedQuota.quota_groups ?? []),
+    models: (hasLiveGroups || hasKnownLiveModels || !hasSavedModels) ? liveQuota.models : savedQuota.models,
     stale_groups: liveQuota.stale_groups?.length ? liveQuota.stale_groups : savedQuota.stale_groups,
     subscription_tier: (liveQuota.subscription_tier && liveQuota.subscription_tier !== 'FREE')
       ? liveQuota.subscription_tier
@@ -104,7 +107,7 @@ export type DashboardAggregateDeps = {
 export type DashboardAggregate = { accounts: any; usage: any; accountsError: string; usageError: string };
 
 /**
- * B12: 总览聚合不再静默吞异常。accounts / usage 两段各自降级：
+ * 总览聚合降级处理：accounts / usage 两段各自独立降级，
  * 失败段返回 null + 脱敏短错误，成功段照常返回可用数据；整体仍由调用方回 ok:true。
  */
 export async function buildDashboardAggregate(deps: DashboardAggregateDeps): Promise<DashboardAggregate> {
@@ -158,7 +161,7 @@ export async function buildDashboardAggregate(deps: DashboardAggregateDeps): Pro
         // 同一载荷的顶层/模型/分组/英文描述倒计时统一由 reset_time 按同一参考时刻现算。
         const dashboardNowMs = Date.now();
         const quotaOverview = sourceAcc ? deps.getAccountQuotaOverview(sourceAcc, { nowMs: dashboardNowMs }) : null;
-        // B13: 有账号但套餐缺失/空串时回落到“待确认”；完全无账号时才保留 FREE 的既有语义。
+        // 有账号但套餐缺失/空串时回落到“待确认”；完全无账号时才保留 FREE 的既有语义。
         const activeTier = (!isLiveVerified && liveAccountEmail && !currentAccountId)
           ? normalizeSubscriptionTier((liveLs?.tier && !/starter|free/i.test(liveLs.tier)) ? liveLs.tier : (quotaOverview?.subscriptionTier || '待确认'))
           : (quotaOverview ? normalizeSubscriptionTier(quotaOverview.subscriptionTier) : 'FREE');
@@ -354,11 +357,14 @@ async function run() {
             name: a.name ?? null,
           })));
         }
-        const live = await accountsManager.probeLiveLanguageServer(globalThis.fetch, { forceRefresh: true }).catch(() => null);
+        const live = await probeLiveCached().catch(() => null);
         const observedEmail = typeof live?.email === 'string' && /^[^\s@]+@[^\s@]+$/.test(live.email) ? live.email : null;
         if (observedEmail) {
           const matched = listRes?.accounts.find(account => account.email.toLowerCase() === observedEmail.toLowerCase());
-          usageManager.setCurrentAccountContext({ id: matched?.id ?? observedEmail, email: observedEmail });
+          usageManager.setCurrentAccountContext({
+            id: matched?.id ?? observedEmail,
+            email: observedEmail,
+          });
         } else {
           usageManager.setCurrentAccountContext(undefined);
         }
@@ -366,6 +372,35 @@ async function run() {
       } catch {}
     })().finally(() => { accountSyncInFlight = null; });
     return accountSyncInFlight;
+  }
+  async function syncActiveOfficialModelsToUsageManager(): Promise<void> {
+    try {
+      const extractModelIds = (models: any): string[] => {
+        if (!Array.isArray(models)) return [];
+        return models
+          .filter(m => m && typeof m === 'object' && m.disabled !== true)
+          .map(m => String(m.model_id ?? m.name ?? '').trim())
+          .filter(Boolean);
+      };
+      const live = await probeLiveCached().catch(() => null);
+      const liveModels = extractModelIds(live?.quota?.models);
+      if (liveModels.length > 0) {
+        usageManager.setActiveOfficialModels(liveModels);
+        return;
+      }
+      const listRes = await accountsManager.listAccounts().catch(() => null);
+      if (listRes?.accounts?.length) {
+        const preferred = listRes.active_account
+          ?? [...listRes.accounts].sort((a, b) => (b.quota_last_updated ?? 0) - (a.quota_last_updated ?? 0))[0];
+        const saved = preferred ? await accountsManager.getAccount(preferred.id).catch(() => null) : null;
+        const savedModels = extractModelIds(saved?.quota?.models ?? preferred?.quota?.models);
+        if (savedModels.length > 0) {
+          usageManager.setActiveOfficialModels(savedModels);
+          return;
+        }
+      }
+      usageManager.setActiveOfficialModels(null);
+    } catch {}
   }
   try { const pricePrefs=JSON.parse(await readFile(join(stateDir,'pricing-preferences.json'),'utf8'));usageManager.setAutoRemotePricingSync(pricePrefs.enabled===true); } catch {}
   const idempotencyStore = new IdempotencyStore();
@@ -551,11 +586,18 @@ async function run() {
             if (parsed.includeAccounts === false) throw new Error('lightweight status');
             const listRes = await accountsManager.listAccounts();
             accountsRevision = listRes.revision;
+            usageManager.setKnownAccounts(listRes.accounts.map(a => ({ id: a.id, email: a.email, name: a.name ?? null })));
             const liveLs = await probeLiveCached().catch(() => null);
             const detectedEmail = liveLs?.email ?? await accountsManager.detectCurrentAntigravityEmail().catch(() => null);
             if (detectedEmail) {
               liveAccountEmail = liveLs?.email ?? null;
               const matchedSummary = listRes.accounts.find(a => a.email.toLowerCase() === detectedEmail.toLowerCase());
+              if (liveLs?.email) {
+                usageManager.setCurrentAccountContext({
+                  id: matchedSummary?.id ?? liveLs.email,
+                  email: liveLs.email,
+                });
+              }
               const matchedSaved = matchedSummary ? await accountsManager.getAccount(matchedSummary.id) : null;
               if (matchedSaved) {
                 activeAccountEmail = matchedSaved.email;
@@ -570,6 +612,7 @@ async function run() {
                 activeSubscriptionTier = normalizeSubscriptionTier((liveLs.tier && !/starter|free/i.test(liveLs.tier)) ? liveLs.tier : (q.subscriptionTier !== 'FREE' ? q.subscriptionTier : '待确认'));
               }
             } else if (listRes.active_account) {
+              usageManager.setCurrentAccountContext(undefined);
               activeAccountEmail = listRes.active_account.email;
               const q = accountsManager.getAccountQuotaOverview(listRes.active_account);
               activeFiveHourQuota = q.fiveHourRemaining;
@@ -602,6 +645,7 @@ async function run() {
         (async () => {
         const counts = store.layerCounts;
         const dictTotal = (counts?.builtin ?? 0) + (counts?.incremental ?? 0) + (counts?.personal ?? 0);
+        await syncActiveOfficialModelsToUsageManager();
         const [report, aggregate] = await Promise.all([
           controller.coverageReport(),
           buildDashboardAggregate({
@@ -611,10 +655,10 @@ async function run() {
             getAccount: (id: string) => accountsManager.getAccount(id),
             getAccountQuotaOverview: (account: any, options?: any) => accountsManager.getAccountQuotaOverview(account, options),
             getUsageSummary: () => usageManager.getUsageSummary(),
-            getPricingTable: () => usageManager.getPricingTable(),
+            getPricingTable: () => usageManager.getActivePricingTable(),
           }),
         ]);
-        /* B15：总览“已覆盖”与覆盖页同源（translated / 已抽取），并带上应用版本与生成时间。 */
+        /* 总览“已覆盖”与覆盖页同源（translated / 已抽取），并带上应用版本与生成时间。 */
         const coverageMetrics = coverageMetricSnapshot(report);
 
         reply({
@@ -638,7 +682,7 @@ async function run() {
           coverage: report ? coverageMetrics : null,
           accounts: aggregate.accounts,
           usage: aggregate.usage,
-          /* B12: 局部失败不再静默为 null；错误已脱敏，成功段仍返回可用数据，整体保持 ok:true。 */
+          /* 局部失败时错误已脱敏，成功段仍返回可用数据，整体保持 ok:true。 */
           accountsError: aggregate.accountsError,
           usageError: aggregate.usageError,
           revision: aggregate.accounts?.revision ?? '',
@@ -759,7 +803,6 @@ async function run() {
           const insidersAppPath = '/Applications/Antigravity - Insiders.app';
           const candidateTargets = [
             target,
-            ...allApplicationTargets().filter(t => t.appPath !== target.appPath),
             { appPath: insidersAppPath, executable: 'Electron' },
           ];
           try {
@@ -804,9 +847,9 @@ async function run() {
                 for (const sub of ['conversations', 'brain']) {
                   const subDir = join(geminiDir, entry.name, sub);
                   const files = await readdir(subDir).catch(() => [] as string[]);
-                  for (const f of files) {
-                    const st = await lstat(join(subDir, f)).catch(() => null);
-                    if (st && nowMs - st.mtimeMs < 15000) {
+                  for (let i = 0; i < files.length; i += 32) {
+                    const stats = await Promise.all(files.slice(i, i + 32).map(f => lstat(join(subDir, f)).catch(() => null)));
+                    if (stats.some(st => st && nowMs - st.mtimeMs < 15000)) {
                       hasRunningTask = true;
                       taskReason = '检测到活跃的 Agent 会话任务';
                       break;
@@ -855,16 +898,16 @@ async function run() {
           }
           if (command === 'usage_snapshot_release') { usageManager.releaseSnapshot(String(parsed.snapshotId ?? '')); reply({ ok: true }); return; }
           if (command === 'usage_events') {
-            await syncActiveAccountToUsageManager().catch(() => {});
             const period = ['today', '7d', '30d', 'all'].includes(String(parsed.period)) ? String(parsed.period) : 'today';
             const targetAccountId = typeof parsed.accountId === 'string' && parsed.accountId ? parsed.accountId : undefined;
+            if (targetAccountId) await syncActiveAccountToUsageManager().catch(() => {});
             reply({ ok: true, ...await usageManager.getUsageEvents(period, String(parsed.query ?? ''), Number(parsed.offset), Number(parsed.limit), typeof parsed.snapshotId === 'string' ? parsed.snapshotId : undefined, parsed.pinSnapshot === true, Boolean(parsed.force), targetAccountId) });
             return;
           }
           if (command === 'usage_summary') {
-            await syncActiveAccountToUsageManager().catch(() => {});
             const force = Boolean(parsed.force);
             const targetAccountId = typeof parsed.accountId === 'string' && parsed.accountId ? parsed.accountId : undefined;
+            if (targetAccountId) await syncActiveAccountToUsageManager().catch(() => {});
             const usage = await usageManager.getUsageSummary(force, targetAccountId);
             const periodKey = parsed.period === 'today' ? 'today' : parsed.period === '7d' ? 'last_7_days' : parsed.period === '30d' ? 'last_30_days' : 'all_time';
             const p = (usage as any)[periodKey] ?? usage.all_time;
@@ -935,7 +978,8 @@ async function run() {
             return;
           }
           if (command === 'api_pricing_get') {
-            const prices = await usageManager.getPricingTable();
+            await syncActiveOfficialModelsToUsageManager();
+            const prices = await usageManager.getActivePricingTable();
             reply({ ok: true, prices, pricingStatus: Object.fromEntries(Object.entries(prices).map(([k, v]) => [k, priceStatus(v)])) });
             return;
           }
@@ -948,8 +992,15 @@ async function run() {
           if(command==='api_pricing_revalue'){const mode = parsed.mode === 'unpriced_only' ? 'unpriced_only' : 'force_all';reply({ok:true,...await usageManager.revalueHistory(parsed.confirm===true, { mode, previewId: typeof parsed.previewId === 'string' ? parsed.previewId : undefined })});return;}
           if(command==='api_pricing_revalue_rollback'){reply({ok:true,...await usageManager.restoreRevalueHistory(String(parsed.previewId ?? ''),parsed.confirm===true)});return;}
           if(command==='pricing_sync_set'){await atomicJson(join(stateDir, 'pricing-preferences.json'), {enabled:parsed.enabled===true});usageManager.setAutoRemotePricingSync(parsed.enabled===true);reply({ok:true});return;}
-          if(command==='pricing_sync_status'){reply({ok:true,status:await usageManager.getPricingSyncStatus()});return;}
-          if(command==='pricing_sync_check'){const res=await usageManager.syncRemotePricing(parsed.feedUrl,true);reply({ok:res.synced,...res,status:await usageManager.getPricingSyncStatus()});return;}
+          if(command==='pricing_sync_status'){await syncActiveOfficialModelsToUsageManager();reply({ok:true,status:await usageManager.getPricingSyncStatus()});return;}
+          if(command==='pricing_sync_check'){
+            await syncActiveOfficialModelsToUsageManager();
+            const res=await usageManager.syncRemotePricing(parsed.feedUrl,true);
+            const prices=await usageManager.getActivePricingTable();
+            const pricingStatus=Object.fromEntries(Object.entries(prices).map(([k,v])=>[k,priceStatus(v)]));
+            reply({ok:res.synced,...res,prices,pricingStatus,status:await usageManager.getPricingSyncStatus()});
+            return;
+          }
           if(command==='hud_set'){const nextHud=parsed.enabled!==false;await saveRuntimePreferences({hudEnabled:nextHud});await controller.configureHud(nextHud);await writeChain;reply({ok:true,status:controller.snapshot()});return;}
           if(command==='maintenance_clear'){reply(await cacheMaintenance.clear(parsed.token, parsed.selectedNames));return;}
           if(command==='maintenance_restore'){reply(await cacheMaintenance.restore(parsed.snapshotId ?? parsed.id));return;}
