@@ -7,7 +7,9 @@ import { spawn } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import { ConversationMetricsEngine, buildConversationHudMetrics } from '../dist/hud.js';
 import { compactNumber, durationText } from '../dist/metric-format.js';
-import { UsageStatsManager, ProtobufWriter as W, resolvePricingForTimestamp } from '../dist/usage.js';
+import { UsageStatsManager } from '../dist/usage.js';
+import { ProtobufWriter as W } from '../dist/protobuf.js';
+import { resolvePricingForTimestamp } from '../dist/pricing.js';
 import { AntigravityHudManager } from '../runtime/hud-manager.js';
 import { HudInstance } from '../runtime/hud-instance.js';
 

@@ -181,7 +181,7 @@
 | **零外部遥测** | 严禁后台数据上报、行为分析或未授权网络请求；自动更新默认关闭，仅在用户明确启用时查询 GitHub Releases | 全局检索无任何第三方向外统计 SDK；`Configuration.swift:42` 中 `autoUpdateEnabled` 明确默认为 `false`；更新检查唯一端点为 GitHub 官方 Releases API | **CLEAN (合规)** |
 | **凭据与发布安全** | 严禁将账号信息、钥匙串索引打包入发布镜像；切号需用户确认，严禁后台强行 kill 宿主；异常快照设防 | 打包白名单严密隔离用户数据；`src/accounts.ts:2648` 异常配额快照限制保留 20 份上限；全局机密扫描（`sk-`、`AIza`、`ghp_` 等）0 项硬编码泄露 | **CLEAN (合规)** |
 | **非破坏性清理** | 仅清理无状态缓存；默认移入系统废纸篓并创建带时间戳的恢复快照，支持一键安全还原，绝不硬删除 | 清理目标严格为 `~/.Trash/GravityBox-缓存-<timestamp>`；支持原子补偿回滚；原位恢复遇同名冲突文件位移至 `displaced/` 保留，零物理硬删除 | **CLEAN (合规)** |
-| **零侵入 CDP 汉化** | 全程通过 CDP 运行时 DOM 热适配；严禁反编译或篡改官方 app；敏感 DOM 区域 AST/选择器级保护 | 强校验 Google 官方 `TeamIdentifier=EQHXZ8M8AV`；CDP `AGZH_WORLD` 内存注入；`PROTECTED` 选择器覆盖输入框、历史正文、Monaco、终端及 110+ 品牌词 | **CLEAN (合规)** |
+| **零侵入 CDP 汉化** | 全程通过 CDP 运行时 DOM 热适配；严禁反编译或篡改官方 app；敏感 DOM 区域 AST/选择器级保护 | 强校验 Google 官方 `TeamIdentifier=EQHXZ8M8AV`；CDP `GRAVITYBOX-localization-v1` 内存注入；`PROTECTED` 选择器覆盖输入框、历史正文、Monaco、终端及 110+ 品牌词 | **CLEAN (合规)** |
 | **双周期真实配额** | 严格区分 5 小时滚动与每周配额；严禁将每周额度冒充 5 小时额度，缺少真实窗口时标明“模型配额” | `MenuStatusCard.swift:601` switch 枚举缺省严格回退为“模型配额”；`mergeLiveQuotaWithSaved` 保护 PRO/ULTRA 套餐与配额分组不被语言服务暂态冲淡 | **CLEAN (合规)** |
 | **只读 SQLite 计量** | 基于只读 SQLite 事务分批投影分析会话，绝不阻塞宿主应用运行 | `DatabaseSync(path, { readOnly: true })` + `PRAGMA busy_timeout=1000; BEGIN;` + `ROLLBACK`；流式分批截取 token 字节流，内存占用严格可控 | **CLEAN (合规)** |
 

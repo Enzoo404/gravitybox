@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { AccountsManager } from "../dist/accounts.js";
 import { canonicalPayload, IdempotencyStore } from "../dist/ipc-idempotency.js";
 import { promisify } from "node:util";
-import { ProtobufWriter } from "../dist/usage.js";
+import { ProtobufWriter } from "../dist/protobuf.js";
 
 // Fixture state and hooks are scoped to this group; child cases run serially.
 describeContractGroup("undefined · audit-p1-backend", { concurrency: false }, async () => {

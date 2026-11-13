@@ -289,7 +289,7 @@ final class CachePage: NSObject {
         legendRow.alignment = .centerY
 
         let heroCard = group([heroTopRow, compositionBar, legendRow], inset: 13, spacing: 8)
-        heroCard.cornerRadius = 14
+        heroCard.cornerRadius = Design.Radius.card
         root.addArrangedSubview(heroCard)
 
         // 2. Clean Storage Governance Checklist Card (Zero row capsules, zero boxed row icons, zero mini bars)
@@ -312,7 +312,7 @@ final class CachePage: NSObject {
         breakdownContent.detachesHiddenViews = true
         for child in breakdownContent.arrangedSubviews { fillWidth(child, in: breakdownContent) }
         let breakdownCard = group([breakdownContent], inset: 13)
-        breakdownCard.cornerRadius = 14
+        breakdownCard.cornerRadius = Design.Radius.card
         root.addArrangedSubview(breakdownCard)
 
         // 3. Calm Single-Row Trash Recovery Card (Matches Settings row density)
@@ -333,7 +333,7 @@ final class CachePage: NSObject {
         recoveryRow.alignment = .centerY
 
         let recoveryCard = group([recoveryRow], inset: 12)
-        recoveryCard.cornerRadius = 14
+        recoveryCard.cornerRadius = Design.Radius.card
         root.addArrangedSubview(recoveryCard)
 
         feedbackLabel.isHidden = true
@@ -370,29 +370,7 @@ final class CachePage: NSObject {
     }
 
     private static func makeIconBadge(symbolName: String, tint: NSColor, neutral: Bool = false) -> NSBox {
-        let box = NSBox()
-        box.boxType = .custom
-        box.cornerRadius = 7.5
-        box.fillColor = NSColor(name: nil) { app in
-            let isDark = app.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            if neutral {
-                return isDark ? NSColor.white.withAlphaComponent(0.07) : NSColor.black.withAlphaComponent(0.045)
-            }
-            return tint.withAlphaComponent(isDark ? 0.18 : 0.10)
-        }
-        box.borderWidth = 0.5
-        box.borderColor = NSColor(name: nil) { app in
-            let isDark = app.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            if neutral {
-                return isDark ? NSColor.white.withAlphaComponent(0.12) : NSColor.black.withAlphaComponent(0.08)
-            }
-            return tint.withAlphaComponent(isDark ? 0.32 : 0.18)
-        }
-        box.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            box.widthAnchor.constraint(equalToConstant: 28),
-            box.heightAnchor.constraint(equalToConstant: 28)
-        ])
+        let box = tintedIconBox(size: 28, cornerRadius: 7.5, tint: tint, neutral: neutral)
         let iconView = symbol(symbolName, size: 13.5, color: tint)
         iconView.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 13.5, weight: .medium)
         box.addSubview(iconView)

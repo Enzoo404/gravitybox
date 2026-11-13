@@ -27,9 +27,7 @@ async function setupSandbox() {
   const root = await mkdtemp(join(tmpdir(), 'gb-switch-sec-'));
   const stateDir = join(root, 'state');
   const profile = join(root, 'profile');
-  const externalDir = join(root, 'external');
   await mkdir(join(profile, 'User', 'globalStorage'), { recursive: true });
-  await mkdir(join(externalDir, 'accounts'), { recursive: true });
 
   const db = join(profile, 'User', 'globalStorage', 'state.vscdb');
   await run('/usr/bin/sqlite3', [db, 'CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT);']);
@@ -40,7 +38,7 @@ async function setupSandbox() {
   const keychain = new MockKeychainAdapter();
   await keychain.writePassword('gemini', 'antigravity', 'initial-keychain-pass');
 
-  return { root, stateDir, profile, externalDir, db, manager, keychain };
+  return { root, stateDir, profile, db, manager, keychain };
 }
 
 test('S3 凭据安全: 切换历史归档自动脱敏，且最多保留最近 3 份历史快照', async () => {
@@ -51,21 +49,9 @@ test('S3 凭据安全: 切换历史归档自动脱敏，且最多保留最近 3 
     const acc3 = await env.manager.upsertAccount(makeAccount('acc3', 'user3@test.com'));
     const acc4 = await env.manager.upsertAccount(makeAccount('acc4', 'user4@test.com'));
 
-    // 设置 external switch 账号以允许切换
-    await writeFile(join(env.externalDir, 'accounts.json'), JSON.stringify({
-      accounts: [
-        { id: 'ext1', email: 'user1@test.com' },
-        { id: 'ext2', email: 'user2@test.com' },
-        { id: 'ext3', email: 'user3@test.com' },
-        { id: 'ext4', email: 'user4@test.com' },
-      ],
-      current_account_id: 'ext1',
-    }));
-
     const service = new AccountSwitchService(env.manager, {
       stateDir: env.stateDir,
       profile: env.profile,
-      externalDir: env.externalDir,
       keychain: env.keychain,
       isRunning: async () => false,
     });
@@ -97,15 +83,10 @@ test('S3 凭据安全: 撤销切号 (rollback) 完成后自动清除敏感凭据
   const env = await setupSandbox();
   try {
     const acc = await env.manager.upsertAccount(makeAccount('acc-rb', 'rollback-sec@test.com'));
-    await writeFile(join(env.externalDir, 'accounts.json'), JSON.stringify({
-      accounts: [{ id: 'ext-rb', email: 'rollback-sec@test.com' }],
-      current_account_id: 'ext-rb',
-    }));
 
     const service = new AccountSwitchService(env.manager, {
       stateDir: env.stateDir,
       profile: env.profile,
-      externalDir: env.externalDir,
       keychain: env.keychain,
       isRunning: async () => false,
     });
@@ -138,15 +119,10 @@ test('S3 切号事务: 从带有企业项目偏好的账号切换至个人账号
     await run('/usr/bin/sqlite3', [env.db, `INSERT INTO ItemTable VALUES('antigravityUnifiedStateSync.enterprisePreferences','old-enterprise-proj');`]);
 
     const personalAcc = await env.manager.upsertAccount(makeAccount('pers-1', 'myuser@example.test', { projectId: null }));
-    await writeFile(join(env.externalDir, 'accounts.json'), JSON.stringify({
-      accounts: [{ id: 'ext-p1', email: 'myuser@example.test' }],
-      current_account_id: 'ext-p1',
-    }));
 
     const service = new AccountSwitchService(env.manager, {
       stateDir: env.stateDir,
       profile: env.profile,
-      externalDir: env.externalDir,
       keychain: env.keychain,
       isRunning: async () => false,
     });
@@ -169,15 +145,10 @@ test('S3 凭据安全: 初始钥匙串为空 (null) 时切号与回滚无障碍�
     // 显式清除初始密码，模拟钥匙串原本为空的场景
     await env.keychain.deletePassword('gemini', 'antigravity');
     const acc = await env.manager.upsertAccount(makeAccount('acc-null-kc', 'null-kc@test.com'));
-    await writeFile(join(env.externalDir, 'accounts.json'), JSON.stringify({
-      accounts: [{ id: 'ext-null-kc', email: 'null-kc@test.com' }],
-      current_account_id: 'ext-null-kc',
-    }));
 
     const service = new AccountSwitchService(env.manager, {
       stateDir: env.stateDir,
       profile: env.profile,
-      externalDir: env.externalDir,
       keychain: env.keychain,
       isRunning: async () => false,
     });

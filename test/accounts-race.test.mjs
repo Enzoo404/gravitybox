@@ -131,26 +131,41 @@ test('S2 并发事务: setCurrentAccount 并发切换保证索引原子性与一
   }
 });
 
-test('S2 并发优化: syncFromExternalAgySwitch 并发调用由 Single-Flight 合并 (H8)', async () => {
-  const sandbox = await mkdtemp(join(tmpdir(), 'gb-race-sync-'));
-  const extDir = join(sandbox, 'ext');
-  await mkdir(join(extDir, 'accounts'), { recursive: true });
-
-  const extAcc = makeAccount('ext-1', 'external-singleflight@test.com');
-  await writeFile(join(extDir, 'accounts', 'ext-1.json'), JSON.stringify(extAcc));
-
+test('S2 并发优化: refreshQuota 并发调用由 Single-Flight 合并 (H8)', async () => {
+  const sandbox = await mkdtemp(join(tmpdir(), 'gb-race-refresh-'));
   try {
-    const mgr = new AccountsManager(sandbox, { externalDir: extDir });
-    // 同时发起 3 个并发外部同步调用
+    const mgr = new AccountsManager(sandbox, {
+      providerContext: { origin: 'https://daily-cloudcode-pa.googleapis.com', userAgent: 'antigravity/2.25.0', appVersion: '2.25.0' },
+    });
+    mgr.probeLiveLanguageServer = async () => null;
+    const acc = await mgr.upsertAccount({
+      email: 'refresh-singleflight@test.com',
+      refreshToken: 'tok-singleflight',
+      accessToken: 'access-singleflight',
+      expiresIn: 3600,
+    });
+    let quotaCalls = 0;
+    const fetchImpl = async url => {
+      await new Promise(r => setTimeout(r, 20));
+      if (url.includes('loadCodeAssist')) return Response.json({ cloudaicompanionProject: { id: 'proj-1' }, paidTier: { id: 'PRO' } });
+      if (url.includes('fetchAvailableModels')) return Response.json({ models: { 'gemini-test': { displayName: 'Gemini Test', quotaInfo: { remainingFraction: 0.7 } } } });
+      if (url.includes('retrieveUserQuotaSummary')) {
+        quotaCalls++;
+        return Response.json({ response: { groups: [{ displayName: 'Gemini', buckets: [{ bucketId: 'gemini-5h', window: '5h', remainingFraction: 0.7 }] }] } });
+      }
+      return Response.json({});
+    };
+
     const [r1, r2, r3] = await Promise.all([
-      mgr.syncFromExternalAgySwitch(),
-      mgr.syncFromExternalAgySwitch(),
-      mgr.syncFromExternalAgySwitch(),
+      mgr.refreshQuota(acc.id, fetchImpl),
+      mgr.refreshQuota(acc.id, fetchImpl),
+      mgr.refreshQuota(acc.id, fetchImpl),
     ]);
 
-    assert.equal(r1.imported + r2.imported + r3.imported >= 1, true);
-    const index = await mgr.loadIndex();
-    assert.equal(index.accounts.filter(a => a.email === 'external-singleflight@test.com').length, 1, '外部账号只能被导入一次');
+    assert.equal(quotaCalls, 1, '同账号并发 refreshQuota 应只发起一次上游配额请求');
+    assert.equal(r1.quota?.models[0]?.percentage, 70);
+    assert.equal(r2.quota?.models[0]?.percentage, 70);
+    assert.equal(r3.quota?.models[0]?.percentage, 70);
   } finally {
     await rm(sandbox, { recursive: true, force: true });
   }

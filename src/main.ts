@@ -1,8 +1,9 @@
 import { ALLOWED_DATA_DIRECTORY_NAMES, applicationChannel, savedApplicationChannel, applicationTarget, detectInstalledChannels, type ApplicationChannel, type ApplicationTarget } from './application-target.js';
 import { GoogleAccountLogin } from './account-oauth.js';
 import { AccountSwitchService } from './account-switch.js';
-import { AccountsManager, computeAccountRevision } from './accounts.js';
-import { UsageStatsManager, priceStatus } from './usage.js';
+import { AccountsManager, computeAccountRevision, projectAccountForIpc } from './accounts.js';
+import { UsageStatsManager } from './usage.js';
+import { priceStatus } from './pricing.js';
 import {
   normalizeSubscriptionTier,
   projectAccountForIpcNormalized as projectAccountNormalizedWithManager,
@@ -313,7 +314,7 @@ async function run() {
   const accountLogin = new GoogleAccountLogin((token, signal) => accountsManager.addAccountFromOAuth(token, signal));
   const homeDir = option('--home-dir', process.env.GRAVITYBOX_HOME_DIR || homedir())!;
   const appSupportDir = option('--app-support-dir', process.env.GRAVITYBOX_APP_SUPPORT_DIR || join(homedir(), 'Library', 'Application Support'))!;
-  const switchService = new AccountSwitchService(accountsManager, { stateDir, profile, channel, externalDir: join(homeDir, '.antigravity_tools') });
+  const switchService = new AccountSwitchService(accountsManager, { stateDir, profile, channel });
   const usageManager = new UsageStatsManager({ stateDir, geminiDir });
   cacheMaintenance.setHooks({
     archiveDatabases: dbPaths => usageManager.archiveDatabasesBeforeClear(dbPaths),
@@ -553,43 +554,44 @@ async function run() {
           let activeSubscriptionTier = 'FREE';
           let liveAccountEmail: string | null = null;
           let accountsRevision = '';
-          try {
-            if (parsed.includeAccounts === false) throw new Error('lightweight status');
-            const liveLs = await probeLiveCached().catch(() => null);
-            const listRes = await accountsManager.listAccounts({ liveEmailHint: liveLs?.email ?? null });
-            accountsRevision = listRes.revision;
-            usageManager.setKnownAccounts(listRes.accounts.map(a => ({ id: a.id, email: a.email, name: a.name ?? null })));
-            const detectedEmail = liveLs?.email ?? await accountsManager.detectCurrentAntigravityEmail({ liveEmailHint: null }).catch(() => null);
-            if (detectedEmail) {
-              liveAccountEmail = liveLs?.email ?? null;
-              const matchedSummary = listRes.accounts.find(a => a.email.toLowerCase() === detectedEmail.toLowerCase());
-              if (liveLs?.email) {
-                usageManager.setCurrentAccountContext({
-                  id: matchedSummary?.id ?? liveLs.email,
-                  email: liveLs.email,
-                });
-              }
-              const matchedSaved = matchedSummary ? await accountsManager.getAccount(matchedSummary.id) : null;
-              if (matchedSaved) {
-                activeAccountEmail = matchedSaved.email;
-                const liveQuotaForMatched = liveLs?.email?.toLowerCase() === detectedEmail.toLowerCase() ? liveLs.quota : null;
-                const q = accountsManager.getAccountQuotaOverview({ ...matchedSaved, quota: mergeLiveQuotaWithSaved(matchedSaved.quota, liveQuotaForMatched) });
+          if (parsed.includeAccounts !== false) {
+            try {
+              const liveLs = await probeLiveCached().catch(() => null);
+              const listRes = await accountsManager.listAccounts({ liveEmailHint: liveLs?.email ?? null });
+              accountsRevision = listRes.revision;
+              usageManager.setKnownAccounts(listRes.accounts.map(a => ({ id: a.id, email: a.email, name: a.name ?? null })));
+              const detectedEmail = liveLs?.email ?? await accountsManager.detectCurrentAntigravityEmail({ liveEmailHint: null }).catch(() => null);
+              if (detectedEmail) {
+                liveAccountEmail = liveLs?.email ?? null;
+                const matchedSummary = listRes.accounts.find(a => a.email.toLowerCase() === detectedEmail.toLowerCase());
+                if (liveLs?.email) {
+                  usageManager.setCurrentAccountContext({
+                    id: matchedSummary?.id ?? liveLs.email,
+                    email: liveLs.email,
+                  });
+                }
+                const matchedSaved = matchedSummary ? await accountsManager.getAccount(matchedSummary.id) : null;
+                if (matchedSaved) {
+                  activeAccountEmail = matchedSaved.email;
+                  const liveQuotaForMatched = liveLs?.email?.toLowerCase() === detectedEmail.toLowerCase() ? liveLs.quota : null;
+                  const q = accountsManager.getAccountQuotaOverview({ ...matchedSaved, quota: mergeLiveQuotaWithSaved(matchedSaved.quota, liveQuotaForMatched) });
+                  activeFiveHourQuota = q.fiveHourRemaining;
+                  activeSubscriptionTier = normalizeSubscriptionTier(q.subscriptionTier);
+                } else if (liveLs?.email) {
+                  activeAccountEmail = liveLs.email;
+                  const q = accountsManager.getAccountQuotaOverview({ quota: liveLs.quota });
+                  activeFiveHourQuota = q.fiveHourRemaining;
+                  activeSubscriptionTier = normalizeSubscriptionTier((liveLs.tier && !/starter|free/i.test(liveLs.tier)) ? liveLs.tier : (q.subscriptionTier !== 'FREE' ? q.subscriptionTier : '待确认'));
+                }
+              } else if (listRes.active_account) {
+                usageManager.setCurrentAccountContext(undefined);
+                activeAccountEmail = listRes.active_account.email;
+                const q = accountsManager.getAccountQuotaOverview(listRes.active_account);
                 activeFiveHourQuota = q.fiveHourRemaining;
                 activeSubscriptionTier = normalizeSubscriptionTier(q.subscriptionTier);
-              } else if (liveLs?.email) {
-                activeAccountEmail = liveLs.email;
-                const q = accountsManager.getAccountQuotaOverview({ quota: liveLs.quota });
-                activeFiveHourQuota = q.fiveHourRemaining;
-                activeSubscriptionTier = normalizeSubscriptionTier((liveLs.tier && !/starter|free/i.test(liveLs.tier)) ? liveLs.tier : (q.subscriptionTier !== 'FREE' ? q.subscriptionTier : '待确认'));
               }
-            } else if (listRes.active_account) {
-              usageManager.setCurrentAccountContext(undefined);
-              activeAccountEmail = listRes.active_account.email;
-              const q = accountsManager.getAccountQuotaOverview(listRes.active_account);
-              activeFiveHourQuota = q.fiveHourRemaining;
-              activeSubscriptionTier = normalizeSubscriptionTier(q.subscriptionTier);
-            }
-          } catch {}
+            } catch {}
+          }
           const all = tasks.list(), revision = tasks.revision;
           const installState = detectInstalledChannels(channel);
           if (parsed.includeTasks !== false && parsed.tasksSince !== revision) ipcMetrics.taskPayloadReplies++;
@@ -683,10 +685,11 @@ async function run() {
                 credentialReadiness: { state: 'needs_authorization', message: '请先核对账号数据文件' } }; }
               if (!saved) return { id: summary.id, email: summary.email, name: summary.name, disabled: true,
                 quota: null, quota_refresh_error: '账号文件不存在，请重新读取或保存当前账号' };
-              const projectedSaved = projectAccountForIpcNormalized(saved ?? summary);
+              const projectedSaved = projectAccountForIpc(saved ?? summary);
               const isLiveMatched = live?.email?.toLowerCase() === summary.email.toLowerCase() && live.quota;
               const acc = { ...summary, ...projectedSaved, ...(isLiveMatched ? { quota: mergeLiveQuotaWithSaved(projectedSaved?.quota ?? saved.quota, live.quota) } : {}) };
               const q = accountsManager.getAccountQuotaOverview(acc, { nowMs: listNowMs });
+              const contract = projectQuotaContract(q);
               const resetTimeStr = formatResetTime(q.resetTime);
               const rev = computeAccountRevision(acc);
               const lastUp = acc.quota_last_updated ?? acc.quota?.last_updated ?? 0;
@@ -723,7 +726,7 @@ async function run() {
                 resetCountdown: q.resetCountdown,
                 quotaGroups: q.quotaGroups,
                 models: q.models,
-                ...projectQuotaContract(q),
+                ...contract,
                 quota: {
                   ...(acc.quota ?? {}),
                   five_hour_remaining: q.fiveHourRemaining,
@@ -734,7 +737,7 @@ async function run() {
                   quota_groups: q.quotaGroups,
                   stale_groups: q.staleGroups,
                   models: q.models,
-                  ...projectQuotaContract(q),
+                  ...contract,
                 },
               };
             }));
@@ -962,9 +965,6 @@ async function run() {
           if(command==='account_recovery_clear'){if(parsed.confirm!==true)throw new Error('请先确认清除恢复凭据');reply({ok:true,...await switchService.clearRecovery(String(parsed.digest))});return;}
           if (command === 'account_switch_rollback') {
             reply({ ok: true, ...await switchService.rollback() }); return;
-          }
-          if (command === 'account_sync_external') {
-            reply({ ok: true, ...await accountsManager.syncFromExternalAgySwitch() }); return;
           }
           if (command === 'account_oauth_begin') { reply({ ok: true, ...await accountLogin.begin() }); return; }
           if (command === 'account_oauth_status') { reply({ ok: true, ...accountLogin.status(String(parsed.id || '')) }); return; }

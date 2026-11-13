@@ -5,7 +5,9 @@ import { mkdtemp, mkdir, writeFile, rm, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { UsageStatsManager, ProtobufWriter as W, matchPricingKeys, priceStatus, DEFAULT_API_PRICES, PRICING_METADATA, calculateEstimatedUsd } from "../dist/usage.js";
+import { UsageStatsManager } from "../dist/usage.js";
+import { ProtobufWriter as W } from "../dist/protobuf.js";
+import { matchPricingKeys, priceStatus, DEFAULT_API_PRICES, PRICING_METADATA, calculateEstimatedUsd } from "../dist/pricing.js";
 
 // Fixture state and hooks are scoped to this group; child cases run serially.
 describeContractGroup("费率与价格 · optimization-20261022", { concurrency: false }, async () => {

@@ -1,7 +1,7 @@
-import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { extractUiStrings, extractedKind, fetchBuffer, isEnglishSource } from './bundle.js';
+import { openAsarArchive, parseAsarHeaderPrefix, resolveAsarEntryRange, type AsarFileEntry } from './asar.js';
+import { extractUiStrings, extractedKind, fetchBuffer, isEnglishSource, normalizeText as normalize } from './bundle.js';
 import { decodeScopedKey } from './candidates.js';
 import type { Dictionary } from './dictionary.js';
 import type { DeepReport } from './deep-scan.js';
@@ -24,7 +24,6 @@ export type CoverageReport = {
   deep?: DeepReport;
   limits: string[];
 };
-const normalize = (s: string) => s.replace(/\s+/g, ' ').trim();
 
 /** 必须保留英文原样的专有名词单一事实源（供 coverage-report 与 merge-translations 共同引用）。 */
 export const PROPER_NOUNS: string[] = [
@@ -251,24 +250,56 @@ export async function rendererSources(origin: string, main: string, signal: Abor
   return { resources, skipped };
 }
 
+function collectNativeAsarEntries(
+  files: Record<string, AsarFileEntry> | undefined,
+  prefix = '',
+  out: Array<{ path: string; entry: AsarFileEntry }> = []
+): Array<{ path: string; entry: AsarFileEntry }> {
+  if (!files) return out;
+  for (const [name, entry] of Object.entries(files)) {
+    const path = prefix + name;
+    if (entry.files) {
+      if (!/^(?:node_modules|vendor)(?:\/|$)/.test(path)) {
+        collectNativeAsarEntries(entry.files, path + '/', out);
+      }
+      continue;
+    }
+    if (entry.link || entry.unpacked || !/^dist\/.+\.(?:js|html)$/.test(path) || /(?:^|\/)(?:__mocks__|test|tests)\/|\.test\./.test(path)) {
+      continue;
+    }
+    out.push({ path, entry });
+  }
+  return out;
+}
+
 // Read only this application's first-party ASAR files; do not execute or unpack into its bundle.
 export function asarSources(buffer: Buffer): CoverageSource[] {
-  if (buffer.length < 16) throw new Error('应用资源头不完整');
-  const headerSize = buffer.readUInt32LE(4), jsonSize = buffer.readUInt32LE(12);
-  if (jsonSize > 8_000_000 || jsonSize + 16 > buffer.length || headerSize + 8 > buffer.length) throw new Error('应用资源索引无效');
-  const header = JSON.parse(buffer.subarray(16,16+jsonSize).toString()); const result: CoverageSource[] = [];
-  const walk = (files: Record<string, any>, prefix = '') => {
-    for (const [name, entry] of Object.entries(files)) {
-      const path = prefix + name;
-      if (entry.files) { if (!/^(?:node_modules|vendor)(?:\/|$)/.test(path)) walk(entry.files, path + '/'); continue; }
-      if (entry.link || entry.unpacked || !/^dist\/.+\.(?:js|html)$/.test(path) || /(?:^|\/)(?:__mocks__|test|tests)\/|\.test\./.test(path)) continue;
-      const size = Number(entry.size), offset = Number(entry.offset) + headerSize + 8;
-      if (!Number.isSafeInteger(size) || !Number.isSafeInteger(offset) || size < 0 || size > 2_000_000 || offset < headerSize + 8 || offset + size > buffer.length) throw new Error('应用资源位置无效');
-      result.push({ id: `app.asar/${path}`, scope: 'native', source: buffer.subarray(offset,offset+size).toString() });
-    }
-  }; walk(header.files); return result;
+  const { jsonSize, dataOffset } = parseAsarHeaderPrefix(buffer, 8_000_000);
+  if (jsonSize + 16 > buffer.length || dataOffset > buffer.length) throw new Error('应用资源索引无效');
+  const header = JSON.parse(buffer.subarray(16, 16 + jsonSize).toString()) as { files?: Record<string, AsarFileEntry> };
+  const result: CoverageSource[] = [];
+  for (const { path, entry } of collectNativeAsarEntries(header.files)) {
+    const range = resolveAsarEntryRange(entry, dataOffset, 2_000_000, { fileSize: buffer.length });
+    if (!range) continue;
+    result.push({ id: `app.asar/${path}`, scope: 'native', source: buffer.subarray(range.offset, range.offset + range.size).toString() });
+  }
+  return result;
 }
-export async function nativeSources(appPath: string) { return asarSources(await readFile(join(appPath,'Contents/Resources/app.asar'))); }
+
+export async function nativeSources(appPath: string): Promise<CoverageSource[]> {
+  const archive = await openAsarArchive(join(appPath, 'Contents/Resources/app.asar'), 8_000_000);
+  try {
+    const result: CoverageSource[] = [];
+    for (const { path, entry } of collectNativeAsarEntries(archive.header.files)) {
+      const bytes = await archive.readEntryBuffer(entry, 2_000_000);
+      if (!bytes) continue;
+      result.push({ id: `app.asar/${path}`, scope: 'native', source: bytes.toString() });
+    }
+    return result;
+  } finally {
+    await archive.close();
+  }
+}
 
 export function createCoverage(sources: CoverageSource[], dictionary: Dictionary, appVersion: string, bundleSha256: string, skipped: CoverageReport['skipped'] = []): CoverageReport {
   const lookup = coverageTranslationLookup(dictionary);
@@ -283,8 +314,10 @@ export function createCoverage(sources: CoverageSource[], dictionary: Dictionary
     found.set(id, { key: item.key, translation, status: resource.scope === 'native' ? 'native' : status, sources: [resource.id], confidence: item.confidence, kind: item.kind, ...(resolved.scoped?{scoped:true}:{}) });
   }
   // Auditable built-in display strings delivered by the service, absent from the main bundle.
+  const foundKeys = new Set(Array.from(found.values(), e => e.key));
   for (const key of ['compact','teamwork-preview','Compact the conversation now (summarize history to free up the context window).','Weekly Limit Remaining','Five Hour Limit Remaining','Gemini Models','Claude and GPT models','Resets in {duration}']) {
-    if (![...found.values()].some(e => e.key === key)) {
+    if (!foundKeys.has(key)) {
+      foundKeys.add(key);
       const resolved = resolveCoverageTranslation(key, lookup);
       found.set('catalog:' + key,{ key, translation: resolved.translation, status: resolved.ambiguous?'review':classifyCoverage(key,resolved.translation), sources: ['reviewed-ui-catalog'], confidence: 'ui', ...(resolved.scoped?{scoped:true}:{}) });
     }

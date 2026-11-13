@@ -143,7 +143,6 @@ test('正式版 WCV 无 state.vscdb 时仍支持保存、切号和回滚', async
   const switchService = new AccountSwitchService(manager, {
     stateDir: state,
     profile: profileDir,
-    externalDir: join(state, 'external'),
     channel: 'stable',
     keychain,
     isRunning: async () => false,
@@ -178,7 +177,7 @@ test('旧共享恢复记录原样保留，不能被正式版自动回滚', async
     keychainBefore: 'synthetic-previous', keychainAfter: 'synthetic-next' });
   await writeFile(legacyPath, legacy);
   const service = new AccountSwitchService(manager, { stateDir: state, profile: state,
-    externalDir: join(state, 'external'), keychain: new MockKeychainAdapter(), isRunning: async () => false });
+    keychain: new MockKeychainAdapter(), isRunning: async () => false });
   assert.equal((await service.recoveryInfo()).available, false);
   await assert.rejects(service.rollback(), /ENOENT/);
   assert.equal(await readFile(legacyPath, 'utf8'), legacy);

@@ -1,8 +1,15 @@
 import type { LedgerEvent } from './usage-ledger.js';
 import type { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
-import type { ApiPricingEntry, TokenUsageSummary, TokenUsagePeriod, AvailableAccountUsageOption } from './usage.js';
-import { resolvePricingForTimestamp, matchPricingKeys, calculateEstimatedUsd, priceStatus, formatLocalDate } from './usage.js';
+import type { TokenUsageSummary, TokenUsagePeriod, AvailableAccountUsageOption } from './usage.js';
+import { resolvePricingForTimestamp, matchPricingKeys, calculateEstimatedUsd, priceStatus, type ApiPricingEntry } from './pricing.js';
+
+export function formatLocalDate(d: Date): string {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+}
 export interface AggregateOptions {
     prices: Record<string, ApiPricingEntry>;
     accountId?: string;

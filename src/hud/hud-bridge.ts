@@ -28,7 +28,7 @@ const ACTIVITY_GRACE_WINDOW_MS = 15_000;
 
 /**
  * CDP HUD 双向通信与多窗口/多分栏会话协调桥
- * 复用 Controller 维护的 PageSession CDP 通道与 AGZH-localization-v1 隔离世界
+ * 复用 Controller 维护的 PageSession CDP 通道与 GRAVITYBOX-localization-v1 隔离世界
  */
 export class CdpHudBridge implements ICdpHudBridge {
   private readonly engine: ConversationMetricsEngine;
@@ -74,7 +74,7 @@ export class CdpHudBridge implements ICdpHudBridge {
     targetId: string,
     cdp?: CDP,
     getContextId?: () => number | undefined,
-    worldName = 'AGZH-localization-v1'
+    worldName = 'GRAVITYBOX-localization-v1'
   ): Promise<void> {
     if (this.disposed || !cdp || !getContextId) return;
     this.targets.set(targetId, { cdp, getContextId });
@@ -116,7 +116,7 @@ export class CdpHudBridge implements ICdpHudBridge {
     } catch {
       return;
     }
-    if (!parsed || typeof parsed !== 'object' || !['SESSION_ATTACHED', 'SESSION_CHANGED', 'MODEL_CHANGED', 'STREAMING_CHANGED', 'REQUEST_REFRESH', 'SESSION_DETACHED'].includes(parsed.type)) return;
+    if (!parsed || typeof parsed !== 'object' || !['SESSION_ATTACHED', 'MODEL_CHANGED', 'STREAMING_CHANGED', 'REQUEST_REFRESH', 'SESSION_DETACHED'].includes(parsed.type)) return;
 
     for (const handler of this.clientEventHandlers) {
       try {
@@ -143,13 +143,7 @@ export class CdpHudBridge implements ICdpHudBridge {
     }
 
     const sameConv = existing && existing.conversationId === conversationId ? existing : undefined;
-    const minNextRevision = sameConv
-      ? sameConv.sessionRevision
-      : (existing?.sessionRevision ?? 0) + 1;
-    const nextRevision =
-      typeof parsed.sessionRevision === 'number' && parsed.sessionRevision > 0
-        ? parsed.sessionRevision
-        : minNextRevision;
+    const nextRevision = revision;
 
     const isSubagentRunning =
       typeof parsed.isSubagentRunning === 'boolean'
@@ -318,7 +312,7 @@ export class CdpHudBridge implements ICdpHudBridge {
     const serialized = JSON.stringify(metrics);
     try {
       await target.cdp.evaluate(
-        `(globalThis.__gravityboxUpdateHudMetrics ? globalThis.__gravityboxUpdateHudMetrics(${serialized}) : globalThis.__GRAVITYBOX_HUD_V1__?.dispatchMetrics?.(${serialized}))`,
+        `((m) => (globalThis.__gravityboxUpdateHudMetrics ? globalThis.__gravityboxUpdateHudMetrics(m) : globalThis.__GRAVITYBOX_HUD_V1__?.dispatchMetrics?.(m)))(${serialized})`,
         contextId
       );
       return true;

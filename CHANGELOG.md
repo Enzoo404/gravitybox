@@ -18,7 +18,7 @@
 - **Accounts / State Sync**：修复 `watchState()` 提前更新 `statusValue.accountsRevision` 与 `liveAccountEmail` 导致后续 `refresh()` 漏判账号变更的问题；修复运行未保存账号时清空已配置 `activeId` 导致主窗口与菜单栏状态分裂的问题；统一 `dashboard_summary`、`status` 与 `account_list` 对本机实时配额与已保存套餐/分组的合并逻辑。
 - **Accounts / Quota**：仅在存在未验证配额数据时归档 `quota-rejected` 快照并限制保留最近 20 份记录，避免定时的重复 403 错误导致目录无限堆积；在 `account_switch_preflight` 中同步检查 `Antigravity - Insiders.app` 运行态，与切号守卫保持一致。
 - **i18n / Controller**：修复后台界面包探测（`inspectBundleInBackground`）在用户暂停汉化后完成时把状态误覆写回 `connected` / `adaptive` 的竞态；为窗口本地服务尚未就绪的场景增加有界延迟重同步，并消除初次注入失败时的重复错误追加；为原生 `setTranslationEnabled` 增加请求代数保护，防止快速连续拨动开关时旧回调覆写新状态。
-- **i18n / Engine**：移除 `injectMicroPatch` 对 `[data-agzh-loc="1"], [data-agzh-ui]` 注入的硬编码 `font-family` 与 `-webkit-font-smoothing: antialiased` 覆盖规则，使所有汉化节点自然继承宿主的 `--font-family` 与 `--editor-font-family` 设置，并消除查看用量弹窗异步刷新前后因 GPU 合成图层切换导致的字体先粗后细跳变。
+- **i18n / Engine**：移除 `injectMicroPatch` 对 `[data-gravitybox-loc="1"], [data-gravitybox-ui]` 注入的硬编码 `font-family` 与 `-webkit-font-smoothing: antialiased` 覆盖规则，使所有汉化节点自然继承宿主的 `--font-family` 与 `--editor-font-family` 设置，并消除查看用量弹窗异步刷新前后因 GPU 合成图层切换导致的字体先粗后细跳变。
 - **SQLite / IPC**：为 `SqliteReadSnapshot` 空闲 Worker 池增加 `exit` 与 `error` 守护监听，并在 `close()` 时清理在途挂起请求与定时器，防止复用已退出 Worker 导致 8 秒超时或未捕获异常；完善 `IdempotencyStore` 超时回收与容量淘汰策略，补齐 `main.ts` 早期信号锁释放与 `dashboard_summary` 的 `skippedLargeRecords` 字段透传。
 - **UI / Layout**：修复菜单栏配额卡片将未标明周期的 Gemini 4 Argon 默认显示为“每周”的问题；统一主窗口账号页与菜单栏账号页中“已选记录”徽章为 `Design.inactivePill`；修复菜单栏配额空态按钮“前往账号页添加…”跳往总览页的问题；优化 880pt 最小窗口宽度下 `QuotaBarView` 间距与重置倒计时布局、弹窗头部副标题换行抗压缩及多级 Sheet 关闭顺序。
 

@@ -2,11 +2,9 @@
 
 GravityBox 的应用逻辑、原生 macOS AppKit 界面与扩展引擎均为本项目的独立实现。为了确保开源合规与清晰的版权隔离，特对项目中涉及的第三方材料、致谢与商标作如下声明：
 
-## 1. 上游词典致谢 (Upstream Acknowledgments)
+## 1. 词典架构与独立实现 (Dictionary Architecture)
 
-本项目的基础词典参考了开源项目 [qqxpee/antigravity2-cn](https://github.com/qqxpee/antigravity2-cn)，感谢原作者及社区贡献者。
-
-GravityBox 的词典加载架构（`dict/`，按功能与版本分层）、文案提取与动态插值模板引擎，以及基于官方发布包 SHA256 指纹的覆盖率校验均为本项目独立实现。
+GravityBox 的基础词典与版本分层词典结构（`dict/`，按功能与版本分层）、文案提取与动态插值模板引擎，以及基于官方发布包 SHA256 指纹的覆盖率校验均为 GravityBox 项目独立设计与维护实现。
 
 ## 2. 官方界面包与版权隔离 (Vendor Isolation)
 

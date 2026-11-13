@@ -31,7 +31,7 @@ import { readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { loadDictionaryLayers, compareLayers } from '../dist/dictionary.js';
-import { SUPPORTED_BUNDLES, extractUiStrings } from '../dist/bundle.js';
+import { SUPPORTED_BUNDLES, extractUiStrings, normalizeText as normalized } from '../dist/bundle.js';
 import { verifyExtractionSnapshot } from './extraction-snapshot.mjs';
 import { extractUiStringsAst } from './extract-ui-ast.mjs';
 import { PROPER_NOUNS } from '../dist/coverage.js';
@@ -168,8 +168,6 @@ export async function verifyBundleSource(uiStrings, { bundlePath, expectSha256, 
  *   - 已有通行中文译法的（URL→网址、Chrome DevTools→Chrome 开发者工具、GCP→Google Cloud Platform）
  *   - 中文里本就用缩写的（MCP/API 在中文句子中偶尔被完整展开，不算把专名译掉）
  */
-
-const normalized = text => text.replace(/\s+/g, ' ').trim();
 
 /** 读词典目录里所有层级（不含用户覆盖），供对账用。 */
 export async function loadDictLayers(dictDir = join(root, 'dict')) {

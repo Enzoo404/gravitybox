@@ -26,12 +26,12 @@
 import { readFile, mkdir } from 'node:fs/promises';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { SUPPORTED_BUNDLES, normalizeText as normalize } from '../dist/bundle.js';
 import { validateEntries } from '../dist/dictionary.js';
 import { atomicJson } from '../dist/files.js';
 import { preservedIdentifier, PROPER_NOUNS, GLOSSARY_RULES } from '../dist/coverage.js';
 export { PROPER_NOUNS, GLOSSARY_RULES };
 
-const normalize = (text) => text.replace(/\s+/g, ' ').trim();
 const placeholderTokens = (text) => (text.match(/\{\{?\w+\}?\}|\$\d+|%[sd]/g) ?? []).sort().join('|');
 const hasCJK = (text) => /[\u3400-\u9fff]/.test(text);
 

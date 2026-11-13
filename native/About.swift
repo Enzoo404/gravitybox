@@ -40,7 +40,7 @@ final class AboutPage: NSObject {
         // 1. Hero & Update Card
         let iconBox = NSBox()
         iconBox.boxType = .custom
-        iconBox.cornerRadius = 12
+        iconBox.cornerRadius = Design.Radius.medium
         iconBox.fillColor = Design.inactivePillFill
         iconBox.borderWidth = 0.75
         iconBox.borderColor = Design.inactivePillBorder
@@ -112,7 +112,7 @@ final class AboutPage: NSObject {
         let heroInner = vertical([heroTop, divider(), statusRow, divider(), autoRow], spacing: 11)
         for child in heroInner.arrangedSubviews { fillWidth(child, in: heroInner) }
         let heroCard = group([heroInner], inset: 14)
-        heroCard.cornerRadius = 14
+        heroCard.cornerRadius = Design.Radius.card
 
         // 2. System & Runtime Specs Card (Apple System Settings About style)
         let buildDisplay = resolvedBuildSummary()
@@ -163,7 +163,7 @@ final class AboutPage: NSObject {
         ], spacing: 9.5)
         for child in specsInner.arrangedSubviews { fillWidth(child, in: specsInner) }
         let specsCard = group([specsInner], inset: 14)
-        specsCard.cornerRadius = 14
+        specsCard.cornerRadius = Design.Radius.card
 
         // 3. Project & Privacy Principles Card
         let localOnlyPill = pillBadge("仅本机运行 · 零遥测", color: Design.inactivePill)
@@ -189,7 +189,7 @@ final class AboutPage: NSObject {
         ], spacing: 11)
         for child in projectInner.arrangedSubviews { fillWidth(child, in: projectInner) }
         let projectCard = group([projectInner], inset: 14)
-        projectCard.cornerRadius = 14
+        projectCard.cornerRadius = Design.Radius.card
 
         func sectionGroup(_ title: String, card: NSView) -> NSStackView {
             let hdr = text(title, size: 11.5, weight: .semibold, color: Design.secondary)

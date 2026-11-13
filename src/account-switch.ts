@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { atomicJson, atomicText } from './files.js';
 import { AccountsManager, SystemKeychainAdapter, syncAccountToKeychain, type KeychainAdapter, type Account } from './accounts.js';
-import { ProtobufWriter as Writer } from './usage.js';
+import { ProtobufWriter as Writer } from './protobuf.js';
 import { replaceTopicRow } from './account-state.js';
 export { replaceTopicRow } from './account-state.js';
 
@@ -158,7 +158,7 @@ export class AccountSwitchService {
   private journalPath: string;
   private target: ApplicationTarget;
   constructor(private manager: AccountsManager, private options: {
-    stateDir: string; profile: string; externalDir: string; keychain?: KeychainAdapter; channel?: ApplicationChannel; target?: ApplicationTarget;
+    stateDir: string; profile: string; keychain?: KeychainAdapter; channel?: ApplicationChannel; target?: ApplicationTarget;
     isRunning?: () => Promise<boolean>; // Isolated tests only; never accepted over IPC.
     databaseFactory?: (path: string) => DatabaseTransaction; // Fault injection, never accepted over IPC.
   }) {
@@ -174,7 +174,6 @@ export class AccountSwitchService {
     this.journalPath = join(this.options.stateDir, 'account-switch-journal-stable.json');
   }
 
-  private assertSupported() {}
   private get rollbackPath() { return this.journalPath + '.rollback.json'; }
   private database(path: string) { return this.options.databaseFactory?.(path) ?? new DatabaseTransaction(path); }
 
@@ -193,7 +192,7 @@ export class AccountSwitchService {
     try { await this.regular(this.rollbackPath); record = JSON.parse(await readFile(this.rollbackPath, 'utf8')); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'none'; throw error; }
     const dbPath = join(this.options.profile, 'User', 'globalStorage', 'state.vscdb');
-    const allowed = new Set([join(this.options.stateDir, 'accounts.json'), join(this.options.externalDir, 'accounts.json')]);
+    const allowed = new Set([join(this.options.stateDir, 'accounts.json')]);
     if (record.version !== 1 || !['prepared', 'committed'].includes(record.phase) || record.databasePath !== dbPath ||
         !Array.isArray(record.files) || record.files.some(f => !allowed.has(f.path) &&
           !(f.path.startsWith(join(this.options.stateDir, 'accounts') + '/') && /^[a-zA-Z0-9_-]+\.json$/.test(f.path.slice(join(this.options.stateDir, 'accounts').length + 1))))) {
@@ -320,7 +319,6 @@ export class AccountSwitchService {
     else await this.keychain.writePassword('gemini', 'antigravity', keychainBefore);
   }
   async switchAccount(id: string, target = 'all') {
-    this.assertSupported();
     if (!['all', 'app'].includes(target)) throw new Error('目前仅支持切换 Antigravity 桌面账号');
     return this.locked(async () => {
       await this.guardStopped();
@@ -350,14 +348,6 @@ export class AccountSwitchService {
         const snapshot = async (path: string, value: unknown) => { await this.regular(path); files.push({ path, before: await readFile(path, 'utf8'), after: JSON.stringify(value, null, 2) + '\n' }); };
         await snapshot(join(this.options.stateDir, 'accounts', `${id}.json`), accountNext);
         await snapshot(join(this.options.stateDir, 'accounts.json'), indexNext);
-        const externalIndex = join(this.options.externalDir, 'accounts.json');
-        try {
-          await this.regular(externalIndex);
-          const ext = JSON.parse(await readFile(externalIndex, 'utf8'));
-          const matching = ext.accounts?.filter((a: any) => String(a.email).toLowerCase() === acc.email.toLowerCase()) ?? [];
-          if (matching.length !== 1) throw new Error('AntiGravity Switch 中未找到唯一对应账号，请先同步账号');
-          await snapshot(externalIndex, { ...ext, current_account_id: matching[0].id });
-        } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
         const keychainBefore = await this.keychain.readPassword('gemini', 'antigravity');
         // Build the exact intended value with an in-memory adapter; no system write yet.
         let keychainAfter = '';
@@ -425,7 +415,6 @@ export class AccountSwitchService {
     });
   }
   async rollback() {
-    this.assertSupported();
     return this.locked(async () => {
       await this.guardStopped();
       if (await this.reconcileRollback() === 'rolled-back') return { message: '已完成上次中断的账号恢复；下次打开 Antigravity 后生效' };

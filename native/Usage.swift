@@ -1,5 +1,12 @@
 import Cocoa
 
+struct UsageQueryIdentity: Equatable {
+    let period: String
+
+    func matches(_ report: [String: Any]) -> Bool {
+        return report["period"] as? String == period
+    }
+}
 
 final class UsagePage: NSObject {
     unowned let app: Assistant
@@ -167,7 +174,7 @@ final class UsagePage: NSObject {
 
     private func metricsKeyForCurrentPeriod() -> String {
         let segIdx = max(0, min(periods.count - 1, periodSegment.selectedSegment))
-        return "\(periods[segIdx])_\(app.statusValue.taskRevision)_\(app.statusValue.working)_\(app.statusValue.enabled)_\(app.statusValue.mode)_\(app.reachable)"
+        return "\(periods[segIdx])_\(app.activeAccountId)_\(app.statusValue.activeAccountEmail)_\(app.reachable)"
     }
 
     private func formatCompactTokens(_ count: Int) -> String {

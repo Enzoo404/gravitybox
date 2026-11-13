@@ -25,8 +25,9 @@ test('当前五页原生布局、菜单完整身份、部分计价与真实切�
   t.diagnostic(`Swift compile ${(timings.compileMs/1000).toFixed(2)}s; AppKit checks and captures ${(timings.renderMs/1000).toFixed(2)}s`);
   await writeFile(join(output,'render.log'),result.stdout+result.stderr);
   const report=JSON.parse(await readFile(join(output,'native-ui-results.json')));
-  assert.equal(report.stableOnlySelectionPassed,true);assert.equal(report.nativeLayouts,30);assert.equal(report.menuCaptures,4);assert.equal(report.safeSwitchSharedFlowPassed,true);assert.equal(report.emailWidthPassed,true);
+  assert.equal(report.stableOnlySelectionPassed,true);assert.equal(report.nativeLayouts,30);assert.equal(report.menuCaptures,6);assert.equal(report.safeSwitchSharedFlowPassed,true);assert.equal(report.emailWidthPassed,true);
   for(const name of report.captures){const data=await readFile(join(output,name));assert.equal(data.subarray(1,4).toString(),'PNG');assert.ok(data.length>10000);}
+  for(const panel of ['light-menu-panel-usage.png','light-menu-panel-quota.png','light-menu-panel-accounts.png','dark-menu-panel-usage.png','dark-menu-panel-quota.png','dark-menu-panel-accounts.png']){const data=await readFile(join(output,panel));assert.equal(data.subarray(1,4).toString(),'PNG');assert.ok(data.length>10000);}
   for(const sheet of ['light-maintenance-sheet.png','dark-maintenance-sheet.png']){const data=await readFile(join(output,sheet));assert.equal(data.subarray(1,4).toString(),'PNG');assert.ok(data.length>10000);}
   await rm(join(output,'failure.log'),{force:true});
  }catch(error){await writeFile(join(output,'failure.log'),String(error.stdout??'')+String(error.stderr??'')+String(error));throw error;}

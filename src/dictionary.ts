@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { atomicJson } from './files.js';
-import { SUPPORTED_BUNDLES } from './bundle.js';
+import { SUPPORTED_BUNDLES, normalizeText as normalize } from './bundle.js';
 
 export type Dictionary = { schema: 1; version: string; entries: Record<string, string> };
 export type LayerCounts = { builtin:number; incremental:number; personal:number };
@@ -18,7 +18,6 @@ export type LayeredDictionary = {
   files: string[];
   sources: Record<string, string>;
 };
-const normalize = (text: string) => text.replace(/\s+/g, ' ').trim();
 
 const LEGACY_LAYER_FILE = /^增量补全-(\d+\.\d+\.\d+)\.json$/;
 
@@ -296,7 +295,7 @@ function layerRank(name: string): [number, number[], string] {
   const version = name.match(/^(\d+(?:\.\d+)*)\.json$/);
   if (version) {
     const parts = version[1]!.split('.').map(Number);
-    // Date-stamped releases (e.g. 1.0.20261103010115 in Insiders / WCV-Hub) rank above 2.x.y semver layers
+    // Date-stamped releases (e.g. 1.0.20261103010115) rank above 2.x.y semver layers
     if (parts.length >= 3 && parts[0] === 1 && parts[1] === 0 && (version[1]!.split('.')[2]?.length ?? 0) >= 8) {
       return [1, [9999, ...parts], name];
     }
@@ -349,7 +348,17 @@ export function dictionaryFromEntries(entries: Record<string, string>): Dictiona
  * 整份词典加载失败、新词一条都不生效"。覆盖是预期行为，因此这里允许覆盖，
  * 但把每一次覆盖记进 `overrode`，让覆盖率报告与发布门禁能核对，而不是静默吞掉。
  */
+const MAX_LAYER_FILE_CACHE_ENTRIES = 32;
 const layerFileCache = new Map<string, { mtimeMs: number; size: number; validated: Record<string, string> }>();
+
+function setLayerFileCacheEntry(filePath: string, entry: { mtimeMs: number; size: number; validated: Record<string, string> }): void {
+  layerFileCache.delete(filePath);
+  if (layerFileCache.size >= MAX_LAYER_FILE_CACHE_ENTRIES) {
+    const oldest = layerFileCache.keys().next().value;
+    if (oldest !== undefined) layerFileCache.delete(oldest);
+  }
+  layerFileCache.set(filePath, entry);
+}
 
 export async function loadDictionaryLayers(baseDir: string, userDir?: string,targetVersion?:string): Promise<LayeredDictionary> {
   const entries: Record<string, string> = Object.create(null);
@@ -368,6 +377,7 @@ export async function loadDictionaryLayers(baseDir: string, userDir?: string,tar
       const cached = layerFileCache.get(filePath);
       let validated: Record<string, string>;
       if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) {
+        setLayerFileCacheEntry(filePath, cached);
         validated = cached.validated;
       } else {
         const content = await readFile(filePath, 'utf8');
@@ -383,7 +393,7 @@ export async function loadDictionaryLayers(baseDir: string, userDir?: string,tar
           if (seen.has(key)) throw new Error(`${file} 存在重复 JSON 键`);
           seen.add(key);
         }
-        layerFileCache.set(filePath, { mtimeMs: st.mtimeMs, size: st.size, validated });
+        setLayerFileCacheEntry(filePath, { mtimeMs: st.mtimeMs, size: st.size, validated });
       }
       if(dir===userDir&&file==='个人覆盖.json')for(const key of Object.keys(validated))if(!decodeScopedKey(key))personalGlobals.add(key.toLowerCase());
       for (const [key, value] of Object.entries(validated)) {

@@ -203,6 +203,8 @@ export class HudInstance {
     this.resizeObserver = null;
     this.host = null;
     this.shadow = null;
+    this.domRefs = null;
+    this.domRefsShadow = null;
     this.targetComposer = null;
     this.activePopoverId = null;
     this.pinnedPopoverId = null;
@@ -616,7 +618,7 @@ export class HudInstance {
       ? '__gravitybox_hud_host__'
       : `__gravitybox_hud_host_${this.cascadeId}__`;
     this.host.className = '__gravitybox_hud_host__';
-    this.host.setAttribute('data-agzh-protect', 'true');
+    this.host.setAttribute('data-gravitybox-protect', 'true');
     this.host.setAttribute('data-gravitybox-hud', 'v2');
     this.host.setAttribute('data-cascade-id', this.cascadeId);
 
@@ -637,12 +639,14 @@ export class HudInstance {
 
     this.syncTheme();
 
+    this.resetDomCache();
     this.shadow = this.host.attachShadow({ mode: 'open' });
     const stylesCss =
       typeof HUD_STYLES_CSS === 'string'
         ? HUD_STYLES_CSS
         : globalThis.__GRAVITYBOX_HUD_STYLES_CSS__ || '';
     this.shadow.innerHTML = `<style>${stylesCss}</style>${this.buildHudHtml()}`;
+    this.domRefsShadow = this.shadow;
 
     if (typeof targetComposer.insertAdjacentElement === 'function') {
       targetComposer.insertAdjacentElement('afterend', this.host);
@@ -877,16 +881,51 @@ export class HudInstance {
     `;
   }
 
+  resetDomCache() {
+    this.domRefs = null;
+    this.domRefsShadow = null;
+  }
+
+  ensureDomCache() {
+    if (!this.shadow) {
+      this.resetDomCache();
+      return null;
+    }
+    if (this.domRefsShadow !== this.shadow || !this.domRefs) {
+      this.domRefsShadow = this.shadow;
+      this.domRefs = { bySelector: new Map(), capsules: null };
+    }
+    return this.domRefs;
+  }
+
+  getShadowEl(selector) {
+    const cache = this.ensureDomCache();
+    if (!cache) return null;
+    if (cache.bySelector.has(selector)) return cache.bySelector.get(selector);
+    const el = this.shadow.querySelector(selector);
+    if (el) cache.bySelector.set(selector, el);
+    return el;
+  }
+
+  getShadowCapsules() {
+    const cache = this.ensureDomCache();
+    if (!cache) return [];
+    if (!cache.capsules && typeof this.shadow.querySelectorAll === 'function') {
+      cache.capsules = [...this.shadow.querySelectorAll('.capsule')];
+    }
+    return cache.capsules || [];
+  }
+
   renderSkeleton() {
     if (!this.shadow) return;
-    const capsules = this.shadow.querySelectorAll('.capsule');
+    const capsules = this.getShadowCapsules();
     for (const c of capsules) {
       if (c.classList) {
         c.classList.add('is-skeleton');
         c.classList.remove('has-compaction');
       }
     }
-    const compBadgeEl = this.shadow.querySelector('#hud-compaction-badge');
+    const compBadgeEl = this.getShadowEl('#hud-compaction-badge');
     if (compBadgeEl) {
       compBadgeEl.textContent = '';
       compBadgeEl.setAttribute('hidden', '');
@@ -898,8 +937,8 @@ export class HudInstance {
   syncStreamingClass() {
     if (!this.shadow) return;
     const isEn = this.languageMode === 'en';
-    const sessionCapsule = this.shadow.querySelector('.capsule-session');
-    const sessionPopover = this.shadow.querySelector('#hud-popover-session');
+    const sessionCapsule = this.getShadowEl('.capsule-session');
+    const sessionPopover = this.getShadowEl('#hud-popover-session');
     const isWorking = Boolean(this.isStreaming || this.isSubagentRunning);
     const phase = isWorking ? (this.activityPhase === 'executing' ? 'executing' : 'generating') : 'idle';
     const applyPhaseClasses = (targetElement) => {
@@ -930,10 +969,10 @@ export class HudInstance {
     }
     applyPhaseClasses(sessionPopover);
 
-    const subagentTagEl = this.shadow.querySelector('#hud-txt-session .hud-subagent-tag');
-    const subagentRow = this.shadow.querySelector('#row-subagent-status');
-    const lblSubEl = this.shadow.querySelector('#lbl-subagent-status');
-    const valSubEl = this.shadow.querySelector('#val-subagent-status');
+    const subagentTagEl = this.getShadowEl('#hud-txt-session .hud-subagent-tag');
+    const subagentRow = this.getShadowEl('#row-subagent-status');
+    const lblSubEl = this.getShadowEl('#lbl-subagent-status');
+    const valSubEl = this.getShadowEl('#val-subagent-status');
     const activeSubagents = Math.max(1, this.runningSubagentCount || 1);
     const activeSubagentsBar = formatCompactCount(activeSubagents);
     const activeSubagentsPop = formatDetailCompactNumber(activeSubagents);
@@ -1071,14 +1110,14 @@ export class HudInstance {
 
   setTurnDurationText(label, showDot) {
     if (!this.shadow) return;
-    const turnDurEl = this.shadow.querySelector('#hud-txt-session .hud-turn-dur');
+    const turnDurEl = this.getShadowEl('#hud-txt-session .hud-turn-dur');
     if (!turnDurEl) return;
     const resolvedShowDot =
       showDot !== undefined
         ? showDot
-        : Boolean(this.shadow.querySelector('#hud-txt-session .hud-turns')?.textContent);
-    const dotEl = this.shadow.querySelector('#hud-txt-session .hud-turn-dot');
-    const textEl = this.shadow.querySelector('#hud-txt-session .hud-turn-text');
+        : Boolean(this.getShadowEl('#hud-txt-session .hud-turns')?.textContent);
+    const dotEl = this.getShadowEl('#hud-txt-session .hud-turn-dot');
+    const textEl = this.getShadowEl('#hud-txt-session .hud-turn-text');
     if (dotEl && textEl) {
       const nextDot = resolvedShowDot ? '· ' : '';
       if (dotEl.textContent !== nextDot) {
@@ -1109,7 +1148,7 @@ export class HudInstance {
     this.turnClockAnchor.lastRenderedSec = roundedSec;
     const isEn = this.languageMode === 'en';
     this.setTurnDurationText(this.formatCompactTurnDuration(elapsedSec, isEn));
-    const valTurnDurEl = this.shadow.querySelector('#val-turn-dur');
+    const valTurnDurEl = this.getShadowEl('#val-turn-dur');
     if (valTurnDurEl) {
       const nextCardText = durationText(elapsedSec, isEn ? 'en' : 'zh');
       if (valTurnDurEl.textContent !== nextCardText) {
@@ -1121,9 +1160,9 @@ export class HudInstance {
   applyMetricsToDom(metrics) {
     if (!this.shadow || !metrics) return;
     const isEn = this.languageMode === 'en';
-    const q = (sel) => this.shadow.querySelector(sel);
+    const q = (sel) => this.getShadowEl(sel);
 
-    const capsules = this.shadow.querySelectorAll('.capsule');
+    const capsules = this.getShadowCapsules();
     for (const c of capsules) {
       if (c.classList) c.classList.remove('is-skeleton');
     }
@@ -1568,7 +1607,7 @@ export class HudInstance {
         : isNewConv
         ? (isEn ? 'New Chat' : '新会话')
         : (isEn ? 'No Data' : '暂无数据');
-      for (const button of this.shadow.querySelectorAll('.capsule')) button.setAttribute('aria-label', isEn ? 'Data unavailable' : '数据暂不可用');
+      for (const button of capsules) button.setAttribute('aria-label', isEn ? 'Data unavailable' : '数据暂不可用');
       setTxt('#hud-txt-session .hud-turns', '');
       this.setTurnDurationText(sessionEmptyLabel, false);
       setTxt('#hud-txt-session .hud-speed', '');
@@ -1894,6 +1933,7 @@ export class HudInstance {
       this.host = null;
     }
     this.shadow = null;
+    this.resetDomCache();
     this.targetComposer = null;
     this.activePopoverId = null;
     this.pinnedPopoverId = null;

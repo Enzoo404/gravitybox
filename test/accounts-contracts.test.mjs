@@ -111,7 +111,7 @@ test('D02: 删除成功后残留文件不会在重启 reconcile 中复活（tomb
     const tombstones = JSON.parse(await readFile(join(dir, 'accounts-deleted.json'), 'utf8'));
     assert.ok(tombstones.some(item => item.id === acc.id), '删除成功后必须留下 tombstone');
 
-    // 模拟外部同步/崩溃残留把账号文件写回目录。
+    // 模拟崩溃残留把账号文件写回目录。
     await writeFile(join(dir, 'accounts', `${acc.id}.json`), JSON.stringify({
       id: acc.id, email: 'gone@example.test', name: 'resurrect', token: { access_token: 'x', refresh_token: 'y' },
       disabled: false, protected_models: [], validation_blocked: false, created_at: 1, last_used: 1,
@@ -124,41 +124,6 @@ test('D02: 删除成功后残留文件不会在重启 reconcile 中复活（tomb
     assert.equal(await restarted.getAccount(acc.id), null, '残留文件应被 tombstone 清理');
   } finally {
     await rm(dir, { recursive: true, force: true }).catch(() => {});
-  }
-});
-
-test('D02: 外部 AntiGravity Switch 同步不会重新导入已删除账号', async () => {
-  const dir = await sandbox('gb-p2-tombstone-ext-');
-  const externalDir = await sandbox('gb-p2-ext-src-');
-  try {
-    const now = Math.floor(Date.now() / 1000);
-    const extAccount = id => ({
-      id, email: 'external@example.test', name: 'Ext',
-      token: { access_token: 'ext-access', refresh_token: 'ext-refresh', expires_in: 3600, expiry_timestamp: now + 3600, token_type: 'Bearer' },
-      disabled: false, protected_models: [], validation_blocked: false, created_at: now, last_used: now,
-    });
-    await mkdir(join(externalDir, 'accounts'), { recursive: true });
-    const extId = 'externalacc01';
-    await writeFile(join(externalDir, 'accounts', `${extId}.json`), JSON.stringify(extAccount(extId)));
-
-    const mgr = new AccountsManager(dir, { externalDir });
-    await mgr.init(); // init 内部会做一次外部同步
-    await mgr.syncFromExternalAgySwitch();
-    const indexBefore = await mgr.loadIndex();
-    const imported = indexBefore.accounts.find(item => item.email === 'external@example.test');
-    assert.ok(imported);
-    await mgr.deleteAccount(imported.id);
-
-    // 外部账号文件仍在，重启后再次同步不得复活。
-    const restarted = new AccountsManager(dir, { externalDir });
-    await restarted.init();
-    const second = await restarted.syncFromExternalAgySwitch();
-    assert.equal(second.imported, 0, '已删除账号不得被外部同步重新导入');
-    const indexAfter = await restarted.loadIndex();
-    assert.equal(indexAfter.accounts.some(item => item.email === 'external@example.test'), false);
-  } finally {
-    await rm(dir, { recursive: true, force: true }).catch(() => {});
-    await rm(externalDir, { recursive: true, force: true }).catch(() => {});
   }
 });
 
@@ -281,7 +246,7 @@ test('两个账号写者保留各自更新，陈旧显式保存被拒绝，策�
 }));
 
 test('恢复材料有7天期限，待完成事务不可清理，完成记录经摘要确认后脱敏',()=>fixture(async dir=>{
- const manager=new AccountsManager(dir);await manager.init();const service=new AccountSwitchService(manager,{stateDir:dir,profile:dir,externalDir:dir,isRunning:async()=>false});
+ const manager=new AccountsManager(dir);await manager.init();const service=new AccountSwitchService(manager,{stateDir:dir,profile:dir,isRunning:async()=>false});
  const path=join(dir,'account-switch-journal-stable.json'), journal={version:1,status:'complete',at:new Date(Date.now()-10*86400000).toISOString(),before:{oauthToken:'synthetic-private-token'},after:{},files:[],keychainBefore:'synthetic-keychain',keychainAfter:''};await writeFile(path,JSON.stringify(journal));
  const info=await service.recoveryInfo();assert.equal(info.expired,true);assert.equal(info.pending,false);assert.equal(info.containsCredentials,true);assert.ok(!JSON.stringify(info).includes('synthetic-private-token'));await assert.rejects(service.rollback(),/超过 7 天/);await assert.rejects(service.clearRecovery('wrong'),/已变化/);assert.equal(JSON.parse(await readFile(path,'utf8')).before.oauthToken,'synthetic-private-token');
  await writeFile(path,JSON.stringify({...journal,status:'prepared'}));const pending=await service.recoveryInfo();assert.equal(pending.pending,true);assert.equal(pending.expired,false);await assert.rejects(service.clearRecovery(pending.digest),/不可清除/);
@@ -651,7 +616,7 @@ test('阶段3验证 - U10: 单账号 quota_refresh 精准刷新指定账号且�
     return acc;
   };
 
-  const res = await mgr.refreshQuota(acc1.id, globalThis.fetch, { skipSyncExternal: true });
+  const res = await mgr.refreshQuota(acc1.id, globalThis.fetch);
   assert.equal(refreshedId, acc1.id, '单账号刷新必须且只能针对请求的 account id');
   assert.equal(res.id, acc1.id);
   assert.equal(res.quota?.five_hour_remaining, 88);
@@ -692,7 +657,7 @@ test('阶段3验证 - B12: 账号切换 pending 状态识别与未完成流转',
 // Fixture state and hooks are scoped to this group; child cases run serially.
 describeContractGroup("账号与事务 · repair-20261023", { concurrency: false }, async () => {
 async function fixture(t){const d=await mkdtemp(join(tmpdir(),'gb-repair-'));t.after(async()=>{try{await rm(d,{recursive:true,force:true,maxRetries:10,retryDelay:50});}catch{}});return d;}
-test('恢复材料清除是终态，下一次切号可继续校验目标账号',async t=>{const d=await fixture(t);const s=new AccountSwitchService({runExclusive:fn=>fn(),getAccount:async()=>null},{stateDir:d,profile:d,externalDir:d,isRunning:async()=>false,keychain:{}});await writeFile(join(d,'account-switch-journal-stable.json'),JSON.stringify({status:'complete',at:new Date().toISOString(),before:{},after:{},files:[],keychainBefore:null,keychainAfter:''}));await s.clearRecovery((await s.recoveryInfo()).digest);await assert.rejects(s.switchAccount('synthetic'),/目标账号不可用/);assert.equal((await s.recoveryInfo()).pending,false);});
+test('恢复材料清除是终态，下一次切号可继续校验目标账号',async t=>{const d=await fixture(t);const s=new AccountSwitchService({runExclusive:fn=>fn(),getAccount:async()=>null},{stateDir:d,profile:d,isRunning:async()=>false,keychain:{}});await writeFile(join(d,'account-switch-journal-stable.json'),JSON.stringify({status:'complete',at:new Date().toISOString(),before:{},after:{},files:[],keychainBefore:null,keychainAfter:''}));await s.clearRecovery((await s.recoveryInfo()).digest);await assert.rejects(s.switchAccount('synthetic'),/目标账号不可用/);assert.equal((await s.recoveryInfo()).pending,false);});
 test('成对写入第二份失败时恢复原件，崩溃记录读前继续提交',async t=>{const d=await fixture(t),ad=join(d,'accounts');await mkdir(ad);const a=join(ad,'a.json'),i=join(d,'accounts.json');await writeFile(a,'old-a');await writeFile(i,'old-i');const original=fs.renameSync;fs.renameSync=(from,to)=>{if(to===i)throw Error('synthetic EIO');return original(from,to)};syncBuiltinESMExports();try{await assert.rejects(commitAccountAndIndex(a,{next:true},i,{next:true}));}finally{fs.renameSync=original;syncBuiltinESMExports()}assert.equal(await readFile(a,'utf8'),'old-a');assert.equal(await readFile(i,'utf8'),'old-i');await writeFile(i+'.commit.json',JSON.stringify({accountPath:a,indexPath:i,beforeAccount:'old-a',beforeIndex:'old-i',afterAccount:'next-a',afterIndex:'next-i'}));await recoverAccountCommit(i);assert.equal(await readFile(a,'utf8'),'next-a');assert.equal(await readFile(i,'utf8'),'next-i');});
 
 test('推荐使用已核实当前账号实时额度，跨邮箱实时值不得借用',async t=>{

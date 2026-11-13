@@ -25,7 +25,7 @@ extension NSWindow {
     }
 }
 
-final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDelegate, NSPopoverDelegate, NSTableViewDataSource, NSTableViewDelegate {
+final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPopoverDelegate, NSTableViewDataSource, NSTableViewDelegate {
     let names = ["总览", "账号", "用量", "设置", "关于"]
     var bridge: BackendBridge!
     var configuration: ConfigurationStore!
@@ -60,31 +60,30 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     var usagePendingForceByPeriod = Set<String>()
     var usageManualRefreshPeriods = Set<String>()
     var usageFetchErrorsByPeriod: [String: String] = [:]
-    private var usageWaitersByPeriod: [String: [(Result<[String: Any], Error>) -> Void]] = [:]
-    private var usageAutoHealAttemptsByPeriod: [String: Int] = [:]
-    private var usageAutoHealPendingPeriods = Set<String>()
+    var usageWaitersByPeriod: [String: [(Result<[String: Any], Error>) -> Void]] = [:]
+    var usageAutoHealAttemptsByPeriod: [String: Int] = [:]
+    var usageAutoHealPendingPeriods = Set<String>()
     var singleAccountRefreshErrors: [String: String] = [:]
     private var popoverGlobalClickMonitor: Any?
     private var popoverLocalKeyMonitor: Any?
-    private var quotaRefreshStartedAt: Date?
-    private var recoveryAttempts = 0
-    private var autoRestartAttempts = 0
-    private var lastAutoRestartAt = Date.distantPast
-    private var selfHealingPending = false
+    var quotaRefreshStartedAt: Date?
+    var recoveryAttempts = 0
+    var autoRestartAttempts = 0
+    var lastAutoRestartAt = Date.distantPast
+    var selfHealingPending = false
     /// 汉化开关命令在途时的乐观目标：期间到达的陈旧状态快照不得把开关弹回旧状态。
-    private var pendingTranslationTarget: Bool?
-    private var translationCommandGeneration = 0
-    private var pendingHudTarget: Bool?
-    private var hudCommandGeneration = 0
-    private var nextRecoveryAt = Date.distantPast
+    var pendingTranslationTarget: Bool?
+    var translationCommandGeneration = 0
+    var pendingHudTarget: Bool?
+    var hudCommandGeneration = 0
+    var nextRecoveryAt = Date.distantPast
     #if NATIVE_UI_TEST
     var confirmSwitchForTesting: ((String, @escaping (Bool) -> Void) -> Void)?
     #endif
-    private(set) var quotaRefreshing = false
+    var quotaRefreshing = false
     var refreshingAccountIds = Set<String>()
-    private(set) var quotaRefreshError: String?
+    var quotaRefreshError: String?
     var quotaRefreshPollTimer: Timer?
-    weak var openMenuQuotaView: MenuQuotaView?
     private var isBreathing = false
     private var breathingMotion: DesignMotion?
     var lastTaskRevision = -1
@@ -100,22 +99,22 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     var refreshInFlight = false
     var quitting = false
     let serviceFootnoteLabel = text("", size: 10.5, color: Design.secondary)
-    private var configSaveWorkItem: DispatchWorkItem?
+    var configSaveWorkItem: DispatchWorkItem?
     private(set) var lastOperationError: String?
     private var presentedError: String?
-    private var lastAccountListFetchAt: Date = .distantPast
-    private var lastFetchedAccountsRevision = ""
-    private var lastFetchedLiveEmail = ""
-    private var accountListInFlight = false
-    private var accountListPendingNotifyPage = false
-    private var accountListGeneration = 0
-    private var accountListWaiters: [(Result<[String: Any], Error>) -> Void] = []
+    var lastAccountListFetchAt: Date = .distantPast
+    var lastFetchedAccountsRevision = ""
+    var lastFetchedLiveEmail = ""
+    var accountListInFlight = false
+    var accountListPendingNotifyPage = false
+    var accountListGeneration = 0
+    var accountListWaiters: [(Result<[String: Any], Error>) -> Void] = []
     private let stateWatchQueue = DispatchQueue(label: "local.gravitybox.state-watch", qos: .utility)
     private var stateWatchWorkItem: DispatchWorkItem?
-    private var antigravityWasRunning = false
-    private(set) var suppressLifecycleAutoQuitUntil: Date = .distantPast
-    private var workspaceLaunchObserver: NSObjectProtocol?
-    private var workspaceTerminateObserver: NSObjectProtocol?
+    var antigravityWasRunning = false
+    var suppressLifecycleAutoQuitUntil: Date = .distantPast
+    var workspaceLaunchObserver: NSObjectProtocol?
+    var workspaceTerminateObserver: NSObjectProtocol?
     static var applicationChannel = "stable"
     static var selectedTarget: DesktopApplicationTarget { DesktopApplicationTarget(channel: applicationChannel) }
     var targetApplication: DesktopApplicationTarget { Self.selectedTarget }
@@ -231,65 +230,6 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         if action == #selector(NSWindow.performClose(_:)) || action == #selector(NSWindow.performMiniaturize(_:)) { entry.target = nil }
         menu.addItem(entry); return entry
     }
-    func menuNeedsUpdate(_ menu: NSMenu) {
-        menu.removeAllItems()
-        menu.showsStateColumn = true
-        let active = resolvedMenuAccount()
-        let email = active?["email"] as? String ?? statusValue.activeAccountEmail
-        let name = active?["name"] as? String ?? ""
-        let tier = AccountIdentity.normalizeTier(active?["subscription_tier"] as? String)
-        let accountSummary: String
-        if !reachable {
-            accountSummary = "正在等待本机服务…"
-        } else if email.isEmpty {
-            accountSummary = "尚未保存账号"
-        } else {
-            let display = name.isEmpty ? email : "\(name) · \(email)"
-            accountSummary = "\(display) · \(tier)"
-        }
-
-        // 1. 现代纵向矩形卡片：整合身份、套餐徽章、无胶囊极简刷新与各模型配额进度条
-        let quotaText = QuotaPresentation.menuQuotaText(active ?? [:])
-        let cardTitle = "\(accountSummary) · \(quotaText)"
-        let cardItem = NSMenuItem(title: cardTitle, action: nil, keyEquivalent: "")
-        let quotaView = MenuQuotaView(target: self, account: active, placeholder: accountSummary, enabled: reachable && pendingAccountTaskId == nil && !quotaRefreshing)
-        openMenuQuotaView = quotaView
-        cardItem.view = quotaView
-        menu.addItem(cardItem)
-
-        menu.addItem(.separator())
-
-        // 2. 界面汉化与对话状态栏
-        let toggle = add(menu, "界面汉化", #selector(toggleTranslation))
-        let stateSize = NSSize(width: 13, height: 13)
-        let checkmark = NSImage(systemSymbolName: "checkmark", accessibilityDescription: nil)
-        checkmark?.size = stateSize; checkmark?.isTemplate = true; toggle.onStateImage = checkmark
-        toggle.offStateImage = NSImage(size: stateSize, flipped: false) { _ in true }
-        toggle.state = statusValue.enabled ? NSControl.StateValue.on : NSControl.StateValue.off
-        toggle.isEnabled = reachable && statusValue.mode != "unsupported"
-
-        let hudToggle = add(menu, "对话状态栏", #selector(toggleHud))
-        hudToggle.onStateImage = checkmark
-        hudToggle.offStateImage = toggle.offStateImage
-        hudToggle.state = effectiveHudEnabled() ? NSControl.StateValue.on : NSControl.StateValue.off
-        hudToggle.isEnabled = reachable && statusValue.mode != "unsupported"
-
-        menu.addItem(.separator())
-
-        // 3. 打开 Antigravity
-        add(menu, "打开 \(targetApplication.label)", #selector(openAntigravity))
-
-        // 4. 打开 GravityBox
-        add(menu, "打开 GravityBox", #selector(showPanel), "o")
-
-        // 5. 设置…
-        add(menu, "设置…", #selector(showSettings), ",")
-
-        menu.addItem(.separator())
-
-        // 6. 退出 GravityBox
-        add(menu, "退出 GravityBox", #selector(quit), "q")
-    }
     func resolvedMenuAccount() -> [String:Any]? {
         if !statusValue.liveAccountEmail.isEmpty,
            let matched = cachedAccounts.first(where: { ($0["email"] as? String ?? "").caseInsensitiveCompare(statusValue.liveAccountEmail) == .orderedSame }) {
@@ -360,9 +300,6 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             }
         }
     }
-    func menuWillOpen(_ menu: NSMenu) { menuTracking = true; configureRefreshTimer(); refresh() }
-    func menuDidClose(_ menu: NSMenu) { if menuPopover?.isShown != true { menuTracking = false; configureRefreshTimer() } }
-
     func scheduleConfigurationSave() {
         configSaveWorkItem?.cancel()
         let saveWork = DispatchWorkItem { [weak self] in try? self?.configuration.save() }
@@ -539,382 +476,6 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         }
     }
 
-    func fetchUsageSummary(period: String, force: Bool = false, allowCached: Bool = true, completion: ((Result<[String: Any], Error>) -> Void)? = nil) {
-        let cacheKey = period
-        if !force && allowCached,
-           let cached = cachedUsageReportsByPeriod[cacheKey],
-           let lastAt = usageLastFetchTimeByPeriod[cacheKey],
-           Date().timeIntervalSince(lastAt) < 15.0,
-           ((cached["summary"] as? [String: Any])?["failedDatabasesCount"] as? Int ?? 0) == 0 {
-            completion?(.success(cached))
-            return
-        }
-        if force {
-            usageAutoHealAttemptsByPeriod[cacheKey] = 0
-        }
-        if let completion {
-            usageWaitersByPeriod[cacheKey, default: []].append(completion)
-        }
-        if usageInFlightByPeriod[cacheKey] == true {
-            if force {
-                usagePendingForceByPeriod.insert(cacheKey)
-                usageManualRefreshPeriods.insert(cacheKey)
-                menuPanelController?.syncHeaderRefreshState()
-            }
-            return
-        }
-        usageInFlightByPeriod[cacheKey] = true
-        let generation = (usageGenerationByPeriod[cacheKey] ?? 0) + 1
-        usageGenerationByPeriod[cacheKey] = generation
-        if force {
-            usageManualRefreshPeriods.insert(cacheKey)
-            menuPanelController?.syncHeaderRefreshState()
-        }
-        var payload: [String: Any] = ["command": "usage_summary", "period": period]
-        if force { payload["force"] = true }
-        bridge.send(payload) { [weak self] response in
-            guard let self else { return }
-            if self.usagePendingForceByPeriod.remove(cacheKey) != nil {
-                self.usageInFlightByPeriod[cacheKey] = false
-                self.fetchUsageSummary(period: period, force: true, allowCached: false)
-                return
-            }
-            self.usageInFlightByPeriod[cacheKey] = false
-            self.usageManualRefreshPeriods.remove(cacheKey)
-            guard generation >= (self.usageGenerationByPeriod[cacheKey] ?? 0) else { return }
-            self.usageLastFetchTimeByPeriod[cacheKey] = Date()
-            let waiters = self.usageWaitersByPeriod.removeValue(forKey: cacheKey) ?? []
-            switch response {
-            case .failure(let error):
-                self.usageFetchErrorsByPeriod[cacheKey] = error.localizedDescription
-            case .success(let value):
-                self.usageFetchErrorsByPeriod[cacheKey] = nil
-                self.cachedUsageReportsByPeriod[cacheKey] = value
-                let failedCount = (value["summary"] as? [String: Any])?["failedDatabasesCount"] as? Int ?? 0
-                if failedCount == 0 {
-                    self.usageAutoHealAttemptsByPeriod[cacheKey] = 0
-                } else {
-                    #if !NATIVE_UI_TEST
-                    let attempts = self.usageAutoHealAttemptsByPeriod[cacheKey, default: 0]
-                    if attempts < 2 && !self.usageAutoHealPendingPeriods.contains(cacheKey) && self.reachable && !self.quitting {
-                        self.usageAutoHealAttemptsByPeriod[cacheKey] = attempts + 1
-                        self.usageAutoHealPendingPeriods.insert(cacheKey)
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
-                            guard let self else { return }
-                            self.usageAutoHealPendingPeriods.remove(cacheKey)
-                            guard self.reachable && !self.quitting else { return }
-                            self.fetchUsageSummary(period: period, force: false, allowCached: false)
-                        }
-                    }
-                    #endif
-                }
-                if force && self.contentVisible && self.currentPage == 2 {
-                    self.usagePage?.update(force: false)
-                }
-            }
-            self.menuPanelController?.onUsageReportUpdated(period: period, result: response)
-            for waiter in waiters { waiter(response) }
-        }
-    }
-
-    func refreshSingleAccountQuota(id: String, completion: ((Result<[String: Any], Error>) -> Void)? = nil) {
-        guard !id.isEmpty, reachable, !refreshingAccountIds.contains(id) else { return }
-        singleAccountRefreshErrors[id] = nil
-        refreshingAccountIds.insert(id)
-        updateQuotaRefreshControls()
-        menuPanelController?.syncFromAssistant()
-        bridge.send(["command": "quota_refresh", "id": id]) { [weak self] response in
-            guard let self else { return }
-            self.refreshingAccountIds.remove(id)
-            switch response {
-            case .failure(let error):
-                self.singleAccountRefreshErrors[id] = error.localizedDescription
-            case .success:
-                self.singleAccountRefreshErrors[id] = nil
-                self.fetchAccountList(notifyPage: true)
-                self.overview?.update(force: true)
-            }
-            self.updateQuotaRefreshControls()
-            self.menuPanelController?.syncFromAssistant()
-            completion?(response)
-        }
-    }
-
-    func buildAccountSwitchMenu() -> NSMenu {
-        let switchSubmenu = NSMenu(title: "切换账号")
-        switchSubmenu.showsStateColumn = true
-        if cachedAccounts.isEmpty {
-            let emptyItem = NSMenuItem(title: "暂无可用账号快照", action: nil, keyEquivalent: "")
-            emptyItem.isEnabled = false
-            switchSubmenu.addItem(emptyItem)
-        } else {
-            let ordered = cachedAccounts.enumerated().sorted { lhs, rhs in
-                let l = lhs.element["id"] as? String == activeAccountId
-                let r = rhs.element["id"] as? String == activeAccountId
-                return l == r ? lhs.offset < rhs.offset : l
-            }.map(\.element)
-            for acc in ordered {
-                let id = acc["id"] as? String ?? ""
-                let accEmail = acc["email"] as? String ?? "未知账号"
-                let label = acc["name"] as? String ?? ""
-                let displayName = label.isEmpty ? accEmail : "\(label) · \(accEmail)"
-                let accTier = AccountIdentity.normalizeTier(acc["subscription_tier"] as? String)
-                let title = "\(displayName) · \(accTier) · \(QuotaPresentation.menuQuotaText(acc))"
-                let accItem = NSMenuItem(title: title, action: #selector(switchAccountFromMenu(_:)), keyEquivalent: "")
-                accItem.target = self
-                accItem.representedObject = id
-                accItem.isEnabled = acc["disabled"] as? Bool != true
-                if id == activeAccountId || (activeAccountId.isEmpty && accEmail == statusValue.activeAccountEmail) { accItem.state = .on }
-                switchSubmenu.addItem(accItem)
-            }
-        }
-        switchSubmenu.addItem(.separator())
-        let manageItem = NSMenuItem(title: "管理账号…", action: #selector(showAccountsFromMenuCard), keyEquivalent: "")
-        manageItem.target = self
-        switchSubmenu.addItem(manageItem)
-        return switchSubmenu
-    }
-    func popUpAccountSwitchMenu(from anchorView: NSView) {
-        let submenu = buildAccountSwitchMenu()
-        Design.popUpMenu(submenu, below: anchorView)
-    }
-    @objc func showAccountsFromMenuCard() {
-        closeMenuPopover()
-        item?.menu?.cancelTracking()
-        showAccounts()
-    }
-    func switchAccountByIdFromMenu(_ id: String) {
-        guard !id.isEmpty, id != activeAccountId else { return }
-        closeMenuPopover()
-        item?.menu?.cancelTracking()
-        let targetAccount = cachedAccounts.first(where: { ($0["id"] as? String) == id })
-        let email = targetAccount?["email"] as? String ?? ""
-        let name = targetAccount?["name"] as? String ?? ""
-        requestInteractiveAccountSwitch(id: id, email: email, name: name)
-    }
-    @objc func switchAccountFromMenu(_ sender: NSMenuItem) {
-        guard let id = sender.representedObject as? String else { return }
-        switchAccountByIdFromMenu(id)
-    }
-    func requestInteractiveAccountSwitch(id: String, email: String, name: String, completion: (() -> Void)? = nil) {
-        guard !id.isEmpty, !accountSwitchInFlight, reachable else { return }
-        accountSwitchInFlight = true
-        bridge.send(["command": "account_switch_preflight", "id": id]) { [weak self] result in
-            guard let self else { return }
-            guard case .success(let payload) = result else {
-                self.accountSwitchInFlight = false
-                if case .failure(let error) = result {
-                    self.showMessage("无法确认切换前置条件：" + error.localizedDescription, error: true)
-                }
-                return
-            }
-            let appRunning = payload["appRunning"] as? Bool == true
-            let insidersRunning = payload["insidersRunning"] as? Bool == true
-            let stableRunning = (payload["stableRunning"] as? Bool) ?? (appRunning && !insidersRunning)
-            let shouldQuitAndRelaunch = !insidersRunning && (stableRunning || Self.isAntigravityRunning())
-            let hasRunningTask = (payload["hasRunningTask"] as? Bool == true) || (payload["safe"] as? Bool == false)
-            let display: String
-            if !name.isEmpty && name.caseInsensitiveCompare(email) != .orderedSame && !email.isEmpty {
-                display = "\(name)（\(email)）"
-            } else {
-                display = email.isEmpty ? (name.isEmpty ? "目标账号" : name) : email
-            }
-            if insidersRunning {
-                self.accountSwitchInFlight = false
-                self.showMessage("检测到 Antigravity Insiders 正在运行，请先保存工作并手动退出后再切换账号", error: true)
-                return
-            }
-            let performSwitch = { [weak self] in
-                guard let self else { return }
-                self.suppressLifecycleAutoQuit(seconds: 75.0)
-                self.bridge.send(["command": "account_switch", "id": id, "target": "all", "autoRefreshToken": true]) { [weak self] response in
-                    guard let self else { return }; self.accountSwitchInFlight = false
-                    switch response {
-                    case .failure(let error):
-                        if shouldQuitAndRelaunch { self.relaunchAntigravityAfterSwitch() }
-                        self.showMessage("切换账号失败：" + error.localizedDescription, error: true)
-                    case .success(let value):
-                        self.showMessage(value["message"] as? String ?? "已切换至账号：\(email)")
-                        if shouldQuitAndRelaunch { self.relaunchAntigravityAfterSwitch() }
-                        self.refresh(); self.accountsPage?.fetch(); self.overview?.fetch(); completion?()
-                    }
-                }
-            }
-            let execute: (Bool) -> Void = { [weak self] confirmed in
-                guard let self else { return }
-                guard confirmed else { self.accountSwitchInFlight = false; return }
-                #if NATIVE_UI_TEST
-                if self.confirmSwitchForTesting != nil {
-                    self.bridge.send(["command": "account_switch", "id": id, "target": "all", "autoRefreshToken": true]) { [weak self] response in
-                        guard let self else { return }; self.accountSwitchInFlight = false
-                        if case .success(let value) = response {
-                            self.showMessage(value["message"] as? String ?? "已切换至账号：\(email)")
-                            if shouldQuitAndRelaunch { self.relaunchAntigravityAfterSwitch() }
-                            self.refresh(); self.accountsPage?.fetch(); self.overview?.fetch(); completion?()
-                        }
-                    }
-                    return
-                }
-                #endif
-                if shouldQuitAndRelaunch {
-                    self.quitAntigravityAndWait { [weak self] exited in
-                        guard let self else { return }
-                        guard exited else {
-                            self.accountSwitchInFlight = false
-                            self.showMessage("请先在 Antigravity 中保存工作并退出应用，再切换账号", error: true)
-                            return
-                        }
-                        performSwitch()
-                    }
-                } else {
-                    performSwitch()
-                }
-            }
-            if hasRunningTask {
-                #if NATIVE_UI_TEST
-                if self.confirmSwitchForTesting != nil {
-                    self.accountSwitchInFlight = false
-                    return
-                }
-                #endif
-                let busyAlert = NSAlert()
-                busyAlert.alertStyle = .warning
-                busyAlert.messageText = "切换至 \(display)？"
-                busyAlert.informativeText = "检测到 Antigravity 有正在运行的任务，现在切换会中断当前任务并重启应用。"
-                busyAlert.addButton(withTitle: "仍要切换")
-                busyAlert.addButton(withTitle: "取消")
-                if let window = self.window, window.isVisible, window.activeSheetWindow == nil {
-                    busyAlert.beginSheetModal(for: window) { execute($0 == .alertFirstButtonReturn) }
-                } else {
-                    NSApp.activate(ignoringOtherApps: true)
-                    execute(busyAlert.runModal() == .alertFirstButtonReturn)
-                }
-                return
-            }
-            #if NATIVE_UI_TEST
-            if let confirm = self.confirmSwitchForTesting { confirm(display, execute); return }
-            #endif
-            let alert = NSAlert()
-            alert.alertStyle = .informational
-            alert.messageText = "切换至 \(display)？"
-            alert.informativeText = appRunning
-                ? "当前无正在运行的任务，确认后将自动重启 Antigravity 生效。"
-                : "Antigravity 当前未运行，确认后将直接切换账号。"
-            alert.addButton(withTitle: "确认切换")
-            alert.addButton(withTitle: "取消")
-            if let window = self.window, window.isVisible, window.activeSheetWindow == nil {
-                alert.beginSheetModal(for: window) { execute($0 == .alertFirstButtonReturn) }
-            } else {
-                NSApp.activate(ignoringOtherApps: true)
-                execute(alert.runModal() == .alertFirstButtonReturn)
-            }
-        }
-    }
-    static func hasRunningAntigravityProcess(psOutput: String, appPaths: [String]) -> Bool {
-        psOutput.split(separator: "\n").contains { line in
-            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-            return appPaths.contains { trimmed.hasPrefix($0 + "/Contents/") }
-        }
-    }
-
-    func quitAntigravityAndWait(completion: @escaping (Bool) -> Void) {
-        suppressLifecycleAutoQuit(seconds: 30.0)
-        let allTargets = DesktopApplicationTarget.allTargets
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let appPaths = allTargets.map(\.path)
-            let runningApps = NSWorkspace.shared.runningApplications.filter {
-                DesktopApplicationTarget.matchesAny($0)
-            }
-            for app in runningApps { _ = app.terminate() }
-            func hasAntigravityProcesses() -> Bool {
-                let task = Process()
-                task.executableURL = URL(fileURLWithPath: "/bin/ps")
-                task.arguments = ["-ax", "-ww", "-o", "args="]
-                let pipe = Pipe()
-                task.standardOutput = pipe
-                task.standardError = FileHandle.nullDevice
-                do {
-                    try task.run()
-                    let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                    task.waitUntilExit()
-                    let output = String(data: data, encoding: .utf8) ?? ""
-                    return Self.hasRunningAntigravityProcess(psOutput: output, appPaths: appPaths)
-                } catch { return false }
-            }
-            func hasWorkspaceRegistration() -> Bool {
-                DispatchQueue.main.sync {
-                    Self.isAntigravityRunning()
-                }
-            }
-            let start = Date()
-            var retriedTerminate = false
-            while (hasAntigravityProcesses() || hasWorkspaceRegistration()) && Date().timeIntervalSince(start) < 20.0 {
-                if !retriedTerminate && Date().timeIntervalSince(start) >= 2.0 {
-                    retriedTerminate = true
-                    DispatchQueue.main.async {
-                        for app in NSWorkspace.shared.runningApplications where DesktopApplicationTarget.matchesAny(app) && !app.isTerminated {
-                            _ = app.terminate()
-                        }
-                    }
-                }
-                Thread.sleep(forTimeInterval: 0.15)
-            }
-            let exited = !hasAntigravityProcesses() && !hasWorkspaceRegistration()
-            if exited {
-                // Allow LaunchServices / runningboardd to finish unregistering the terminated app job before relaunch.
-                Thread.sleep(forTimeInterval: 0.3)
-            }
-            DispatchQueue.main.async {
-                self?.suppressLifecycleAutoQuit(seconds: 20.0)
-                completion(exited)
-            }
-        }
-    }
-
-    @objc func refreshAccountQuotas() {
-        guard !quotaRefreshing, pendingAccountTaskId == nil, reachable else { return }
-        quotaRefreshing = true; quotaRefreshStartedAt = Date(); quotaRefreshError = nil; updateQuotaRefreshControls()
-        let poll = Timer(timeInterval: 0.75, repeats: true) { [weak self] _ in self?.refresh(taskPollOnly: true) }
-        quotaRefreshPollTimer?.invalidate(); quotaRefreshPollTimer = poll
-        RunLoop.main.add(poll, forMode: .common); RunLoop.main.add(poll, forMode: .eventTracking)
-        bridge.send(["command": "quota_refresh_start"]) { [weak self] response in
-            guard let self else { return }
-            switch response {
-            case .failure(let error): self.finishQuotaRefresh(error: error.localizedDescription)
-            case .success(let value):
-                guard let id = value["taskId"] as? String, !id.isEmpty else { self.finishQuotaRefresh(error: "未取得刷新任务，请重试"); return }
-                self.pendingAccountTaskId = id; self.refresh(taskPollOnly: true)
-            }
-        }
-    }
-    func finishQuotaRefresh(error: String?) {
-        quotaRefreshing = false; quotaRefreshStartedAt = nil; pendingAccountTaskId = nil; quotaRefreshError = error; quotaRefreshPollTimer?.invalidate(); quotaRefreshPollTimer = nil
-        updateQuotaRefreshControls(); fetchAccountList(notifyPage: true); overview?.update(force: true)
-    }
-    func updateQuotaRefreshControls() {
-        let available = reachable && (pendingAccountTaskId == nil || quotaRefreshing)
-        func apply(_ view: NSView) {
-            if let control = view as? QuotaRefreshButton {
-                let cid = control.identifier?.rawValue ?? ""
-                control.applyGlobalRefreshState(globalBusy: quotaRefreshing, available: available, error: quotaRefreshError, cardBusy: refreshingAccountIds.contains(cid))
-            }
-            for child in view.subviews { apply(child) }
-        }
-        apply(pageHost)
-        updateStatusItemState()
-        if menuTracking || menuPopover?.isShown == true {
-            menuPanelController?.syncFromAssistant()
-        }
-        guard menuTracking else { return }
-        openMenuQuotaView?.refreshButton.setRefreshState(busy: quotaRefreshing, available: available, error: quotaRefreshError)
-        let active = resolvedMenuAccount()
-        if let active {
-            openMenuQuotaView?.label.stringValue = QuotaPresentation.menuQuotaText(active)
-            openMenuQuotaView?.apply(account: active, available: available)
-        } else {
-            openMenuQuotaView?.apply(account: nil, placeholder: reachable ? "尚未保存账号" : "正在等待本机服务…", available: available)
-        }
-    }
     @objc func showPanel() {
         if window == nil {
             let window = NSWindow(
@@ -1112,11 +673,7 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     }
     private func navIconColor(selected: Bool) -> NSColor {
         guard selected else { return Design.secondary }
-        return NSColor(name: nil) { app in
-            app.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-                ? NSColor(srgbRed: 0.38, green: 0.68, blue: 1.0, alpha: 1.0)
-                : Design.blue
-        }
+        return Design.activeBlue
     }
     private func navSymbolName(row: Int, selected: Bool) -> String {
         let outline = ["square.grid.2x2", "person.2", "chart.bar", "gearshape", "info.circle"][row]
@@ -1317,316 +874,11 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
     @objc func showUsage() { selectPage(2) }
     @objc func showSettings() { selectPage(3) }
     @objc func showAbout() { selectPage(4) }
-    func setTranslationEnabled(_ enable: Bool) {
-        let previousStatus = statusValue
-        translationCommandGeneration += 1
-        let commandGen = translationCommandGeneration
-        pendingTranslationTarget = enable
-        statusValue.translationEnabled = enable
-        if enable {
-            if statusValue.mode == "paused" || statusValue.mode == "error" || statusValue.mode == "starting" {
-                statusValue.mode = "waiting"
-            }
-        } else {
-            statusValue.mode = "paused"
-        }
-        updateViews()
-        let sendCommand = { [weak self] in
-            guard let self, commandGen == self.translationCommandGeneration else { return }
-            self.bridge.send(["command": enable ? "resume" : "pause"]) { [weak self] result in
-                DispatchQueue.main.async {
-                    guard let self, commandGen == self.translationCommandGeneration else { return }
-                    self.pendingTranslationTarget = nil
-                    switch result {
-                    case .success(let value):
-                        if let raw = value["status"] as? [String: Any] {
-                            self.reachable = true
-                            self.recoveryAttempts = 0
-                            self.statusValue = self.mergeStatusSnapshot(raw, previous: self.statusValue)
-                            self.updateViews()
-                        }
-                        self.refresh()
-                    case .failure(let error):
-                        self.statusValue.translationEnabled = previousStatus.translationEnabled
-                        self.updateViews()
-                        self.showMessage(error.localizedDescription, error: true)
-                        self.refresh()
-                    }
-                }
-            }
-        }
-        if !reachable && !bridge.isOwnedProcessRunning {
-            recoveryAttempts = 0
-            nextRecoveryAt = .distantPast
-            bridge.launch { _ in sendCommand() }
-        } else {
-            sendCommand()
-        }
-    }
-    func effectiveHudEnabled() -> Bool {
-        if let pending = pendingHudTarget { return pending }
-        if let live = statusValue.hudEnabled { return live }
-        return configuration?.value.hudEnabled ?? true
-    }
-    func setHudEnabled(_ enable: Bool) {
-        let previousStatus = statusValue
-        let previousConfig = configuration.value.hudEnabled
-        hudCommandGeneration += 1
-        let commandGen = hudCommandGeneration
-        pendingHudTarget = enable
-        statusValue.hudEnabled = enable
-        configuration.value.hudEnabled = enable
-        try? configuration.save()
-        updateViews()
-        bridge.send(["command": "hud_set", "enabled": enable]) { [weak self] result in
-            DispatchQueue.main.async {
-                guard let self, commandGen == self.hudCommandGeneration else { return }
-                self.pendingHudTarget = nil
-                switch result {
-                case .success(let value):
-                    if let raw = value["status"] as? [String: Any] {
-                        self.reachable = true
-                        self.recoveryAttempts = 0
-                        self.statusValue = self.mergeStatusSnapshot(raw, previous: self.statusValue)
-                    }
-                    self.updateViews()
-                case .failure(let error):
-                    self.statusValue.hudEnabled = previousStatus.hudEnabled
-                    self.configuration.value.hudEnabled = previousConfig
-                    try? self.configuration.save()
-                    self.updateViews()
-                    self.showMessage(error.localizedDescription, error: true)
-                }
-            }
-        }
-    }
-    @objc func toggleTranslation() {
-        setTranslationEnabled(!statusValue.enabled)
-    }
-    @objc func toggleHud() {
-        setHudEnabled(!effectiveHudEnabled())
-    }
-    @objc func openAntigravity() {
-        #if NATIVE_UI_TEST
-        openedApplications += 1; return
-        #else
-        suppressLifecycleAutoQuit(seconds: 30.0)
-        let launchPath = DesktopApplicationTarget.preferredLaunchPath(fallbackChannel: Self.applicationChannel)
-        let config = NSWorkspace.OpenConfiguration()
-        config.activates = true
-        config.createsNewApplicationInstance = false
-        NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: launchPath), configuration: config) { [weak self] _, error in
-            if let error {
-                DispatchQueue.main.async { self?.showMessage(error.localizedDescription, error: true) }
-            }
-        }
-        #endif
-    }
-
-    func relaunchAntigravityAfterSwitch(attemptsRemaining: Int = 3) {
-        #if NATIVE_UI_TEST
-        openedApplications += 1
-        return
-        #else
-        suppressLifecycleAutoQuit(seconds: 30.0)
-        let launchPath = DesktopApplicationTarget.preferredLaunchPath(fallbackChannel: Self.applicationChannel)
-        if attemptsRemaining <= 1 {
-            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-                let proc = Process()
-                proc.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-                proc.arguments = ["-a", launchPath]
-                proc.standardOutput = FileHandle.nullDevice
-                proc.standardError = FileHandle.nullDevice
-                let launchError: Error? = {
-                    do {
-                        try proc.run()
-                        proc.waitUntilExit()
-                        return proc.terminationStatus == 0 ? nil : BackendFailure(message: "open exited with \(proc.terminationStatus)")
-                    } catch {
-                        return error
-                    }
-                }()
-                DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 1.2) { [weak self] in
-                    guard let self else { return }
-                    let running = DispatchQueue.main.sync { Self.isAntigravityRunning() }
-                    if !running {
-                        DispatchQueue.main.async {
-                            let detail = launchError?.localizedDescription ?? "请手动打开 Antigravity"
-                            self.showMessage("账号已切换，但自动重启 Antigravity 失败：\(detail)", error: true)
-                        }
-                    }
-                }
-            }
-            return
-        }
-
-        let config = NSWorkspace.OpenConfiguration()
-        config.activates = true
-        config.createsNewApplicationInstance = false
-        NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: launchPath), configuration: config) { [weak self] app, error in
-            guard let self else { return }
-            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 1.2) { [weak self] in
-                guard let self else { return }
-                let running = DispatchQueue.main.sync { Self.isAntigravityRunning() || (app != nil && app?.isTerminated == false) }
-                if running {
-                    DispatchQueue.main.async { self.antigravityWasRunning = true }
-                    return
-                }
-                if attemptsRemaining > 1 {
-                    DispatchQueue.main.async {
-                        self.relaunchAntigravityAfterSwitch(attemptsRemaining: attemptsRemaining - 1)
-                    }
-                } else if let error {
-                    DispatchQueue.main.async {
-                        self.showMessage("账号已切换，但自动重启 Antigravity 失败：\(error.localizedDescription)", error: true)
-                    }
-                }
-            }
-        }
-        #endif
-    }
-    static var antigravityBundlePath: String { DesktopApplicationTarget.preferredLaunchPath(fallbackChannel: applicationChannel) }
-    static let lifecycleAgentLabel = "local.gravitybox.lifecycle"
-
-    static func isAntigravityApp(_ app: NSRunningApplication) -> Bool {
-        DesktopApplicationTarget.matchesAny(app)
-    }
-
-    static func isAntigravityRunning() -> Bool {
-        NSWorkspace.shared.runningApplications.contains(where: isAntigravityApp)
-    }
-
-    func installAntigravityLifecycleObserver() {
-        #if !NATIVE_UI_TEST
-        antigravityWasRunning = Self.isAntigravityRunning()
-        let nc = NSWorkspace.shared.notificationCenter
-        if let obs = workspaceLaunchObserver { nc.removeObserver(obs) }
-        if let obs = workspaceTerminateObserver { nc.removeObserver(obs) }
-        workspaceLaunchObserver = nc.addObserver(forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main) { [weak self] note in
-            guard let self else { return }
-            if let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication, Self.isAntigravityApp(app) {
-                self.antigravityWasRunning = true
-            } else if Self.isAntigravityRunning() {
-                self.antigravityWasRunning = true
-            }
-        }
-        workspaceTerminateObserver = nc.addObserver(forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: .main) { [weak self] note in
-            guard let self else { return }
-            let matchedApp = (note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication).map(Self.isAntigravityApp) ?? false
-            guard matchedApp || (self.antigravityWasRunning && !Self.isAntigravityRunning()) else { return }
-            self.checkAntigravityExitedAndQuitIfNeeded()
-        }
-        #endif
-    }
-
-    private func checkAntigravityExitedAndQuitIfNeeded() {
-        #if !NATIVE_UI_TEST
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
-            guard let self else { return }
-            if Self.isAntigravityRunning() {
-                self.antigravityWasRunning = true
-                return
-            }
-            let wasRunning = self.antigravityWasRunning
-            self.antigravityWasRunning = false
-            guard wasRunning,
-                  self.configuration?.value.syncAntigravityLifecycle == true,
-                  !self.quitting,
-                  Date() >= self.suppressLifecycleAutoQuitUntil else { return }
-            self.stopBackendAndQuit()
-        }
-        #endif
-    }
-
-    func syncLifecycleAgentRegistration() {
-        #if !NATIVE_UI_TEST
-        antigravityWasRunning = Self.isAntigravityRunning()
-        let enabled = configuration?.value.syncAntigravityLifecycle == true
-        let launchAgentsDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/LaunchAgents")
-        let plistURL = launchAgentsDir.appendingPathComponent("\(Self.lifecycleAgentLabel).plist")
-        let installedExec = "/Applications/GravityBox.app/Contents/MacOS/GravityBox"
-        let executablePath = FileManager.default.isExecutableFile(atPath: installedExec)
-            ? installedExec
-            : (Bundle.main.executableURL?.path ?? installedExec)
-        let uid = getuid()
-        DispatchQueue.global(qos: .utility).async {
-            let fm = FileManager.default
-            func runLaunchctl(_ args: [String]) {
-                let task = Process()
-                task.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-                task.arguments = args
-                task.standardOutput = FileHandle.nullDevice
-                task.standardError = FileHandle.nullDevice
-                try? task.run()
-                task.waitUntilExit()
-            }
-            if enabled {
-                try? fm.createDirectory(at: launchAgentsDir, withIntermediateDirectories: true)
-                let plist: [String: Any] = [
-                    "Label": Self.lifecycleAgentLabel,
-                    "ProgramArguments": [executablePath, "--lifecycle-agent"],
-                    "RunAtLoad": true,
-                    "KeepAlive": true,
-                    "ProcessType": "Background"
-                ]
-                if let data = try? PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0) {
-                    try? data.write(to: plistURL, options: .atomic)
-                    runLaunchctl(["bootout", "gui/\(uid)", plistURL.path])
-                    runLaunchctl(["bootstrap", "gui/\(uid)", plistURL.path])
-                }
-            } else {
-                if fm.fileExists(atPath: plistURL.path) {
-                    runLaunchctl(["bootout", "gui/\(uid)", plistURL.path])
-                    try? fm.removeItem(at: plistURL)
-                } else {
-                    runLaunchctl(["bootout", "gui/\(uid)/\(Self.lifecycleAgentLabel)"])
-                }
-            }
-        }
-        #endif
-    }
-
     @objc func about() {
         showAbout()
     }
     func perform(_ payload: [String: Any], completion: (([String: Any]) -> Void)? = nil) {
         bridge.send(payload) { [weak self] result in switch result { case .success(let value): completion?(value); case .failure(let error): self?.showMessage(error.localizedDescription, error: true) } }
-    }
-    func fetchAccountList(notifyPage: Bool = true, completion: ((Result<[String: Any], Error>) -> Void)? = nil) {
-        if let completion { accountListWaiters.append(completion) }
-        if notifyPage { accountListPendingNotifyPage = true }
-        guard !accountListInFlight else { return }
-        accountListInFlight = true
-        accountListGeneration += 1
-        let generation = accountListGeneration
-        lastAccountListFetchAt = Date()
-        bridge.send(["command": "account_list"]) { [weak self] res in
-            guard let self else { return }
-            self.accountListInFlight = false
-            let waiters = self.accountListWaiters
-            let shouldNotifyPage = self.accountListPendingNotifyPage
-            self.accountListWaiters.removeAll()
-            self.accountListPendingNotifyPage = false
-            if case .success(let val) = res, generation >= self.accountListGeneration, let list = val["accounts"] as? [[String: Any]] {
-                self.lastFetchedAccountsRevision = self.statusValue.accountsRevision
-                self.lastFetchedLiveEmail = self.statusValue.liveAccountEmail
-                var resolvedActiveId = val["activeId"] as? String ?? (val["currentAccountId"] as? String ?? "")
-                if !self.statusValue.liveAccountEmail.isEmpty,
-                   let live = list.first(where: { ($0["email"] as? String ?? "").caseInsensitiveCompare(self.statusValue.liveAccountEmail) == .orderedSame }),
-                   let id = live["id"] as? String {
-                    resolvedActiveId = id
-                }
-                self.activeAccountId = resolvedActiveId
-                self.cachedAccounts = list.enumerated().sorted { lhs, rhs in
-                    let l = lhs.element["id"] as? String == resolvedActiveId
-                    let r = rhs.element["id"] as? String == resolvedActiveId
-                    return l == r ? lhs.offset < rhs.offset : l
-                }.map(\.element)
-                self.updateQuotaRefreshControls()
-                if shouldNotifyPage { self.accountsPage?.fetch(val) }
-            }
-            for waiter in waiters { waiter(res) }
-        }
     }
     func refresh(taskPollOnly: Bool = false) {
         #if !NATIVE_UI_TEST
@@ -1666,48 +918,6 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
                 }
             }
             self.updateViews()
-        }
-    }
-    func failPendingQuotaRefresh(_ message: String) {
-        guard quotaRefreshing || pendingAccountTaskId != nil else { return }
-        quotaRefreshing = false; pendingAccountTaskId = nil; quotaRefreshStartedAt = nil
-        quotaRefreshError = message; quotaRefreshPollTimer?.invalidate(); quotaRefreshPollTimer = nil
-    }
-    func scheduleSelfHealingRestart(reason: String) {
-        guard !quitting, !bridge.isRestarting, !selfHealingPending else { return }
-        let now = Date()
-        if now.timeIntervalSince(lastAutoRestartAt) > 60.0 {
-            autoRestartAttempts = 0
-        }
-        guard autoRestartAttempts < 3 else {
-            NSLog("[GravityBox] 后台子进程短时间内连续异常退出 3 次，停止自动拉起并保留报错: %@", reason)
-            return
-        }
-        autoRestartAttempts += 1
-        lastAutoRestartAt = now
-        selfHealingPending = true
-        NSLog("[GravityBox] 后台子进程异常退出 (%@)，将在 1 秒后尝试自动自愈重启 (第 %d/3 次)...", reason, autoRestartAttempts)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-            guard let self else { return }
-            self.selfHealingPending = false
-            guard !self.quitting, !self.reachable, !self.bridge.isOwnedProcessRunning else { return }
-            self.bridge.launch { [weak self] result in
-                guard let self else { return }
-                switch result {
-                case .success:
-                    NSLog("[GravityBox] 后台子进程自愈重启成功，重新同步状态与用量。")
-                    self.refresh()
-                    if self.contentVisible && self.currentPage == 2 {
-                        self.usagePage?.fetch()
-                    }
-                    if self.menuPopover?.isShown == true, let panel = self.menuPanelController {
-                        let periodKey = MenuPanelController.periods[max(0, min(MenuPanelController.periods.count - 1, panel.selectedPeriod))]
-                        self.fetchUsageSummary(period: periodKey, force: true, allowCached: false)
-                    }
-                case .failure(let error):
-                    NSLog("[GravityBox] 后台子进程自愈重启失败: %@", error.localizedDescription)
-                }
-            }
         }
     }
     func updateServiceFootnote() {
@@ -1761,15 +971,7 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         let alert = NSAlert(); alert.alertStyle = .warning
         alert.messageText = "操作未完成"; alert.informativeText = message
         alert.addButton(withTitle: "好")
-        if let window, window.isVisible {
-            var parent = window
-            while let sheet = parent.activeSheetWindow { parent = sheet }
-            alert.beginSheetModal(for: parent) { [weak self] _ in self?.presentedError = nil }
-        } else {
-            NSApp.activate(ignoringOtherApps: true)
-            _ = alert.runModal()
-            presentedError = nil
-        }
+        presentSheetAlert(alert) { [weak self] _ in self?.presentedError = nil }
         #endif
     }
     func watchState() {
@@ -1804,7 +1006,7 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         source.setCancelHandler { close(fd) }; source.resume(); directorySource = source
     }
     /// 合并 status.json 快照：其中缺失的账号字段沿用上一次 socket status 的值，避免账号/费用 UI 瞬时清空。
-    private func mergeStatusSnapshot(_ raw: [String: Any], previous: LiveStatus) -> LiveStatus {
+    func mergeStatusSnapshot(_ raw: [String: Any], previous: LiveStatus) -> LiveStatus {
         var merged = LiveStatus(raw)
         if raw["translationEnabled"] == nil { merged.translationEnabled = previous.translationEnabled }
         if raw["hudEnabled"] == nil { merged.hudEnabled = previous.hudEnabled }
@@ -1827,221 +1029,27 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         if pendingHudTarget == nil, let authoritative = raw["hudEnabled"] as? Bool,
            let configuration, configuration.value.hudEnabled != authoritative {
             configuration.value.hudEnabled = authoritative
-            try? configuration.save()
+            scheduleConfigurationSave()
         }
         return merged
     }
-    func syncUpdatePromptControls() {
-        aboutPage?.refreshUpdateState()
-        if let release = updateManager.availableRelease {
-            installUpdateButton?.badgeText = "v\(release.version)"
-            installUpdateButton?.toolTip = nil
-            installUpdateButton?.isHidden = false
-        } else {
-            installUpdateButton?.badgeText = ""
-            installUpdateButton?.toolTip = nil
-            installUpdateButton?.isHidden = true
+    func presentSheetAlert(_ alert: NSAlert, completion: @escaping (NSApplication.ModalResponse) -> Void) {
+        if window == nil || window?.isVisible != true {
+            showPanel()
         }
-    }
-
-    @objc func showUpdateSheet() {
-        showPanel()
-        guard let window else { return }
-        if let active = window.activeSheetWindow, active !== updateSheet?.sheet { return }
-        if updateSheet == nil {
-            updateSheet = UpdateSheetController(app: self)
-        }
-        updateSheet?.show(in: window)
-    }
-
-    @objc func installUpdateFromSidebar() {
-        guard let release = updateManager.availableRelease else {
-            checkForUpdatesFromMenu()
+        guard let rootWindow = self.window else {
+            NSApp.activate(ignoringOtherApps: true)
+            completion(alert.runModal())
             return
         }
-        if let active = window?.activeSheetWindow, active !== updateSheet?.sheet {
-            dismissAllSheetsAndPopovers()
-        }
-        showUpdateSheet()
-        updateManager.installRelease(release)
+        var parent = rootWindow
+        while let sheet = parent.activeSheetWindow { parent = sheet }
+        NSApp.activate(ignoringOtherApps: true)
+        alert.beginSheetModal(for: parent, completionHandler: completion)
     }
-    func configureAutoUpdateTimer() {
-        autoUpdateTimer?.invalidate()
-        autoUpdateTimer = nil
-        #if !NATIVE_UI_TEST
-        guard configuration?.value.autoUpdateEnabled == true else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
-            guard let self, !self.quitting, self.configuration?.value.autoUpdateEnabled == true else { return }
-            self.updateManager.checkForUpdates(silent: true)
-        }
-        let t = Timer(timeInterval: 6 * 3600.0, repeats: true) { [weak self] _ in
-            guard let self, !self.quitting, self.configuration?.value.autoUpdateEnabled == true else { return }
-            self.updateManager.checkForUpdates(silent: true)
-        }
-        t.tolerance = 300.0
-        RunLoop.main.add(t, forMode: .common)
-        autoUpdateTimer = t
-        #endif
-    }
-    func suppressLifecycleAutoQuit(seconds: TimeInterval) {
-        let candidate = Date().addingTimeInterval(seconds)
-        if candidate > suppressLifecycleAutoQuitUntil {
-            suppressLifecycleAutoQuitUntil = candidate
-        }
-    }
-    @objc func checkForUpdatesFromMenu() {
-        if let active = window?.activeSheetWindow, active !== updateSheet?.sheet {
-            dismissAllSheetsAndPopovers()
-        }
-        showAbout()
-        showUpdateSheet()
-    }
-    @objc func quit() {
-        performQuit()
-    }
-
-    func dismissAllSheetsAndPopovers() {
-        closeMenuPopover()
-        guard let window else { return }
-        var safetyCounter = 0
-        while let rootSheet = window.activeSheetWindow, safetyCounter < 8 {
-            safetyCounter += 1
-            var leaf = rootSheet
-            var depth = 0
-            while let child = leaf.activeSheetWindow, depth < 8 {
-                leaf = child
-                depth += 1
-            }
-            let parent = leaf.sheetParent ?? window
-            parent.endSheet(leaf)
-            leaf.orderOut(nil)
-        }
-    }
-
-    func quitForUpdate() {
-        quitting = true
-        suppressLifecycleAutoQuit(seconds: 60)
-        timer?.invalidate(); timer = nil
-        quotaRefreshTimer?.invalidate(); quotaRefreshTimer = nil
-        quotaRefreshPollTimer?.invalidate(); quotaRefreshPollTimer = nil
-        autoUpdateTimer?.invalidate(); autoUpdateTimer = nil
-        if configSaveWorkItem != nil {
-            configSaveWorkItem?.cancel()
-            configSaveWorkItem = nil
-            try? configuration?.save()
-        }
-        dismissAllSheetsAndPopovers()
-        window?.orderOut(nil)
-        #if NATIVE_UI_TEST
-        return
-        #else
-        bridge.forceStop(timeout: 2.0) { [weak self] in
-            self?.directorySource?.cancel()
-            self?.directorySource = nil
-            NSApp.terminate(nil)
-            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.35) {
-                Darwin._exit(0)
-            }
-        }
-        #endif
-    }
-
-    private func performQuit() {
-        guard !quitting else { return }
-        stopBackendAndQuit()
-    }
-    private func stopBackendAndQuit() {
-        guard !quitting else { return }; quitting = true
-        timer?.invalidate(); quotaRefreshTimer?.invalidate(); quotaRefreshPollTimer?.invalidate(); autoUpdateTimer?.invalidate()
-        if configSaveWorkItem != nil {
-            configSaveWorkItem?.cancel()
-            configSaveWorkItem = nil
-            try? configuration?.save()
-        }
-        dismissAllSheetsAndPopovers()
-        bridge.send(["command":"stop"]) { [weak self] result in
-            guard let self else { return }
-            if case .success = result { self.directorySource?.cancel(); NSApp.terminate(nil) }
-            else if !self.bridge.isOwnedProcessRunning { self.directorySource?.cancel(); NSApp.terminate(nil) }
-            else { self.quitting = false; self.configureRefreshTimer(); self.configureQuotaRefreshTimer(); self.configureAutoUpdateTimer(); self.showPanel(); self.showMessage("尚未确认撤销汉化，请稍后重试退出。", error:true) }
-        }
-    }
-    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply { if quitting { return .terminateNow }; quit(); return .terminateCancel }
 }
 
 #if !NATIVE_UI_TEST
-private enum AntigravityLifecycleAgent {
-    private static var cachedConfigMtime: Date?
-    private static var cachedSyncEnabled: Bool = false
-
-    static func isSyncEnabled() -> Bool {
-        let configURL = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/GravityBox/config.json")
-        let mtime = (try? FileManager.default.attributesOfItem(atPath: configURL.path))?[.modificationDate] as? Date
-        if let mtime, mtime == cachedConfigMtime {
-            return cachedSyncEnabled
-        }
-        guard let data = try? Data(contentsOf: configURL),
-              let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            cachedConfigMtime = nil
-            cachedSyncEnabled = false
-            return false
-        }
-        cachedConfigMtime = mtime
-        Assistant.applicationChannel = "stable"
-        cachedSyncEnabled = (raw["syncAntigravityLifecycle"] as? Bool == true)
-        return cachedSyncEnabled
-    }
-
-    static func isMainGravityBoxRunning() -> Bool {
-        Assistant.findExistingMainPeer(excludingPid: getpid()) != nil
-    }
-
-    static func launchGravityBoxIfNeeded() {
-        guard isSyncEnabled(), !isMainGravityBoxRunning() else { return }
-        let installedURL = URL(fileURLWithPath: "/Applications/GravityBox.app")
-        let bundleURL = FileManager.default.fileExists(atPath: installedURL.path) ? installedURL : Bundle.main.bundleURL
-        let config = NSWorkspace.OpenConfiguration()
-        config.activates = false
-        config.createsNewApplicationInstance = false
-        config.arguments = ["--launched-by-antigravity"]
-        NSWorkspace.shared.openApplication(at: bundleURL, configuration: config, completionHandler: nil)
-    }
-
-    static func run() -> Never {
-        if !isSyncEnabled() { exit(0) }
-        var wasRunning = Assistant.isAntigravityRunning()
-        let nc = NSWorkspace.shared.notificationCenter
-        nc.addObserver(forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main) { note in
-            if !isSyncEnabled() { exit(0) }
-            if let launched = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
-               Assistant.isAntigravityApp(launched) {
-                wasRunning = true
-                launchGravityBoxIfNeeded()
-            }
-        }
-        nc.addObserver(forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: .main) { _ in
-            if !Assistant.isAntigravityRunning() {
-                wasRunning = false
-            }
-        }
-        let timer = Timer(timeInterval: 6.0, repeats: true) { _ in
-            if !isSyncEnabled() { exit(0) }
-            let nowRunning = Assistant.isAntigravityRunning()
-            if nowRunning && !wasRunning {
-                wasRunning = true
-                launchGravityBoxIfNeeded()
-            } else if !nowRunning {
-                wasRunning = false
-            }
-        }
-        timer.tolerance = 1.5
-        RunLoop.main.add(timer, forMode: .common)
-        RunLoop.main.run()
-        exit(0)
-    }
-}
-
 @main struct GravityBoxMain {
     static func main() {
         if let i = CommandLine.arguments.firstIndex(of: "--install-update"), i + 1 < CommandLine.arguments.count {

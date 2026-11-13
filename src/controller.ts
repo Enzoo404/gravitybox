@@ -33,10 +33,7 @@ export type AssistantStatus = {
   pendingListPath?: string;
   bundleSha256?: string;
   menuHooked?: boolean;
-  healing?: boolean;
-  lastHealedCount?: number;
   dictionaryBaseVersion?: string;
-  onlineTranslation?: boolean;
   languageMode?: string;
   bundleCacheHit?: boolean;
   taskRevision?: number;
@@ -46,7 +43,7 @@ type PageSession = { cdp: CDP; targetId: string; contextId?: number; registratio
 function isSafeCandidate(key: unknown): key is string {
   return typeof key === 'string' && isEnglishSource(key) && key.length <= 400 && !/(?:https?:\/\/|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}|(?:^|\s)(?:\/|~\/|[A-Za-z]:\\)|\b(?:sk-|AIza)[A-Za-z0-9_-]{12,})/.test(key);
 }
-const WORLD = 'AGZH-localization-v1';
+const WORLD = 'GRAVITYBOX-localization-v1';
 
 export class Controller {
   private endpoint?: Endpoint;
@@ -218,7 +215,7 @@ export class Controller {
     const key = `${page.origin}${page.pathname}:${this.options.dictionary.version}:${this.verifiedBundle()}:${this.hudEnabled}:${this.paused}`;
     const cached = this.bootCache.get(key);
     if (cached) return cached;
-    const source = `delete globalThis.__AGZH_ATTACH_DEEP_SCAN__;delete globalThis.__GRAVITYBOX_ATTACH_HUD__;globalThis.__AGZH_BOOT__=${JSON.stringify({ origin: page.origin, path: page.pathname, dictionary: this.options.dictionary, conservative:!this.verifiedBundle(),runtimeId:this.runtimeId,shortcutEnabled:this.options.shortcutEnabled!==false,hudEnabled:this.hudEnabled,translationEnabled:!this.paused,languageMode:this.paused?'en':'zh',shellValidated:true })};\n${this.engine}`;
+    const source = `delete globalThis.__GRAVITYBOX_ATTACH_DEEP_SCAN__;delete globalThis.__GRAVITYBOX_ATTACH_HUD__;globalThis.__GRAVITYBOX_BOOT__=${JSON.stringify({ origin: page.origin, path: page.pathname, dictionary: this.options.dictionary, conservative:!this.verifiedBundle(),runtimeId:this.runtimeId,shortcutEnabled:this.options.shortcutEnabled!==false,hudEnabled:this.hudEnabled,translationEnabled:!this.paused,languageMode:this.paused?'en':'zh',shellValidated:true })};\n${this.engine}`;
     if (this.bootCache.size < 4) this.bootCache.set(key, source);
     return source;
   }
@@ -277,9 +274,9 @@ export class Controller {
             if (!session.detaching && !this.dormant && !this.stopped) this.scheduleSync(300);
           });
           await cdp.send('Page.enable'); await cdp.send('Runtime.enable');
-          await cdp.send('Runtime.addBinding',{name:'__agzhLanguageChanged',executionContextName:WORLD});
+          await cdp.send('Runtime.addBinding',{name:'__gravityboxLanguageChanged',executionContextName:WORLD});
           await this.hudBridge.attachToTarget(target.id, cdp, () => session.contextId, WORLD);
-          cdp.on('Runtime.bindingCalled',(event)=>{if(event.name==='__agzhLanguageChanged'&&event.executionContextId===session.contextId&&['zh','en'].includes(event.payload)){session.languageMode=event.payload;this.publish();}else if(event.name===HUD_BRIDGE_BINDING_NAME&&this.hudEnabled&&event.executionContextId===session.contextId){this.hudBridge.handleRawBindingPayload(target.id,event.payload);}});
+          cdp.on('Runtime.bindingCalled',(event)=>{if(event.name==='__gravityboxLanguageChanged'&&event.executionContextId===session.contextId&&['zh','en'].includes(event.payload)){session.languageMode=event.payload;this.publish();}else if(event.name===HUD_BRIDGE_BINDING_NAME&&this.hudEnabled&&event.executionContextId===session.contextId){this.hudBridge.handleRawBindingPayload(target.id,event.payload);}});
           await this.refreshRegistration(session);
           await this.queueBootstrap(session, false);
         } catch(error) {
@@ -348,7 +345,7 @@ export class Controller {
       let previous: any;
       if (session.contextId !== undefined) {
         try {
-          previous = await session.cdp.evaluate('globalThis.__AGZH_ENGINE_V1__?.state()', session.contextId);
+          previous = await session.cdp.evaluate('globalThis.__GRAVITYBOX_ENGINE_V1__?.state()', session.contextId);
         } catch {
           session.contextId = undefined;
         }
@@ -363,16 +360,16 @@ export class Controller {
         if(!contract)throw new Error('新版页面结构尚未识别，已跳过该窗口');
       }
       if(this.dormant||this.stopped||session.detaching)return;
-      if (!previous?.active) previous = await session.cdp.evaluate('globalThis.__AGZH_ENGINE_V1__?.state()', session.contextId);
+      if (!previous?.active) previous = await session.cdp.evaluate('globalThis.__GRAVITYBOX_ENGINE_V1__?.state()', session.contextId);
       if(this.dormant||this.stopped||session.detaching)return;
       if (previous?.active&&previous.runtimeId===this.runtimeId) {
-        if (previous.version === this.options.dictionary.version) await session.cdp.evaluate('globalThis.__AGZH_ENGINE_V1__.refresh()', session.contextId);
-        else await session.cdp.evaluate(`globalThis.__AGZH_ENGINE_V1__.update(${JSON.stringify(this.options.dictionary)})`, session.contextId);
+        if (previous.version === this.options.dictionary.version) await session.cdp.evaluate('globalThis.__GRAVITYBOX_ENGINE_V1__.refresh()', session.contextId);
+        else await session.cdp.evaluate(`globalThis.__GRAVITYBOX_ENGINE_V1__.update(${JSON.stringify(this.options.dictionary)})`, session.contextId);
       }
-      else{if(previous?.active)await session.cdp.evaluate('globalThis.__AGZH_ENGINE_V1__.dispose()',session.contextId);await session.cdp.evaluate(this.boot(session.url),session.contextId);if(this.options.fixture&&previous?.active&&previous.languageMode==='en')await session.cdp.evaluate('globalThis.__AGZH_ENGINE_V1__.toggleLanguage("en")',session.contextId);}
+      else{if(previous?.active)await session.cdp.evaluate('globalThis.__GRAVITYBOX_ENGINE_V1__.dispose()',session.contextId);await session.cdp.evaluate(this.boot(session.url),session.contextId);if(this.options.fixture&&previous?.active&&previous.languageMode==='en')await session.cdp.evaluate('globalThis.__GRAVITYBOX_ENGINE_V1__.toggleLanguage("en")',session.contextId);}
       let state: any;
       for (let i = 0; i < 10; i++) {
-        state = await session.cdp.evaluate('globalThis.__AGZH_ENGINE_V1__?.state()', session.contextId);
+        state = await session.cdp.evaluate('globalThis.__GRAVITYBOX_ENGINE_V1__?.state()', session.contextId);
         if (state?.version === this.options.dictionary.version) break;
         await new Promise(r => setTimeout(r, 100));
       }
@@ -491,19 +488,22 @@ export class Controller {
         const world = await session.cdp.send('Page.createIsolatedWorld', { frameId: tree.frameTree.frame.id, worldName: WORLD });
         ctxId = world.executionContextId;
       }
-      await session.cdp.evaluate('(globalThis.__AGZH_PENDING_BOOT__?.cancel(),globalThis.__AGZH_ENGINE_V1__?.dispose(),globalThis.__GRAVITYBOX_HUD_V1__?.dispose())', ctxId);
+      await session.cdp.evaluate('(globalThis.__GRAVITYBOX_PENDING_BOOT__?.cancel(),globalThis.__GRAVITYBOX_ENGINE_V1__?.dispose(),globalThis.__GRAVITYBOX_HUD_V1__?.dispose())', ctxId);
     } catch { restorationFailed = true; }
     session.cdp.close();
     if (restorationFailed) this.status.errors.push('窗口已失联，无法确认恢复英文');
   }
   private async disconnectPages() { for (const session of this.pages.values()) await this.detach(session); this.pages.clear(); }
+  private async quiesce() {
+    await this.connecting?.catch(() => {});
+    if (this.syncing) await new Promise<void>(resolve => this.syncWaiters.push(resolve));
+    await this.dictionaryChain.catch(() => {});
+    await this.disconnectPages();
+  }
   async pause() {
     this.paused = true;
     this.bootCache.clear();
-    await this.connecting?.catch(()=>{});
-    if(this.syncing)await new Promise<void>(resolve=>this.syncWaiters.push(resolve));
-    await this.dictionaryChain.catch(() => {});
-    await this.disconnectPages();
+    await this.quiesce();
     if (this.hudEnabled) await this.resumeHudOnly();
     this.publish('paused', this.status.errors.length ? '已暂停，部分窗口恢复情况待确认' : '已暂停，界面恢复英文');
   }
@@ -530,7 +530,7 @@ export class Controller {
   async configureShortcut(enabled: boolean) {
     this.options.shortcutEnabled=enabled; this.bootCache.clear();
     for(const session of this.pages.values()) {
-      await session.cdp.evaluate(`globalThis.__AGZH_ENGINE_V1__?.setShortcutEnabled(${enabled})`,session.contextId);
+      await session.cdp.evaluate(`globalThis.__GRAVITYBOX_ENGINE_V1__?.setShortcutEnabled(${enabled})`,session.contextId);
       if(session.registration) await session.cdp.send('Page.removeScriptToEvaluateOnNewDocument',{identifier:session.registration});
       const result=await session.cdp.send('Page.addScriptToEvaluateOnNewDocument',{source:this.boot(session.url),worldName:WORLD});session.registration=result.identifier;
     }
@@ -557,9 +557,9 @@ export class Controller {
       await this.refreshRegistration(session);
       if (session.contextId !== undefined && !session.detaching) {
         if (enabled) {
-          await session.cdp.evaluate('((globalThis.__AGZH_BOOT__&&(globalThis.__AGZH_BOOT__.hudEnabled=true)),globalThis.__GRAVITYBOX_ATTACH_HUD__?.(),globalThis.__GRAVITYBOX_HUD_V1__?.setEnabled?.(true),globalThis.__GRAVITYBOX_HUD_V1__?.syncAllSessions?.())', session.contextId);
+          await session.cdp.evaluate('((globalThis.__GRAVITYBOX_BOOT__&&(globalThis.__GRAVITYBOX_BOOT__.hudEnabled=true)),globalThis.__GRAVITYBOX_ATTACH_HUD__?.(),globalThis.__GRAVITYBOX_HUD_V1__?.setEnabled?.(true),globalThis.__GRAVITYBOX_HUD_V1__?.syncAllSessions?.())', session.contextId);
         } else {
-          await session.cdp.evaluate('((globalThis.__AGZH_BOOT__&&(globalThis.__AGZH_BOOT__.hudEnabled=false)),globalThis.__GRAVITYBOX_HUD_V1__?.setEnabled?.(false))', session.contextId);
+          await session.cdp.evaluate('((globalThis.__GRAVITYBOX_BOOT__&&(globalThis.__GRAVITYBOX_BOOT__.hudEnabled=false)),globalThis.__GRAVITYBOX_HUD_V1__?.setEnabled?.(false))', session.contextId);
         }
       }
     }));
@@ -570,7 +570,7 @@ export class Controller {
     if (!this.pages.size) return;
     await Promise.allSettled([...this.pages.values()].map(async session => {
       if (session.contextId !== undefined) {
-        await session.cdp.evaluate(`globalThis.__AGZH_ENGINE_V1__?.toggleLanguage(${mode ? JSON.stringify(mode) : ''})`, session.contextId);
+        await session.cdp.evaluate(`globalThis.__GRAVITYBOX_ENGINE_V1__?.toggleLanguage(${mode ? JSON.stringify(mode) : ''})`, session.contextId);
       }
     }));
   }
@@ -629,7 +629,7 @@ export class Controller {
         const res = await Promise.race([
           page.cdp.evaluate(
             `(() => {
-              const engineState = globalThis.__AGZH_ENGINE_V1__?.draftState?.();
+              const engineState = globalThis.__GRAVITYBOX_ENGINE_V1__?.draftState?.();
               if (engineState?.generating) return { busy: true, reason: '检测到活跃的模型流式推理任务' };
               const rendered = e => !!e?.getClientRects?.().length && getComputedStyle(e).visibility !== 'hidden';
               const stopBtn = [...document.querySelectorAll('button,[role="button"],[data-testid*="stop"],[data-testid*="cancel"]')].some(e => {
@@ -661,7 +661,7 @@ export class Controller {
     if(agentTask.busy)throw new Error(agentTask.reason?`${agentTask.reason}，请等待任务结束后再执行清理`:'检测到正在执行的 Agent 任务，请等待任务结束后再执行清理');
     for(const page of this.pages.values()){
       if(page.contextId===undefined)continue;
-      const state=await page.cdp.evaluate('globalThis.__AGZH_ENGINE_V1__?.maintenanceState?.()',page.contextId);
+      const state=await page.cdp.evaluate('globalThis.__GRAVITYBOX_ENGINE_V1__?.maintenanceState?.()',page.contextId);
       if(state?.busy)throw new Error('请先保存所有窗口的未发送草稿、关闭弹窗并等待任务结束');
     }
     return{ok:true,pid:endpoint.pid};
@@ -688,7 +688,7 @@ export class Controller {
     // Preflight precedes scanning or navigation; no draft text leaves the page.
     const initial=[...this.pages.values()][0]!;
     if(initial.contextId===undefined)throw new Error('页面尚未就绪');
-    const ready=await initial.cdp.evaluate('({available:!!globalThis.__AGZH_ENGINE_V1__?.deepScan})',initial.contextId);
+    const ready=await initial.cdp.evaluate('({available:!!globalThis.__GRAVITYBOX_ENGINE_V1__?.deepScan})',initial.contextId);
     if(!ready?.available)throw new Error('当前引擎尚未支持深度扫描，请重新连接新版助手');
     progress(0,DEEP_STEPS.length+2);await this.scanCoverage(signal,()=>{},false);signal.throwIfAborted();
     const report=this.coverage!;const allowed=new Set((await this.prepareDeepScan().catch(()=>({nativeKeys:[]}))).nativeKeys);
@@ -696,7 +696,7 @@ export class Controller {
     report.deep=deep;progress(1,DEEP_STEPS.length+2);let failure:unknown;
     const page={invoke:async(method:string,...args:unknown[])=>{
       if(!['begin','step','sample','scroll','finish'].includes(method))throw new Error('不支持的巡检操作');
-      const value=await initial.cdp.evaluate(`globalThis.__AGZH_ENGINE_V1__?.deepScan?.[${JSON.stringify(method)}](...${JSON.stringify(method==='begin'?[report.entries.filter(e=>e.status!=='native').map(e=>e.key)]:args)})`,initial.contextId);
+      const value=await initial.cdp.evaluate(`globalThis.__GRAVITYBOX_ENGINE_V1__?.deepScan?.[${JSON.stringify(method)}](...${JSON.stringify(method==='begin'?[report.entries.filter(e=>e.status!=='native').map(e=>e.key)]:args)})`,initial.contextId);
       if(value===undefined)throw new Error("页面上下文已失联，无法继续自动遍历");return value;
     }};
     try {
@@ -706,7 +706,7 @@ export class Controller {
     }catch(error){failure=error;const takeover=/用户已接管/.test((error as Error).message);if(takeover)(failure as Error).name='UserIntervention';deep.state=signal.aborted||takeover?'cancelled':'failed';}
     finally {
       deep.finishedAt=new Date().toISOString();
-      await initial.cdp.evaluate('globalThis.__AGZH_ENGINE_V1__?.stopAudit()',initial.contextId).catch(()=>{});report.auditExpiresAt=undefined;
+      await initial.cdp.evaluate('globalThis.__GRAVITYBOX_ENGINE_V1__?.stopAudit()',initial.contextId).catch(()=>{});report.auditExpiresAt=undefined;
       if(!signal.aborted)onCommit?.();
       const directory=join(this.options.stateDir!,'reports');
       await atomicJson(join(directory,'coverage.json'),report);await atomicText(join(directory,'界面覆盖清单.md'),coverageMarkdown(report));
@@ -739,14 +739,15 @@ export class Controller {
     const lookup = coverageTranslationLookup(this.options.dictionary);
     for (const entry of report!.entries) { const resolved=resolveCoverageTranslation(entry.key,lookup,coverageScopes(entry)); entry.translation=resolved.translation; entry.scoped=resolved.scoped; if(entry.status!=='native') { entry.status=resolved.ambiguous?'review':classifyCoverage(entry.key,entry.translation,entry.status==='dynamic');if(entry.confidence==='literal'&&entry.status==='missing')entry.status='review'; } }
     report!.dictionaryVersion=this.options.dictionary.version;
+    const knownEntryKeys = new Set(report!.entries.map(e => e.key));
     const first=[...this.pages.values()][0];
     if(first?.contextId!==undefined){
-      const rules=await first.cdp.evaluate('globalThis.__AGZH_ENGINE_V1__?.ruleCatalog?.()??[]',first.contextId);
-      for(const key of Array.isArray(rules)?rules:[])if(typeof key==='string'&&key.length<=400&&!report!.entries.some(e=>e.key===key))report!.entries.push({key,status:'dynamic',sources:['内置动态规则'],confidence:'ui'});
+      const rules=await first.cdp.evaluate('globalThis.__GRAVITYBOX_ENGINE_V1__?.ruleCatalog?.()??[]',first.contextId);
+      for(const key of Array.isArray(rules)?rules:[])if(typeof key==='string'&&key.length<=400&&!knownEntryKeys.has(key)){knownEntryKeys.add(key);report!.entries.push({key,status:'dynamic',sources:['内置动态规则'],confidence:'ui'});}
     }
     const pluginCatalog = await readPluginCatalog(this.options.fixture ? join(this.options.stateDir ?? '', 'fixture-plugins') : join(homedir(), '.gemini/config/plugins'), signal);
     for (const session of this.pages.values()) if (session.contextId !== undefined) {
-      signal.throwIfAborted(); appendPluginViews(pluginCatalog, await session.cdp.evaluate('globalThis.__AGZH_ENGINE_V1__?.pluginCatalog?.()??[]', session.contextId));
+      signal.throwIfAborted(); appendPluginViews(pluginCatalog, await session.cdp.evaluate('globalThis.__GRAVITYBOX_ENGINE_V1__?.pluginCatalog?.()??[]', session.contextId));
     }
     if (captureOnly && report!.deep) appendPluginViews(pluginCatalog, report!.deep.plugins.entries);
     if (report!.deep) report!.deep.plugins = pluginCatalog;
@@ -754,19 +755,19 @@ export class Controller {
     const keys=report!.entries.filter(e=>e.status!=='native').map(e=>e.key);
     for(const session of this.pages.values()) {
       signal.throwIfAborted();if(session.contextId===undefined)continue;
-      const dynamic=await session.cdp.evaluate('globalThis.__AGZH_ENGINE_V1__?.collectUntranslated()??[]',session.contextId);
-      this.absorbRuntimeCandidates(dynamic,report!,keys);
-      const collectionState=await session.cdp.evaluate('globalThis.__AGZH_ENGINE_V1__?.state()',session.contextId);
+      const dynamic=await session.cdp.evaluate('globalThis.__GRAVITYBOX_ENGINE_V1__?.collectUntranslated()??[]',session.contextId);
+      this.absorbRuntimeCandidates(dynamic,report!,keys,undefined,knownEntryKeys);
+      const collectionState=await session.cdp.evaluate('globalThis.__GRAVITYBOX_ENGINE_V1__?.state()',session.contextId);
       const timeLimit='可见文案采集达到时间上限；本次候选不代表该页全部文字。';
       if(collectionState?.lastCollectionTruncated&&!report!.limits.includes(timeLimit))report!.limits.push(timeLimit);
-      if(!captureOnly){const started=await session.cdp.evaluate(`globalThis.__AGZH_ENGINE_V1__?.startAudit(${JSON.stringify(keys)})`,session.contextId);report!.auditExpiresAt=started?.expiresAt;}
-      const audit=await session.cdp.evaluate(`globalThis.__AGZH_ENGINE_V1__?.auditUi(${JSON.stringify(keys)})`,session.contextId);
+      if(!captureOnly){const started=await session.cdp.evaluate(`globalThis.__GRAVITYBOX_ENGINE_V1__?.startAudit(${JSON.stringify(keys)})`,session.contextId);report!.auditExpiresAt=started?.expiresAt;}
+      const audit=await session.cdp.evaluate(`globalThis.__GRAVITYBOX_ENGINE_V1__?.auditUi(${JSON.stringify(keys)})`,session.contextId);
       if(!audit)throw new Error('当前引擎不支持页面采样，请更新并重新连接助手');
       const recent=new Map<string,any[]>();
       for(const row of Array.isArray(audit.recent)?audit.recent:[]) {if(typeof row?.route!=='string')continue;const rows=recent.get(row.route)??[];rows.push(row);recent.set(row.route,rows);}
       for(const [route,observations]of recent)recordCoverageVisit(report!,route,{observations});
       recordCoverageVisit(report!,new URL(session.url).pathname,audit);
-      if(stopAfter)await session.cdp.evaluate('globalThis.__AGZH_ENGINE_V1__?.stopAudit()',session.contextId);
+      if(stopAfter)await session.cdp.evaluate('globalThis.__GRAVITYBOX_ENGINE_V1__?.stopAudit()',session.contextId);
     }
     if(stopAfter)report!.auditExpiresAt=undefined;
     this.trustedCandidates=uniqueCandidates(report!.entries.filter(e=>e.status!=='native'&&e.sources.some(s=>!s.startsWith('可见界面'))&&e.confidence==='ui'&&['missing','unchanged'].includes(e.status)&&!isCoverageNoise(e.key)&&isSafeCandidate(e.key)).map(e=>({key:e.key,kind:e.kind&&UI_KINDS.has(e.kind)?e.kind:undefined,source:'static' as const})));
@@ -779,7 +780,7 @@ export class Controller {
     this.coverage=report;this.publish();
     return {ok:true,message:`${captureOnly?'已记录当前界面':'扫描完成'}：${report!.resources.length} 个资源，${report!.entries.length} 条候选；实机已验证 ${report!.counts.verified??0} 条。其他页面仍待检查。`};
   }
-  private absorbRuntimeCandidates(rows:unknown,report:CoverageReport,keys?:string[],lookup=coverageTranslationLookup(this.options.dictionary)){
+  private absorbRuntimeCandidates(rows:unknown,report:CoverageReport,keys?:string[],lookup=coverageTranslationLookup(this.options.dictionary),knownEntryKeys=new Set(report.entries.map(e=>e.key))){
     for(const item of Array.isArray(rows)?rows:[]){
       if(!isSafeCandidate(item?.key)||!UI_KINDS.has(item?.kind)||item.source!=='runtime-ui')continue;
       const route=safeRoute(item.route),kind=item.kind;
@@ -787,56 +788,17 @@ export class Controller {
       const resolved=resolveCoverageTranslation(item.key,lookup,[{route,kind}]);
       const asText=(value:string)=>value.replace(/\s+/g,' ').trim().toLowerCase();
       const translated=!!resolved.translation&&asText(resolved.translation)!==asText(item.key);
-      if(!report.entries.some(e=>e.key===item.key)){report.entries.push({key:item.key,status:resolved.ambiguous?'review':classifyCoverage(item.key,resolved.translation),confidence:'ui',sources:[`可见界面 ${route} ${kind}`],...(resolved.scoped?{scoped:true}:{})});if(!translated&&!resolved.ambiguous)keys?.push(item.key);}
+      if(!knownEntryKeys.has(item.key)){knownEntryKeys.add(item.key);report.entries.push({key:item.key,status:resolved.ambiguous?'review':classifyCoverage(item.key,resolved.translation),confidence:'ui',sources:[`可见界面 ${route} ${kind}`],...(resolved.scoped?{scoped:true}:{})});if(!translated&&!resolved.ambiguous)keys?.push(item.key);}
       if(translated||resolved.ambiguous)continue;
       this.runtimeCandidates.push({key:item.key,kind,route,source:'runtime-ui',translationKey:scopedKey(item.key,kind,route)});
     }
     this.runtimeCandidates=uniqueCandidates(this.runtimeCandidates).slice(-1000);this.status.newStringsCount=this.trustedCandidates.length+this.runtimeCandidates.length;
   }
-  async switchTarget(appPath: string, profile: string, stateDir: string) {
-    this.closeProfileWatchers();
-    clearTimeout(this.reconnection);
-    clearTimeout(this.targetTimer);
-    await this.connecting?.catch(() => {});
-    if (this.syncing) await new Promise<void>(resolve => this.syncWaiters.push(resolve));
-    await this.dictionaryChain.catch(() => {});
-    await this.disconnectPages();
-    this.browser?.close();
-    this.browser = undefined;
-    this.endpoint = undefined;
-    this.options.appPath = appPath;
-    this.options.profile = profile;
-    this.options.stateDir = stateDir;
-    this.coverage = undefined;
-    this.coverageMissingForKey = undefined;
-    this.lastInspectedSha = undefined;
-    this.lastInspectedAppVersion = undefined;
-    this.runtimeCandidates = [];
-    this.trustedCandidates = [];
-    this.status.appVersion = undefined;
-    this.status.bundleSha256 = undefined;
-    this.status.newStringsCount = undefined;
-    this.status.pendingListPath = undefined;
-    this.status.errors = [];
-    this.reconnectionDelay = 1000;
-    this.watchProfiles();
-    if (this.dormant) {
-      if (!this.options.fixture) {
-        this.endpoint = await discover(this.options.appPath, this.options.profile);
-        this.status.appVersion = this.endpoint?.appVersion;
-      }
-      this.publish('paused', '已按上次选择保持暂停；开启后连接目标窗口');
-      return;
-    }
-    await this.tryConnect();
-  }
   async stop() {
     this.stopped = true; this.closeProfileWatchers(); clearTimeout(this.reconnection); clearTimeout(this.targetTimer);
     this.hudBridge.dispose();
-    await this.connecting?.catch(() => {});
-    if (this.syncing) await new Promise<void>(resolve => this.syncWaiters.push(resolve));
-    await this.dictionaryChain.catch(() => {});
-    await this.disconnectPages(); this.browser?.close();
+    await this.quiesce();
+    this.browser?.close();
     this.publish('stopped', this.status.errors.length ? '助手已停止，部分窗口恢复情况待确认' : '助手已停止');
   }
 }

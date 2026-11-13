@@ -23,6 +23,8 @@ enum Design {
     }
     enum Radius {
         static let card: CGFloat = 14
+        static let medium: CGFloat = 12
+        static let popover: CGFloat = 11
         static let compact: CGFloat = 10
     }
     static func shouldAnimate(in view: NSView?) -> Bool {
@@ -93,6 +95,11 @@ enum Design {
         ctx.restoreGState()
     }
     static let blue = color(0x0064DC, 0x0A84FF)
+    static let activeBlue = NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(srgbRed: 0.38, green: 0.68, blue: 1.0, alpha: 1.0)
+            : blue
+    }
     static let inactivePill = color(0x4A638C, 0x8CA6D6)
     static let inactivePillFill = NSColor(name: nil) {
         $0.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
@@ -1017,7 +1024,7 @@ func compactMetric(_ title: String, value: NSTextField, detail: NSTextField, act
     card.chevronView = chevron
     card.boxType = .custom
     card.borderWidth = 0.5
-    card.cornerRadius = 14
+    card.cornerRadius = Design.Radius.card
     card.fillColor = Design.card
     card.borderColor = Design.border
     card.shadow = Design.cardShadow()
@@ -1048,162 +1055,7 @@ func compactMetric(_ title: String, value: NSTextField, detail: NSTextField, act
     return card
 }
 
-// A quiet menu accessory: neutral icon, no persistent border, no blue capsule pill.
-final class MenuRefreshButton: NSButton {
-    let caption = text("刷新配额", size: 11, weight: .medium, color: Design.secondary)
-    let refreshIcon = symbol("arrow.clockwise", size: 12, color: Design.secondary)
-    let spinner = NSProgressIndicator()
-    private(set) var lastError: String = ""
-    private var hoverTracking: NSTrackingArea?
-    private var appliedState: (busy: Bool, available: Bool, error: String)?
-    private let hoverMotion = DesignMotion()
-    private let pressMotion = DesignMotion()
-    private var hoverProgress: CGFloat = 0
-    private var pressProgress: CGFloat = 0
-    private var lastHighlighted = false
-    override var allowsVibrancy: Bool { false }
-    var hovered = false {
-        didSet {
-            guard oldValue != hovered else { return }
-            hoverMotion.animate(in: self, from: hoverProgress, to: hovered ? 1.0 : 0.0, curve: .hover, threshold: 0.04) { [weak self] val in
-                self?.hoverProgress = val
-                self?.needsDisplay = true
-            }
-        }
-    }
-    override var isHighlighted: Bool {
-        didSet {
-            guard isHighlighted != lastHighlighted else { return }
-            lastHighlighted = isHighlighted
-            pressMotion.animate(in: self, from: pressProgress, to: isHighlighted ? 1.0 : 0.0, curve: .press, threshold: 0.02) { [weak self] val in
-                self?.pressProgress = val
-                self?.needsDisplay = true
-            }
-        }
-    }
-    deinit { hoverMotion.cancel(); pressMotion.cancel() }
-    override var intrinsicContentSize: NSSize { NSSize(width: 26, height: 26) }
-    init(target: AnyObject?, action: Selector) {
-        super.init(frame: .zero)
-        title = "刷新配额"; self.target = target; self.action = action
-        bezelStyle = .inline; isBordered = false; focusRingType = .none; setButtonType(.momentaryChange)
-        setAccessibilityLabel("刷新配额"); toolTip = nil
-        caption.setAccessibilityElement(false); refreshIcon.setAccessibilityElement(false)
-        caption.isHidden = true
-        spinner.style = .spinning; spinner.controlSize = .small; spinner.isDisplayedWhenStopped = false
-        spinner.translatesAutoresizingMaskIntoConstraints = false; spinner.isHidden = true
-        NSLayoutConstraint.activate([spinner.widthAnchor.constraint(equalToConstant: 14), spinner.heightAnchor.constraint(equalToConstant: 14)])
-        let contents = horizontal([refreshIcon, spinner], spacing: 0)
-        addSubview(contents); contents.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([contents.centerXAnchor.constraint(equalTo: centerXAnchor), contents.centerYAnchor.constraint(equalTo: centerYAnchor)])
-    }
-    required init?(coder: NSCoder) { fatalError() }
-    override func hitTest(_ point: NSPoint) -> NSView? { super.hitTest(point) == nil ? nil : self }
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let area = hoverTracking { removeTrackingArea(area) }
-        let area = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self)
-        hoverTracking = area; addTrackingArea(area)
-    }
-    func setRefreshState(busy: Bool, available: Bool, error: String?) {
-        let failure = error?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if let prev = appliedState, prev.busy == busy && prev.available == available && prev.error == failure {
-            return
-        }
-        appliedState = (busy: busy, available: available, error: failure)
-        isEnabled = available && !busy
-        refreshIcon.isHidden = busy
-        if spinner.isHidden != !busy {
-            spinner.isHidden = !busy
-            if busy { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
-        }
-        lastError = failure
-        caption.stringValue = busy ? "刷新中…" : (failure.isEmpty ? "刷新配额" : "刷新失败")
-        toolTip = nil
-        setAccessibilityLabel(busy ? "刷新配额，刷新中" : (failure.isEmpty ? "刷新配额" : "刷新配额，上次刷新失败"))
-        setAccessibilityHelp(busy ? "正在刷新配额" : (failure.isEmpty ? "刷新所有账号的配额" : "刷新未完成：" + failure))
-        needsDisplay = true
-    }
-    override var wantsDefaultClipping: Bool { true }
-    override func mouseEntered(with event: NSEvent) { hovered = true }
-    override func mouseExited(with event: NSEvent) { hovered = false }
-    override func draw(_ dirtyRect: NSRect) {
-        let focused = window?.firstResponder === self
-        let hp = isEnabled ? max(hoverProgress, (isHighlighted || focused) ? 1.0 : 0.0) : 0.0
-        let pp = isHighlighted ? max(pressProgress, 0.72) : pressProgress
-        let scale: CGFloat = 1.0 - 0.04 * pp
-        let gctx = NSGraphicsContext.current
-        gctx?.saveGraphicsState()
-        if abs(scale - 1.0) > 0.001, let cg = gctx?.cgContext {
-            cg.translateBy(x: bounds.midX, y: bounds.midY)
-            cg.scaleBy(x: scale, y: scale)
-            cg.translateBy(x: -bounds.midX, y: -bounds.midY)
-        }
-        if hp > 0.02 {
-            let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            let fill = isDark ? NSColor.white.withAlphaComponent(0.12 * hp) : NSColor.black.withAlphaComponent(0.06 * hp)
-            fill.setFill()
-            NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: 6, yRadius: 6).fill()
-        }
-        let busy = !spinner.isHidden
-        let tint = busy ? Design.secondary : (isEnabled ? (hp > 0.5 ? Design.blue : Design.secondary) : Design.secondary.withAlphaComponent(0.4))
-        caption.textColor = tint; refreshIcon.contentTintColor = tint
-        gctx?.restoreGraphicsState()
-    }
-}
-
-final class MenuQuotaView: NSView {
-    let card: MenuStatusCard
-    let label: NSTextField
-    var refreshButton: MenuRefreshButton { card.refreshButton }
-    let textInset: CGFloat
-    weak var assistant: Assistant?
-
-    // Standard menu-item cells start inside the menu's 4pt content inset.
-    static func titleInset(alignmentItem: NSMenuItem?) -> CGFloat {
-        let cell = NSMenuItemCell(textCell: alignmentItem?.title ?? "界面汉化")
-        cell.menuItem = alignmentItem ?? NSMenuItem(title: "界面汉化", action: nil, keyEquivalent: "")
-        cell.calcSize()
-        return cell.titleRect(forBounds: NSRect(x: 4, y: 0, width: 422, height: 32)).minX
-    }
-
-    init(target: Assistant, account: [String: Any]?, placeholder: String = "尚未保存账号", enabled: Bool) {
-        self.assistant = target
-        self.card = MenuStatusCard(target: target, account: account, placeholder: placeholder, enabled: enabled)
-        let quota = QuotaPresentation.menuQuotaText(account ?? [:])
-        self.label = text(quota.isEmpty ? placeholder : quota, size: 12, color: Design.secondary)
-        self.textInset = Self.titleInset(alignmentItem: nil)
-        super.init(frame: NSRect(x: 0, y: 0, width: MenuStatusCard.cardWidth, height: card.frame.height))
-        autoresizingMask = [.width]
-        label.font = .menuFont(ofSize: 12); label.lineBreakMode = .byTruncatingTail
-        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        label.toolTip = nil
-        label.isHidden = true
-        addSubview(card); pin(card, to: self)
-        addSubview(label)
-    }
-
-    required init?(coder: NSCoder) { fatalError() }
-
-    override var intrinsicContentSize: NSSize {
-        card.intrinsicContentSize
-    }
-
-    func apply(account: [String: Any]?, placeholder: String = "尚未保存账号", available: Bool? = nil) {
-        card.apply(account: account, placeholder: placeholder)
-        if let available {
-            card.setRefreshState(busy: assistant?.quotaRefreshing == true, available: available, error: assistant?.quotaRefreshError)
-        }
-        let quota = QuotaPresentation.menuQuotaText(account ?? [:])
-        label.stringValue = quota.isEmpty ? placeholder : quota
-        frame.size.height = card.frame.height
-        invalidateIntrinsicContentSize()
-    }
-
-    @objc func refreshPressed() {
-        card.refreshPressed()
-    }
-}
+// Legacy NSMenu menu quota components retired in favor of MenuPanelController.
 
 final class DesignPopUpCell: NSPopUpButtonCell {
     private func presentMenuBelow(_ controlView: NSView) {

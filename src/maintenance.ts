@@ -1,424 +1,43 @@
 import { lstat, readdir, mkdir, readFile } from 'node:fs/promises';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
-import { createHash, randomUUID } from 'node:crypto';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
+import { randomUUID } from 'node:crypto';
 import { ReentrantMutex } from './mutex.js';
-import { SqliteReadSnapshot } from './sqlite-read.js';
 import { executeMoves, reconcileMoves, readMaintenanceManifest, type JournalMove } from './maintenance-journal.js';
+import {
+  ALL_ALLOWED_CACHE_NAMES,
+  CACHE_METADATA,
+  CACHE_NAMES,
+  EXTENDED_CACHE_NAMES,
+  HISTORY_SLIMMING_NAMES,
+  STATEFUL_CACHE_NAMES,
+  antigravityRunning,
+  browserProfileRunning,
+  hasAntigravityCommand,
+  hasBrowserProfileCommand,
+  isStrictSubpath,
+  normalizeRetentionDays,
+  readProcessCommands,
+  type CacheCategory,
+  type CacheMaintenanceOptions,
+  type InspectedCacheEntry,
+  type SubTargetSpec,
+} from './maintenance-catalog.js';
+import {
+  checkRunningConversation,
+  collectAgentConversationTargets,
+  collectBrowserProfileCandidates,
+  collectPartitionsCandidates,
+  inspectMultiTargetItem,
+  inspectNamedEntry,
+  inspectReadOnlyPaths,
+  inspectSingleProfileItem,
+  loadConversationIndex,
+  type AgentConversationTargetsResult,
+  type MaintenanceDiscoveryContext,
+} from './maintenance-discovery.js';
 
-export type CacheCategory = 'safe' | 'stateful';
-export type CacheSection = 'runtime' | 'history';
-
-export interface CacheItemMetadata {
-  title: string;
-  subtitle: string;
-  icon: string;
-  category: CacheCategory;
-  section?: CacheSection;
-  defaultSelected: boolean;
-  impactWarning?: string;
-}
-
-// 核心常驻无损缓存（始终展示，默认勾选）
-export const CACHE_NAMES = ['Cache', 'Code Cache', 'GPUCache'] as const;
-
-// 扩展无损加速与废弃垃圾缓存（存在时自动发现并纳入，默认勾选，应删尽删）
-export const EXTENDED_CACHE_NAMES = [
-  'DawnCache',
-  'DawnWebGPUCache',
-  'DawnGraphiteCache',
-  'GraphiteDawnCache',
-  'ShaderCache',
-  'CachedData',
-  'CachedExtensionVSIXs',
-  'CachedProfilesData',
-  'Crashpad',
-  'logs',
-  'blob_storage',
-] as const;
-
-// 多路径聚合无损缓存与孤儿残留（存在非零体积或受阻时纳入分组 1，默认勾选）
-export const MULTI_SAFE_CACHE_NAMES = [
-  'PartitionsCache',
-  'AgentBrowserCache',
-  'OrphanAgentData',
-] as const;
-
-// Agent 历史深度瘦身项（分组 2，按保留天数扫描，默认不勾选，供用户按需勾选）
-export const HISTORY_SLIMMING_NAMES = [
-  'AgentTaskStepLogs',
-  'AgentVerboseTranscripts',
-  'AgentSubagentDatabases',
-] as const;
-
-// 受保护的会话、站点存储与网络授权状态目录（严禁纳入清理，仅作只读保护统计）
-export const STATEFUL_CACHE_NAMES = [
-  'Service Worker',
-  'Session Storage',
-  'WebStorage',
-  'Local Storage',
-  'Cookies',
-  'Network Persistent State',
-] as const;
-
-export const ALL_SAFE_CACHE_NAMES = [
-  ...CACHE_NAMES,
-  ...EXTENDED_CACHE_NAMES,
-  ...MULTI_SAFE_CACHE_NAMES,
-] as const;
-
-export const ALL_ALLOWED_CACHE_NAMES = [
-  ...ALL_SAFE_CACHE_NAMES,
-  ...HISTORY_SLIMMING_NAMES,
-] as const;
-
-const PARTITION_SAFE_SUBDIRS = [
-  'Cache',
-  'Code Cache',
-  'GPUCache',
-  'DawnCache',
-  'DawnWebGPUCache',
-  'DawnGraphiteCache',
-  'GraphiteDawnCache',
-  'ShaderCache',
-  'blob_storage',
-] as const;
-
-const BROWSER_TOP_SAFE_SUBDIRS = [
-  'GraphiteDawnCache',
-  'DawnGraphiteCache',
-  'DawnWebGPUCache',
-  'ShaderCache',
-  'GrShaderCache',
-  'component_crx_cache',
-  'WasmTtsEngine',
-  'Crashpad',
-] as const;
-
-const BROWSER_PROFILE_SAFE_SUBDIRS = [
-  'Cache',
-  'Code Cache',
-  'GPUCache',
-  'DawnCache',
-  'DawnWebGPUCache',
-  'DawnGraphiteCache',
-  'GraphiteDawnCache',
-  'ShaderCache',
-  'blob_storage',
-  join('Service Worker', 'CacheStorage'),
-  join('Service Worker', 'ScriptCache'),
-] as const;
-
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-export const ALLOWED_RETENTION_DAYS = [0, 7, 30] as const;
-
-export function normalizeRetentionDays(raw: unknown): number {
-  if (typeof raw === 'number' && Number.isFinite(raw)) {
-    const rounded = Math.max(0, Math.min(365, Math.floor(raw)));
-    return rounded;
-  }
-  if (typeof raw === 'string' && raw.trim() !== '') {
-    const parsed = Number(raw);
-    if (Number.isFinite(parsed)) {
-      return Math.max(0, Math.min(365, Math.floor(parsed)));
-    }
-  }
-  return 7;
-}
-
-export const CACHE_METADATA: Record<string, CacheItemMetadata> = {
-  'Cache': {
-    title: '网络与静态资源缓存',
-    subtitle: '界面资源与临时网络缓存',
-    icon: 'internaldrive',
-    category: 'safe',
-    section: 'runtime',
-    defaultSelected: true,
-  },
-  'Code Cache': {
-    title: 'V8 字节码编译缓存',
-    subtitle: 'JS / Wasm 预编译加速缓存',
-    icon: 'cpu',
-    category: 'safe',
-    section: 'runtime',
-    defaultSelected: true,
-  },
-  'GPUCache': {
-    title: '图形与着色器缓存',
-    subtitle: 'Metal 与 WebGL 着色器缓存',
-    icon: 'sparkles.rectangle.stack',
-    category: 'safe',
-    section: 'runtime',
-    defaultSelected: true,
-  },
-  'DawnCache': {
-    title: 'WebGPU 图形加速缓存',
-    subtitle: 'Dawn 引擎图形管线缓存',
-    icon: 'cube.transparent',
-    category: 'safe',
-    section: 'runtime',
-    defaultSelected: true,
-  },
-  'DawnWebGPUCache': {
-    title: 'WebGPU 管线缓存',
-    subtitle: 'WebGPU 管线与着色器缓存',
-    icon: 'cube.transparent',
-    category: 'safe',
-    section: 'runtime',
-    defaultSelected: true,
-  },
-  'DawnGraphiteCache': {
-    title: 'Graphite 渲染管线缓存',
-    subtitle: 'Chromium 图形管线预编译缓存',
-    icon: 'cube.transparent',
-    category: 'safe',
-    section: 'runtime',
-    defaultSelected: true,
-  },
-  'GraphiteDawnCache': {
-    title: 'Graphite 着色器加速缓存',
-    subtitle: '图形后端着色器与管线缓存',
-    icon: 'sparkles.rectangle.stack',
-    category: 'safe',
-    section: 'runtime',
-    defaultSelected: true,
-  },
-  'ShaderCache': {
-    title: '底层着色器缓存',
-    subtitle: '图形驱动预编译着色器缓存',
-    icon: 'sparkles.rectangle.stack',
-    category: 'safe',
-    section: 'runtime',
-    defaultSelected: true,
-  },
-  'CachedData': {
-    title: '工作区运行编译缓存',
-    subtitle: '主进程与渲染进程脚本缓存',
-    icon: 'memorychip',
-    category: 'safe',
-    section: 'runtime',
-    defaultSelected: true,
-  },
-  'CachedExtensionVSIXs': {
-    title: '扩展安装包残留',
-    subtitle: '插件安装遗留的 VSIX 压缩包',
-    icon: 'shippingbox',
-    category: 'safe',
-    section: 'runtime',
-    defaultSelected: true,
-  },
-  'CachedProfilesData': {
-    title: '配置快照临时缓存',
-    subtitle: '配置切换生成的临时加速缓存',
-    icon: 'doc.badge.gearshape',
-    category: 'safe',
-    section: 'runtime',
-    defaultSelected: true,
-  },
-  'Crashpad': {
-    title: '崩溃转储与诊断残留',
-    subtitle: '历史崩溃报告与诊断转储',
-    icon: 'exclamationmark.triangle',
-    category: 'safe',
-    section: 'runtime',
-    defaultSelected: true,
-  },
-  'logs': {
-    title: '历史运行日志',
-    subtitle: '应用与扩展宿主运行日志',
-    icon: 'doc.text',
-    category: 'safe',
-    section: 'runtime',
-    defaultSelected: true,
-  },
-  'blob_storage': {
-    title: '临时二进制块缓存',
-    subtitle: '运行期临时二进制块数据',
-    icon: 'archivebox',
-    category: 'safe',
-    section: 'runtime',
-    defaultSelected: true,
-  },
-  'PartitionsCache': {
-    title: '内嵌视图子分区缓存',
-    subtitle: '隔离视图静态资源与编译缓存',
-    icon: 'square.split.2x2',
-    category: 'safe',
-    section: 'runtime',
-    defaultSelected: true,
-  },
-  'AgentBrowserCache': {
-    title: '浏览器沙箱加速缓存',
-    subtitle: '内置浏览器缓存（保留登录与 Cookie）',
-    icon: 'globe',
-    category: 'safe',
-    section: 'runtime',
-    defaultSelected: true,
-  },
-  'OrphanAgentData': {
-    title: '崩溃日志与临时媒体',
-    subtitle: '已删对话碎片、崩溃日志与临时媒体',
-    icon: 'trash.slash',
-    category: 'safe',
-    section: 'runtime',
-    defaultSelected: true,
-  },
-  'AgentTaskStepLogs': {
-    title: '历史任务与步骤输出日志',
-    subtitle: '非活跃对话的终端、步骤日志与草稿',
-    icon: 'terminal',
-    category: 'stateful',
-    section: 'history',
-    defaultSelected: false,
-    impactWarning: '清理中间运行日志，主对话与正式产物完好保留',
-  },
-  'AgentVerboseTranscripts': {
-    title: '全量冗余转录与分片镜像',
-    subtitle: '非活跃对话冗余转录（保留精简版）',
-    icon: 'doc.on.doc',
-    category: 'stateful',
-    section: 'history',
-    defaultSelected: false,
-    impactWarning: '仅移除冗余大体积镜像，对话界面与紧凑版记录不受影响',
-  },
-  'AgentSubagentDatabases': {
-    title: '历史子智能体轨迹库',
-    subtitle: '已完成子智能体库（账单已归档）',
-    icon: 'arrow.triangle.branch',
-    category: 'stateful',
-    section: 'history',
-    defaultSelected: false,
-    impactWarning: '主对话与历史账单完好保留，旧子智能体内部过程不再展开',
-  },
-  'Service Worker': {
-    title: '后台服务工作线程',
-    subtitle: '按需清理 · 清理后重新初始化扩展后台状态',
-    icon: 'gearshape.2',
-    category: 'stateful',
-    defaultSelected: false,
-    impactWarning: '重置扩展后台状态',
-  },
-  'Session Storage': {
-    title: '内嵌视图会话缓存',
-    subtitle: '按需清理 · 清理后重置部分内嵌视图临时会话',
-    icon: 'rectangle.stack',
-    category: 'stateful',
-    defaultSelected: false,
-    impactWarning: '重置临时会话状态',
-  },
-  'WebStorage': {
-    title: 'Web 视图持久缓存',
-    subtitle: '按需清理 · 清理后重置扩展内嵌网页状态',
-    icon: 'globe',
-    category: 'stateful',
-    defaultSelected: false,
-    impactWarning: '重置内嵌网页状态',
-  },
-  'Local Storage': {
-    title: '扩展与站点本地存储',
-    subtitle: '按需清理 · 清理后可能需重新授权部分扩展',
-    icon: 'externaldrive.badge.person.crop',
-    category: 'stateful',
-    defaultSelected: false,
-    impactWarning: '可能需重新授权扩展',
-  },
-  'Cookies': {
-    title: '网络会话与授权凭据',
-    subtitle: '按需清理 · 清理后部分服务需重新登录授权',
-    icon: 'key.horizontal',
-    category: 'stateful',
-    defaultSelected: false,
-    impactWarning: '清理后需重新登录授权',
-  },
-  'Network Persistent State': {
-    title: '网络连接协商状态',
-    subtitle: '按需清理 · 清理后重新协商网络连接参数',
-    icon: 'network',
-    category: 'stateful',
-    defaultSelected: false,
-    impactWarning: '重置网络连接偏好',
-  },
-};
-
-export async function antigravityRunning(appPath = '/Applications/Antigravity.app') {
-  try {
-    const appRoots = Array.from(new Set([appPath, '/Applications/Antigravity.app']));
-    const macOsPrefixes = appRoots.map(p => p + '/Contents/MacOS/');
-    const lsPrefixes = appRoots.map(p => p + '/Contents/Resources/bin/language_server');
-    const { stdout } = await promisify(execFile)('/bin/ps', ['-axo', 'command=']);
-    return stdout.split('\n').some(line => {
-      const trimmed = line.trim();
-      return (
-        macOsPrefixes.some(prefix => trimmed.startsWith(prefix)) ||
-        lsPrefixes.some(prefix => trimmed.startsWith(prefix) || trimmed.includes(prefix))
-      );
-    });
-  } catch {
-    return false;
-  }
-}
-
-export async function browserProfileRunning(browserProfileDir: string): Promise<boolean> {
-  if (!browserProfileDir) return false;
-  try {
-    const { stdout } = await promisify(execFile)('/bin/ps', ['-axo', 'command=']);
-    return stdout.split('\n').some(line => {
-      const trimmed = line.trim();
-      return trimmed.includes(browserProfileDir) && !trimmed.includes('/bin/ps');
-    });
-  } catch {
-    return false;
-  }
-}
-
-export interface CacheMaintenanceOptions {
-  appPath?: string;
-  stateDir?: string;
-  geminiDir?: string;
-  browserRunning?: () => Promise<boolean>;
-  archiveDatabases?: (dbPaths: string[]) => Promise<unknown>;
-  onMutated?: () => void | Promise<void>;
-}
-
-interface SubTargetSpec {
-  path: string;
-  isUsageDb?: boolean;
-}
-
-interface InspectedCacheEntry {
-  name: string;
-  title: string;
-  subtitle: string;
-  icon: string;
-  category: CacheCategory;
-  section: CacheSection;
-  defaultSelected: boolean;
-  impactWarning?: string;
-  bytes: number;
-  fileCount: number;
-  itemCount?: number;
-  lastModifiedAt: number;
-  exists: boolean;
-  clearable: boolean;
-  fingerprint: string;
-  reason?: string;
-  isSingleLegacyRoot: boolean;
-  subTargets: SubTargetSpec[];
-}
-
-interface ConversationIndexSnapshot {
-  available: boolean;
-  summaryMap: Map<string, { parentId: string; status: string }>;
-  runningTreeIds: Set<string>;
-  archivedTreeIds: Set<string>;
-}
-
-function isStrictSubpath(parentDir: string, candidatePath: string): boolean {
-  const rel = relative(resolve(parentDir), resolve(candidatePath));
-  return Boolean(rel && !rel.startsWith('..') && !rel.includes(`..${sep}`) && rel !== '.');
-}
+export * from './maintenance-catalog.js';
 
 export class CacheMaintenance {
   private mutex = new ReentrantMutex();
@@ -486,20 +105,62 @@ export class CacheMaintenance {
     return await browserProfileRunning(join(agentDir, 'browser_profile'));
   }
 
+  private async inspectProcessState(): Promise<{ running: boolean; browserBusy: boolean }> {
+    const agentDir = this.officialAgentDir();
+    const browserProfileDir = agentDir ? join(agentDir, 'browser_profile') : '';
+    if (this.options.browserRunning) {
+      const [running, browserBusy] = await Promise.all([
+        this.running(),
+        this.options.browserRunning(),
+      ]);
+      return { running, browserBusy };
+    }
+    const commands = await readProcessCommands();
+    if (!commands) return { running: false, browserBusy: false };
+    return {
+      running: hasAntigravityCommand(commands, this.options.appPath),
+      browserBusy: browserProfileDir ? hasBrowserProfileCommand(commands, browserProfileDir) : false,
+    };
+  }
+
+  private async assertSafeDirectoryChain(
+    rootDir: string,
+    targetPath: string,
+    options: { allowMissing?: boolean; boundaryError: string; rootError: string; segmentError: string }
+  ): Promise<void> {
+    const resolvedRoot = resolve(rootDir);
+    const resolvedTarget = resolve(targetPath);
+    if (!isStrictSubpath(resolvedRoot, resolvedTarget)) {
+      throw Error(options.boundaryError);
+    }
+    const rootStat = await lstat(resolvedRoot);
+    if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
+      throw Error(options.rootError);
+    }
+    let cursor = resolvedRoot;
+    for (const seg of relative(resolvedRoot, dirname(resolvedTarget)).split(sep).filter(Boolean)) {
+      cursor = join(cursor, seg);
+      const st = options.allowMissing
+        ? await lstat(cursor).catch(error => { if (error.code === 'ENOENT') return null; throw error; })
+        : await lstat(cursor);
+      if (st && (st.isSymbolicLink() || !st.isDirectory())) {
+        throw Error(options.segmentError);
+      }
+    }
+  }
+
   private async guardJournalMove(snapshot: string, move: JournalMove): Promise<void> {
     if (await this.running()) throw Error('请先退出 Antigravity，再恢复维护事务');
     for (const path of [move.from, move.to]) {
       const root = isStrictSubpath(snapshot, path) ? snapshot : this.allowedRootDirs().find(root => isStrictSubpath(root, path));
       if (!root) throw Error('维护事务路径超出受控目录');
       // Reject symlink ancestors even when the last few destination directories do not exist yet.
-      let cursor = resolve(root);
-      const rootStat = await lstat(cursor);
-      if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) throw Error('维护事务根目录身份不匹配');
-      for (const part of relative(cursor, dirname(path)).split(sep).filter(Boolean)) {
-        cursor = join(cursor, part);
-        const stat = await lstat(cursor).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
-        if (stat && (stat.isSymbolicLink() || !stat.isDirectory())) throw Error('维护事务父路径身份不匹配');
-      }
+      await this.assertSafeDirectoryChain(root, path, {
+        allowMissing: true,
+        boundaryError: '维护事务路径超出受控目录',
+        rootError: '维护事务根目录身份不匹配',
+        segmentError: '维护事务父路径身份不匹配',
+      });
     }
     if (move.from.includes('browser_profile') || move.to.includes('browser_profile')) {
       if (await this.isBrowserProfileBusy()) throw Error('独立浏览器仍在使用该路径，暂停恢复');
@@ -521,666 +182,66 @@ export class CacheMaintenance {
   }
 
   private async ensureSafeAncestors(rootDir: string, targetPath: string): Promise<void> {
-    const resolvedRoot = resolve(rootDir);
-    const resolvedTarget = resolve(targetPath);
-    if (!isStrictSubpath(resolvedRoot, resolvedTarget)) {
-      throw Error('缓存路径超出受控目录边界，已跳过');
-    }
-    const rootStat = await lstat(resolvedRoot);
-    if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
-      throw Error('缓存路径包含链接，已跳过');
-    }
-    const relParts = relative(resolvedRoot, dirname(resolvedTarget)).split(sep).filter(Boolean);
-    let cursor = resolvedRoot;
-    for (const seg of relParts) {
-      cursor = join(cursor, seg);
-      const st = await lstat(cursor);
-      if (st.isSymbolicLink() || !st.isDirectory()) {
-        throw Error('缓存含符号链接，已跳过');
-      }
-    }
+    await this.assertSafeDirectoryChain(rootDir, targetPath, {
+      allowMissing: false,
+      boundaryError: '缓存路径超出受控目录边界，已跳过',
+      rootError: '缓存路径包含链接，已跳过',
+      segmentError: '缓存含符号链接，已跳过',
+    });
   }
 
-  private async inspectPathTree(root: string, deadline: number, counter: { count: number }): Promise<{
-    bytes: number;
-    fileCount: number;
-    lastModifiedAt: number;
-    items: string[];
-  }> {
-    const items: string[] = [];
-    let bytes = 0;
-    let fileCount = 0;
-    let lastModifiedAt = 0;
-
-    const walk = async (path: string) => {
-      if (++counter.count > 250000 || Date.now() > deadline) throw Error('目录过大，请手动检查');
-      const s = await lstat(path);
-      if (s.isSymbolicLink()) throw Error('缓存含符号链接，已跳过');
-      if (!s.isDirectory() && !s.isFile()) throw Error('缓存含非常规文件，已跳过');
-      items.push(JSON.stringify([path.slice(root.length), s.dev, s.ino, s.size, s.mtimeMs, s.ctimeMs]));
-      if (s.mtimeMs > lastModifiedAt) lastModifiedAt = s.mtimeMs;
-      if (s.isDirectory()) {
-        for (const n of (await readdir(path)).sort()) await walk(join(path, n));
-      } else {
-        bytes += s.size;
-        fileCount++;
-      }
+  private discoveryContext(): MaintenanceDiscoveryContext {
+    return {
+      profile: this.profile,
+      options: this.options,
+      officialAgentDir: () => this.officialAgentDir(),
+      allowedRootDirs: () => this.allowedRootDirs(),
+      ensureSafeAncestors: (rootDir, targetPath) => this.ensureSafeAncestors(rootDir, targetPath),
     };
-    await walk(root);
-    return { bytes, fileCount, lastModifiedAt, items };
   }
 
-  private async inspectSingleProfileItem(name: string): Promise<InspectedCacheEntry> {
-    const meta: CacheItemMetadata = CACHE_METADATA[name] ?? {
-      title: name,
-      subtitle: `应用运行缓存目录（${name}）`,
-      icon: 'folder',
-      category: 'safe',
-      section: 'runtime',
-      defaultSelected: true,
-    };
-    const root = join(this.profile, name);
-    const deadline = Date.now() + 8000;
-    try {
-      const base = await lstat(this.profile);
-      if (base.isSymbolicLink() || !base.isDirectory()) throw Error('缓存路径包含链接，已跳过');
-      const tree = await this.inspectPathTree(root, deadline, { count: 0 });
-      return {
-        name,
-        title: meta.title,
-        subtitle: meta.subtitle,
-        icon: meta.icon,
-        category: meta.category,
-        section: meta.section ?? 'runtime',
-        defaultSelected: meta.defaultSelected,
-        ...(meta.impactWarning ? { impactWarning: meta.impactWarning } : {}),
-        bytes: tree.bytes,
-        fileCount: tree.fileCount,
-        lastModifiedAt: tree.lastModifiedAt > 0 ? Math.floor(tree.lastModifiedAt / 1000) : 0,
-        exists: true,
-        clearable: true,
-        fingerprint: createHash('sha256').update(tree.items.join('\n')).digest('hex'),
-        isSingleLegacyRoot: true,
-        subTargets: [{ path: root }],
-      };
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        return {
-          name,
-          title: meta.title,
-          subtitle: meta.subtitle,
-          icon: meta.icon,
-          category: meta.category,
-          section: meta.section ?? 'runtime',
-          defaultSelected: meta.defaultSelected,
-          ...(meta.impactWarning ? { impactWarning: meta.impactWarning } : {}),
-          bytes: 0,
-          fileCount: 0,
-          lastModifiedAt: 0,
-          exists: false,
-          clearable: true,
-          fingerprint: 'missing',
-          isSingleLegacyRoot: true,
-          subTargets: [],
-        };
-      }
-      return {
-        name,
-        title: meta.title,
-        subtitle: meta.subtitle,
-        icon: meta.icon,
-        category: meta.category,
-        section: meta.section ?? 'runtime',
-        defaultSelected: meta.defaultSelected,
-        ...(meta.impactWarning ? { impactWarning: meta.impactWarning } : {}),
-        bytes: 0,
-        fileCount: 0,
-        lastModifiedAt: 0,
-        exists: true,
-        clearable: false,
-        fingerprint: 'blocked',
-        reason: (error as Error).message,
-        isSingleLegacyRoot: true,
-        subTargets: [],
-      };
-    }
+  private inspectSingleProfileItem(name: string): Promise<InspectedCacheEntry> {
+    return inspectSingleProfileItem(this.discoveryContext(), name);
   }
 
-  private async inspectMultiTargetItem(
+  private inspectMultiTargetItem(
     name: string,
     candidates: SubTargetSpec[],
     options?: { dynamicSubtitle?: string; itemCount?: number }
   ): Promise<InspectedCacheEntry> {
-    const meta: CacheItemMetadata = CACHE_METADATA[name] ?? {
-      title: name,
-      subtitle: name,
-      icon: 'folder',
-      category: 'safe',
-      section: 'runtime',
-      defaultSelected: false,
-    };
-    const subtitle = options?.dynamicSubtitle ?? meta.subtitle;
-    if (candidates.length === 0) {
-      return {
-        name,
-        title: meta.title,
-        subtitle,
-        icon: meta.icon,
-        category: meta.category,
-        section: meta.section ?? (meta.category === 'stateful' ? 'history' : 'runtime'),
-        defaultSelected: meta.defaultSelected,
-        ...(meta.impactWarning ? { impactWarning: meta.impactWarning } : {}),
-        bytes: 0,
-        fileCount: 0,
-        ...(options?.itemCount !== undefined ? { itemCount: options.itemCount } : {}),
-        lastModifiedAt: 0,
-        exists: false,
-        clearable: true,
-        fingerprint: 'missing',
-        isSingleLegacyRoot: false,
-        subTargets: [],
-      };
-    }
-
-    const deadline = Date.now() + 12000;
-    const counter = { count: 0 };
-    const hash = createHash('sha256');
-    const activeTargets: SubTargetSpec[] = [];
-    let totalBytes = 0;
-    let totalFiles = 0;
-    let lastModifiedAt = 0;
-
-    try {
-      const sorted = [...candidates].sort((a, b) => a.path.localeCompare(b.path));
-      for (const spec of sorted) {
-        const rootOwner = this.allowedRootDirs().find(r => isStrictSubpath(r, spec.path));
-        if (!rootOwner) throw Error('缓存路径超出受控目录边界，已跳过');
-        await this.ensureSafeAncestors(rootOwner, spec.path);
-        try {
-          const tree = await this.inspectPathTree(spec.path, deadline, counter);
-          let sidecarBytes = 0;
-          let sidecarFiles = 0;
-          const sidecarMarks: string[] = [];
-          for (const suffix of ['-journal', '-wal', '-shm']) {
-            try {
-              const sideStat = await lstat(`${spec.path}${suffix}`);
-              if (sideStat.isSymbolicLink()) throw Error('缓存含符号链接，已跳过');
-              if (sideStat.isFile()) {
-                sidecarBytes += sideStat.size;
-                sidecarFiles += 1;
-                if (sideStat.mtimeMs > lastModifiedAt) lastModifiedAt = sideStat.mtimeMs;
-                // SQLite readers update SHM read marks. That coordination timestamp is
-                // not a change to DB/WAL content; still bind its identity, owner and size.
-                sidecarMarks.push(JSON.stringify([suffix, sideStat.dev, sideStat.ino, sideStat.uid,
-                  sideStat.size, suffix === '-shm' ? null : sideStat.mtimeMs]));
-              }
-            } catch (sideErr) {
-              if ((sideErr as NodeJS.ErrnoException).code !== 'ENOENT') throw sideErr;
-            }
-          }
-          totalBytes += tree.bytes + sidecarBytes;
-          totalFiles += tree.fileCount + sidecarFiles;
-          if (tree.lastModifiedAt > lastModifiedAt) lastModifiedAt = tree.lastModifiedAt;
-          hash.update(`TARGET:${spec.path}\n${tree.items.join('\n')}\nSIDE:${sidecarMarks.join(',')}\n`);
-          activeTargets.push(spec);
-        } catch (err) {
-          if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
-          throw err;
-        }
-      }
-
-      if (activeTargets.length === 0) {
-        return {
-          name,
-          title: meta.title,
-          subtitle,
-          icon: meta.icon,
-          category: meta.category,
-          section: meta.section ?? (meta.category === 'stateful' ? 'history' : 'runtime'),
-          defaultSelected: meta.defaultSelected,
-          ...(meta.impactWarning ? { impactWarning: meta.impactWarning } : {}),
-          bytes: 0,
-          fileCount: 0,
-          ...(options?.itemCount !== undefined ? { itemCount: options.itemCount } : {}),
-          lastModifiedAt: 0,
-          exists: false,
-          clearable: true,
-          fingerprint: 'missing',
-          isSingleLegacyRoot: false,
-          subTargets: [],
-        };
-      }
-
-      return {
-        name,
-        title: meta.title,
-        subtitle,
-        icon: meta.icon,
-        category: meta.category,
-        section: meta.section ?? (meta.category === 'stateful' ? 'history' : 'runtime'),
-        defaultSelected: meta.defaultSelected,
-        ...(meta.impactWarning ? { impactWarning: meta.impactWarning } : {}),
-        bytes: totalBytes,
-        fileCount: totalFiles,
-        ...(options?.itemCount !== undefined ? { itemCount: options.itemCount } : {}),
-        lastModifiedAt: lastModifiedAt > 0 ? Math.floor(lastModifiedAt / 1000) : 0,
-        exists: totalBytes > 0 || totalFiles > 0,
-        clearable: true,
-        fingerprint: hash.digest('hex'),
-        isSingleLegacyRoot: false,
-        subTargets: activeTargets,
-      };
-    } catch (error) {
-      return {
-        name,
-        title: meta.title,
-        subtitle,
-        icon: meta.icon,
-        category: meta.category,
-        section: meta.section ?? (meta.category === 'stateful' ? 'history' : 'runtime'),
-        defaultSelected: meta.defaultSelected,
-        ...(meta.impactWarning ? { impactWarning: meta.impactWarning } : {}),
-        bytes: 0,
-        fileCount: 0,
-        lastModifiedAt: 0,
-        exists: true,
-        clearable: false,
-        fingerprint: 'blocked',
-        reason: (error as Error).message,
-        isSingleLegacyRoot: false,
-        subTargets: [],
-      };
-    }
+    return inspectMultiTargetItem(this.discoveryContext(), name, candidates, options);
   }
 
-  private async collectPartitionsCandidates(): Promise<SubTargetSpec[]> {
-    const partRoot = join(this.profile, 'Partitions');
-    const targets: SubTargetSpec[] = [];
-    try {
-      const st = await lstat(partRoot);
-      if (st.isSymbolicLink() || !st.isDirectory()) return [];
-      const partitions = await readdir(partRoot);
-      for (const part of partitions) {
-        const partDir = join(partRoot, part);
-        const pst = await lstat(partDir).catch(() => null);
-        if (!pst || pst.isSymbolicLink() || !pst.isDirectory()) continue;
-        for (const sub of PARTITION_SAFE_SUBDIRS) {
-          const candidate = join(partDir, sub);
-          const cst = await lstat(candidate).catch(() => null);
-          if (cst && !cst.isSymbolicLink()) targets.push({ path: candidate });
-        }
-      }
-    } catch {}
-    return targets;
+  private collectPartitionsCandidates(): Promise<SubTargetSpec[]> {
+    return collectPartitionsCandidates(this.discoveryContext());
   }
 
-  private async collectBrowserProfileCandidates(): Promise<SubTargetSpec[]> {
-    const agentDir = this.officialAgentDir();
-    if (!agentDir) return [];
-    const bpRoot = join(agentDir, 'browser_profile');
-    const targets: SubTargetSpec[] = [];
-    try {
-      const st = await lstat(bpRoot);
-      if (st.isSymbolicLink() || !st.isDirectory()) return [];
-
-      for (const topSub of BROWSER_TOP_SAFE_SUBDIRS) {
-        const candidate = join(bpRoot, topSub);
-        const cst = await lstat(candidate).catch(() => null);
-        if (cst && !cst.isSymbolicLink()) {
-          targets.push({ path: candidate });
-        }
-      }
-
-      const entries = await readdir(bpRoot);
-      for (const entry of entries) {
-        const isProfileDir =
-          entry === 'Default' ||
-          entry === 'Guest Profile' ||
-          entry === 'System Profile' ||
-          /^Profile \d+$/.test(entry);
-        if (!isProfileDir) continue;
-        const profPath = join(bpRoot, entry);
-        const pst = await lstat(profPath).catch(() => null);
-        if (!pst || pst.isSymbolicLink() || !pst.isDirectory()) continue;
-        for (const sub of BROWSER_PROFILE_SAFE_SUBDIRS) {
-          const candidate = join(profPath, sub);
-          const cst = await lstat(candidate).catch(() => null);
-          if (cst && !cst.isSymbolicLink()) {
-            targets.push({ path: candidate });
-          }
-        }
-      }
-    } catch {}
-    return targets;
+  private collectBrowserProfileCandidates(): Promise<SubTargetSpec[]> {
+    return collectBrowserProfileCandidates(this.discoveryContext());
   }
 
-  private async loadConversationIndex(agentDir: string): Promise<ConversationIndexSnapshot> {
-    const summaryMap = new Map<string, { parentId: string; status: string }>();
-    const runningTreeIds = new Set<string>();
-    const archivedTreeIds = new Set<string>();
-    const dbPath = join(agentDir, 'conversation_summaries.db');
-
-    const dbStat = await lstat(dbPath).catch(() => null);
-    if (!dbStat || !dbStat.isFile() || dbStat.isSymbolicLink()) {
-      return { available: false, summaryMap, runningTreeIds, archivedTreeIds };
-    }
-
-    const reader = new SqliteReadSnapshot(dbPath);
-    try {
-      const sumRes = await reader.query(
-        'SELECT conversation_id, parent_conversation_id, status FROM conversation_summaries;'
-      );
-      if (!sumRes.ok) {
-        return { available: false, summaryMap, runningTreeIds, archivedTreeIds };
-      }
-      for (const row of sumRes.rows) {
-        const cid = typeof row.conversation_id === 'string' ? row.conversation_id.trim() : '';
-        if (!cid) continue;
-        summaryMap.set(cid, {
-          parentId: typeof row.parent_conversation_id === 'string' ? row.parent_conversation_id.trim() : '',
-          status: typeof row.status === 'string' ? row.status.trim() : '',
-        });
-      }
-
-      const directArchived = new Set<string>();
-      const ftsRes = await reader.query(
-        'SELECT DISTINCT conversation_id FROM conversations_fts WHERE archived = 1;'
-      );
-      if (!ftsRes.ok) return { available: false, summaryMap, runningTreeIds, archivedTreeIds };
-      if (ftsRes.ok) {
-        for (const row of ftsRes.rows) {
-          if (typeof row.conversation_id === 'string' && row.conversation_id.trim()) {
-            directArchived.add(row.conversation_id.trim());
-          }
-        }
-      }
-
-      // 向上查找祖先链，确保只要树上任一节点处于运行中或已归档，整棵树受保护
-      const ancestorsOf = (cid: string): string[] => {
-        const chain: string[] = [cid];
-        const visited = new Set<string>([cid]);
-        let cur = summaryMap.get(cid)?.parentId ?? '';
-        while (cur && !visited.has(cur)) {
-          visited.add(cur);
-          chain.push(cur);
-          cur = summaryMap.get(cur)?.parentId ?? '';
-        }
-        return chain;
-      };
-
-      const safeStatuses = new Set(['CASCADE_RUN_STATUS_IDLE', 'CASCADE_RUN_STATUS_DONE', 'CASCADE_RUN_STATUS_COMPLETED', 'CASCADE_RUN_STATUS_CLEARED', 'CASCADE_RUN_STATUS_ERROR', 'CASCADE_RUN_STATUS_CANCELLED', 'CASCADE_RUN_STATUS_CANCELED', 'CASCADE_RUN_STATUS_KILLED']);
-      const protectedTree = (seeds: Iterable<string>): Set<string> => {
-        const ancestors = new Set<string>();
-        for (const seed of seeds) for (const id of ancestorsOf(seed)) ancestors.add(id);
-        const protectedIds = new Set<string>();
-        for (const cid of summaryMap.keys()) {
-          const chain = ancestorsOf(cid);
-          if (chain.some(id => ancestors.has(id)) || chain.some(id => !summaryMap.has(id))) {
-            for (const id of chain) protectedIds.add(id);
-          }
-        }
-        return protectedIds;
-      };
-      for (const id of protectedTree([...summaryMap].filter(([, info]) => !safeStatuses.has(info.status)).map(([id]) => id))) runningTreeIds.add(id);
-      for (const id of protectedTree(directArchived)) archivedTreeIds.add(id);
-
-      return { available: await reader.verifyUnchanged(), summaryMap, runningTreeIds, archivedTreeIds };
-    } catch {
-      return { available: false, summaryMap, runningTreeIds, archivedTreeIds };
-    } finally {
-      await reader.close();
-    }
+  async loadConversationIndex(agentDir: string) {
+    return loadConversationIndex(agentDir);
   }
 
   async hasRunningConversation(): Promise<boolean> {
-    const agentDir = this.officialAgentDir();
-    if (!agentDir) return false;
-    const index = await this.loadConversationIndex(agentDir);
-    if (!index.available || index.runningTreeIds.size === 0) return false;
-    const recentThresholdMs = Date.now() - 180_000;
-    const convDir = join(agentDir, 'conversations');
-    const brainDir = join(agentDir, 'brain');
-    for (const cid of index.runningTreeIds) {
-      if (!UUID_REGEX.test(cid)) continue;
-      const dbPath = join(convDir, `${cid}.db`);
-      const [dbSt, walSt, bSt] = await Promise.all([
-        lstat(dbPath).catch(() => null),
-        lstat(`${dbPath}-wal`).catch(() => null),
-        lstat(join(brainDir, cid)).catch(() => null),
-      ]);
-      const latest = Math.max(dbSt?.mtimeMs ?? 0, walSt?.mtimeMs ?? 0, bSt?.mtimeMs ?? 0);
-      if (latest >= recentThresholdMs) return true;
-    }
-    return false;
+    return checkRunningConversation(this.officialAgentDir());
   }
 
-  private async collectAgentConversationTargets(retentionDays: number): Promise<{
-    orphanTargets: SubTargetSpec[];
-    orphanConvCount: number;
-    taskStepTargets: SubTargetSpec[];
-    verboseTranscriptTargets: SubTargetSpec[];
-    subagentDbTargets: SubTargetSpec[];
-    subagentCount: number;
-    uncertainCount: number;
-  }> {
-    const empty = {
-      orphanTargets: [] as SubTargetSpec[],
-      orphanConvCount: 0,
-      taskStepTargets: [] as SubTargetSpec[],
-      verboseTranscriptTargets: [] as SubTargetSpec[],
-      subagentDbTargets: [] as SubTargetSpec[],
-      subagentCount: 0,
-      uncertainCount: 0,
-    };
-    const agentDir = this.officialAgentDir();
-    if (!agentDir) return empty;
-    const agentStat = await lstat(agentDir).catch(() => null);
-    if (!agentStat || !agentStat.isDirectory() || agentStat.isSymbolicLink()) return empty;
-
-    const nowMs = Date.now();
-    const quietThresholdMs = nowMs - 60_000; // 排除 60 秒内刚写入的瞬态会话文件
-    const cutoffMs = retentionDays > 0 ? nowMs - retentionDays * 86_400_000 : quietThresholdMs;
-
-    const index = await this.loadConversationIndex(agentDir);
-    const convDir = join(agentDir, 'conversations');
-    const brainDir = join(agentDir, 'brain');
-
-    const uncertainIds = new Set<string>();
-    for (const name of await readdir(convDir).catch(() => [] as string[])) {
-      if (!name.endsWith('.db')) continue;
-      const id = name.slice(0, -3), info = index.summaryMap.get(id);
-      if (UUID_REGEX.test(id) && (!index.available || !info || info.parentId && !index.summaryMap.has(info.parentId))) uncertainIds.add(id);
-    }
-    const orphanTargets: SubTargetSpec[] = [];
-    const orphanIds = new Set<string>();
-
-    // 1. 崩溃日志与全局 tempmediaStorage
-    const crashesDir = join(agentDir, 'crashes');
-    const crashesStat = await lstat(crashesDir).catch(() => null);
-    if (crashesStat && !crashesStat.isSymbolicLink() && crashesStat.isDirectory()) {
-      const crashFiles = await readdir(crashesDir).catch(() => [] as string[]);
-      for (const f of crashFiles) {
-        orphanTargets.push({ path: join(crashesDir, f) });
-      }
-    }
-    const globalTempMedia = join(brainDir, 'tempmediaStorage');
-    const gtmStat = await lstat(globalTempMedia).catch(() => null);
-    if (gtmStat && !gtmStat.isSymbolicLink() && gtmStat.isDirectory()) {
-      const gtmFiles = await readdir(globalTempMedia).catch(() => [] as string[]);
-      for (const f of gtmFiles) {
-        orphanTargets.push({ path: join(globalTempMedia, f) });
-      }
-    }
-
-    // An absent summary/parent is not a deletion receipt. Conversation DBs and brain
-    // directories with unknown ownership are protected, never classified as safe cache.
-
-    // 3. 收集非孤儿会话的 brain 派生运行日志（与孤儿集合严格互不相交）
-    const taskStepTargets: SubTargetSpec[] = [];
-    const verboseTranscriptTargets: SubTargetSpec[] = [];
-    const brainDirs = await readdir(brainDir).catch(() => [] as string[]);
-
-    for (const cid of brainDirs) {
-      if (!index.available || !index.summaryMap.has(cid) || !UUID_REGEX.test(cid) || orphanIds.has(cid) || index.runningTreeIds.has(cid) || index.archivedTreeIds.has(cid)) continue;
-      const bPath = join(brainDir, cid);
-      const bSt = await lstat(bPath).catch(() => null);
-      if (!bSt || !bSt.isDirectory() || bSt.isSymbolicLink()) continue;
-
-      // .tempmediaStorage 属于纯临时缓存（只要该会话未运行且静止 >60s，归入无损孤儿/临时残留）
-      const dotTemp = join(bPath, '.tempmediaStorage');
-      const dotTempSt = await lstat(dotTemp).catch(() => null);
-      if (dotTempSt && !dotTempSt.isSymbolicLink() && dotTempSt.mtimeMs <= quietThresholdMs) {
-        orphanTargets.push({ path: dotTemp });
-      }
-
-      // 判断会话最后活跃时间是否早于保留窗口 cutoffMs
-      // 优先以会话库 (.db / -wal) 与紧凑转录文件 (transcript.jsonl) 的修改时间为准，
-      // 避免移走 scratch 等同级子目录时因父目录 brain/<cid> mtime 刷新而误判为刚活跃。
-      const dbPath = join(convDir, `${cid}.db`);
-      const compactLogPath = join(bPath, '.system_generated', 'logs', 'transcript.jsonl');
-      const [dbSt, walSt, logSt] = await Promise.all([
-        lstat(dbPath).catch(() => null),
-        lstat(`${dbPath}-wal`).catch(() => null),
-        lstat(compactLogPath).catch(() => null),
-      ]);
-      const anchorMtime = Math.max(dbSt?.mtimeMs ?? 0, walSt?.mtimeMs ?? 0, logSt?.mtimeMs ?? 0);
-      const sessionLastMtime = anchorMtime > 0 ? anchorMtime : bSt.mtimeMs;
-      if (sessionLastMtime > cutoffMs || sessionLastMtime > quietThresholdMs) continue;
-
-      for (const rel of [
-        join('.system_generated', 'tasks'),
-        join('.system_generated', 'steps'),
-        'scratch',
-      ]) {
-        const candidate = join(bPath, rel);
-        if (await lstat(candidate).catch(() => null)) {
-          taskStepTargets.push({ path: candidate });
-        }
-      }
-
-      for (const rel of [
-        join('.system_generated', 'logs', 'chunks'),
-        join('.system_generated', 'logs', 'transcript_full.jsonl'),
-      ]) {
-        const candidate = join(bPath, rel);
-        if (await lstat(candidate).catch(() => null)) {
-          verboseTranscriptTargets.push({ path: candidate });
-        }
-      }
-    }
-
-    // 4. 收集超期非活跃 Subagent 数据库（仅收集 conversations/<sub-cid>.db，与 brain 派生日志严格互不相交）
-    const subagentDbTargets: SubTargetSpec[] = [];
-    let subagentCount = 0;
-    if (index.available) {
-      for (const [cid, info] of index.summaryMap.entries()) {
-        if (!UUID_REGEX.test(cid) || !info.parentId || orphanIds.has(cid)) continue;
-        if (!index.summaryMap.has(info.parentId)) continue;
-        if (index.runningTreeIds.has(cid) || index.archivedTreeIds.has(cid)) continue;
-
-        const dbFile = join(convDir, `${cid}.db`);
-        const dbSt = await lstat(dbFile).catch(() => null);
-        if (!dbSt || !dbSt.isFile() || dbSt.isSymbolicLink()) continue;
-        const walSt = await lstat(`${dbFile}-wal`).catch(() => null);
-        const latestMtime = Math.max(dbSt.mtimeMs, walSt?.mtimeMs ?? 0);
-        if (latestMtime > cutoffMs || latestMtime > quietThresholdMs) continue;
-
-        subagentDbTargets.push({ path: dbFile, isUsageDb: true });
-        subagentCount++;
-      }
-    }
-
-    return {
-      orphanTargets,
-      orphanConvCount: orphanIds.size,
-      taskStepTargets,
-      verboseTranscriptTargets,
-      subagentDbTargets,
-      subagentCount,
-      uncertainCount: uncertainIds.size,
-    };
+  private collectAgentConversationTargets(retentionDays: number): Promise<AgentConversationTargetsResult> {
+    return collectAgentConversationTargets(this.discoveryContext(), retentionDays);
   }
 
-  private async inspectNamedEntry(
+  private inspectNamedEntry(
     name: string,
     retentionDays: number,
-    cachedAgentTargets?: Awaited<ReturnType<CacheMaintenance['collectAgentConversationTargets']>>
+    cachedAgentTargets?: AgentConversationTargetsResult
   ): Promise<InspectedCacheEntry> {
-    if (
-      (CACHE_NAMES as readonly string[]).includes(name) ||
-      (EXTENDED_CACHE_NAMES as readonly string[]).includes(name)
-    ) {
-      return await this.inspectSingleProfileItem(name);
-    }
-    if (name === 'PartitionsCache') {
-      const candidates = await this.collectPartitionsCandidates();
-      return await this.inspectMultiTargetItem(name, candidates);
-    }
-    if (name === 'AgentBrowserCache') {
-      const candidates = await this.collectBrowserProfileCandidates();
-      return await this.inspectMultiTargetItem(name, candidates);
-    }
-    const agentTargets = cachedAgentTargets ?? await this.collectAgentConversationTargets(retentionDays);
-    const windowDesc = retentionDays > 0 ? `${retentionDays} 天前` : '非活跃';
-    if (name === 'OrphanAgentData') {
-      const sub = agentTargets.orphanConvCount > 0
-        ? `${agentTargets.orphanConvCount} 个已删对话碎片与崩溃日志`
-        : CACHE_METADATA.OrphanAgentData!.subtitle;
-      return await this.inspectMultiTargetItem(name, agentTargets.orphanTargets, {
-        dynamicSubtitle: sub,
-        itemCount: agentTargets.orphanConvCount,
-      });
-    }
-    if (name === 'AgentTaskStepLogs') {
-      return await this.inspectMultiTargetItem(name, agentTargets.taskStepTargets, {
-        dynamicSubtitle: `${windowDesc}对话的终端、步骤日志与草稿`,
-      });
-    }
-    if (name === 'AgentVerboseTranscripts') {
-      return await this.inspectMultiTargetItem(name, agentTargets.verboseTranscriptTargets, {
-        dynamicSubtitle: `${windowDesc}冗余转录（保留精简版记录）`,
-      });
-    }
-    if (name === 'AgentSubagentDatabases') {
-      const sub = agentTargets.subagentCount > 0
-        ? `${windowDesc} ${agentTargets.subagentCount} 个子智能体库（账单已归档）`
-        : CACHE_METADATA.AgentSubagentDatabases!.subtitle;
-      return await this.inspectMultiTargetItem(name, agentTargets.subagentDbTargets, {
-        dynamicSubtitle: sub,
-        itemCount: agentTargets.subagentCount,
-      });
-    }
-    return await this.inspectSingleProfileItem(name);
+    return inspectNamedEntry(this.discoveryContext(), name, retentionDays, cachedAgentTargets);
   }
 
-  private async inspectReadOnlyPaths(paths: string[], limitCount = 80000, budgetMs = 2800) {
-    let bytes = 0, fileCount = 0, count = 0, exists = false, truncated = false;
-    const deadline = Date.now() + budgetMs;
-    const walk = async (path: string) => {
-      if (++count > limitCount || Date.now() > deadline) {
-        truncated = true;
-        return;
-      }
-      try {
-        const s = await lstat(path);
-        if (s.isSymbolicLink()) return;
-        exists = true;
-        if (s.isDirectory()) {
-          for (const n of await readdir(path)) {
-            if (count > limitCount || Date.now() > deadline) {
-              truncated = true;
-              break;
-            }
-            await walk(join(path, n));
-          }
-        } else if (s.isFile()) {
-          bytes += s.size;
-          fileCount++;
-        }
-      } catch {}
-    };
-    for (const p of paths) await walk(p);
-    return { bytes, fileCount, exists, truncated };
+  private inspectReadOnlyPaths(paths: string[], limitCount = 80000, budgetMs = 2800) {
+    return inspectReadOnlyPaths(paths, limitCount, budgetMs);
   }
 
   private cachedProtectedSummary?: {
@@ -1372,12 +433,7 @@ export class CacheMaintenance {
         partCandidates.length > 0 ? this.inspectMultiTargetItem('PartitionsCache', partCandidates) : Promise.resolve(null),
         browserCandidates.length > 0 ? this.inspectMultiTargetItem('AgentBrowserCache', browserCandidates) : Promise.resolve(null),
         agentConvTargets.orphanTargets.length > 0
-          ? this.inspectMultiTargetItem('OrphanAgentData', agentConvTargets.orphanTargets, {
-              dynamicSubtitle: agentConvTargets.orphanConvCount > 0
-                ? `${agentConvTargets.orphanConvCount} 个已删对话碎片与崩溃日志`
-                : CACHE_METADATA.OrphanAgentData!.subtitle,
-              itemCount: agentConvTargets.orphanConvCount,
-            })
+          ? this.inspectMultiTargetItem('OrphanAgentData', agentConvTargets.orphanTargets)
           : Promise.resolve(null),
         agentConvTargets.taskStepTargets.length > 0
           ? this.inspectMultiTargetItem('AgentTaskStepLogs', agentConvTargets.taskStepTargets, {
@@ -1444,12 +500,12 @@ export class CacheMaintenance {
         .filter(e => agentItemSet.has(e.name))
         .reduce((n, e) => n + e.fileCount, 0);
 
-      const [running, browserBusy, protectedSummary, snapshots] = await Promise.all([
-        this.running(),
-        this.isBrowserProfileBusy(),
+      const [procState, protectedSummary, snapshots] = await Promise.all([
+        this.inspectProcessState(),
         this.scanProtectedSummary(reclaimableAgentBytes, reclaimableAgentFiles),
         this.history(),
       ]);
+      const { running, browserBusy } = procState;
 
       const entries = fullEntries.map(({ isSingleLegacyRoot: _legacy, subTargets: _subs, ...publicEntry }) => publicEntry);
       const safeBytes = entries.filter(e => e.category === 'safe').reduce((n, e) => n + e.bytes, 0);

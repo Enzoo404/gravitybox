@@ -280,23 +280,20 @@ test('配额服务403不被误判为登录凭据失效', () => {
   assert.equal(accountCredentialReadiness(account).state, 'needs_authorization');
 });
 
-test('已拒绝的配额范围不会被外部旧满额复活；凭据同步仍可继续', () => withQuotaAccountFixture(async d => {
-  const ext = join(d, 'external');
-  await mkdir(join(ext, 'accounts'), { recursive: true });
-  const m = new AccountsManager(join(d, 'state'), { externalDir: ext });
+test('已拒绝的配额范围在凭据更新时不被清空复活；凭据同步仍可继续', () => withQuotaAccountFixture(async d => {
+  const m = new AccountsManager(join(d, 'state'));
   const a = await m.upsertAccount({ email: 'test@example.test', refreshToken: 'synthetic-refresh', accessToken: 'synthetic-access', expiresIn: 3600 });
   a.quota = { models: [], quota_groups: [], last_updated: 0, is_forbidden: false, model_forwarding_rules: {}, quota_warnings: ['UNVERIFIED_CLOUD_SCOPE: HTTP 403'], source: 'cloud' };
   await m.saveAccount(a);
-  await writeFile(join(ext, 'accounts.json'), JSON.stringify({ accounts: [{ id: 'external', email: a.email }] }));
-  await writeFile(join(ext, 'accounts', 'one.json'), JSON.stringify({
-    ...a,
-    id: 'external',
-    quota: { ...a.quota, last_updated: Math.floor(Date.now() / 1000), quota_warnings: [], models: [{ name: 'gemini-test', percentage: 100 }] },
-    token: { ...a.token, access_token: 'new-synthetic', expiry_timestamp: Math.floor(Date.now() / 1000) + 7200 },
-  }));
-  await m.syncFromExternalAgySwitch();
+  await m.upsertAccount({
+    email: a.email,
+    refreshToken: 'synthetic-refresh',
+    accessToken: 'new-synthetic',
+    expiresIn: 7200,
+  });
   const saved = await m.getAccount(a.id);
   assert.deepEqual(saved.quota.models, []);
+  assert.equal(saved.quota.quota_warnings[0], 'UNVERIFIED_CLOUD_SCOPE: HTTP 403');
   assert.equal(saved.quota.source, 'cloud');
   assert.equal(saved.token.access_token, 'new-synthetic');
 }));

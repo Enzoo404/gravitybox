@@ -74,9 +74,9 @@ export async function reconcileMoves(path: string, manifest: MaintenanceManifest
 export async function executeMoves(path: string, manifest: MaintenanceManifest, moves: JournalMove[], guard: (move: JournalMove) => Promise<void>, committedPatch: Record<string, unknown> = {}, persist = atomicJson): Promise<void> {
     const simulated = new Map<string, string | null>();
     for (const move of moves)
-        for (const path of [move.from, move.to]) {
-            if (!simulated.has(path))
-                simulated.set(path, await identity(path));
+        for (const targetPath of [move.from, move.to]) {
+            if (!simulated.has(targetPath))
+                simulated.set(targetPath, await identity(targetPath));
         }
     for (const move of moves) {
         await guard(move);

@@ -1,4 +1,4 @@
-import { ProtobufReader as Reader, ProtobufWriter as Writer } from './usage.js';
+import { ProtobufReader as Reader, ProtobufWriter as Writer } from './protobuf.js';
 
 export function replaceTopicRow(value: string | undefined, sentinel: string, payload: Buffer): string {
   let wrapper: Record<string, unknown> | undefined;

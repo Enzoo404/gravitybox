@@ -6,7 +6,9 @@ import { join } from 'node:path';
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { calculateEstimatedUsd, UsageStatsManager, ProtobufWriter } from '../dist/usage.js';
+import { UsageStatsManager } from '../dist/usage.js';
+import { calculateEstimatedUsd } from '../dist/pricing.js';
+import { ProtobufWriter } from '../dist/protobuf.js';
 
 const execFileAsync = promisify(execFile);
 

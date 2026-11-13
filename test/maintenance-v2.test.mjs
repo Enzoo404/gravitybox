@@ -6,10 +6,8 @@ import { join, basename } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { CacheMaintenance } from '../dist/maintenance.js';
-import {
-  UsageStatsManager,
-  ProtobufWriter,
-} from '../dist/usage.js';
+import { UsageStatsManager } from '../dist/usage.js';
+import { ProtobufWriter } from '../dist/protobuf.js';
 
 const execFileAsync = promisify(execFile);
 

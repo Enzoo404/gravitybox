@@ -125,17 +125,17 @@ final class SheetVisualEffectView: NSVisualEffectView {
         blendingMode = .behindWindow
         state = .active
         wantsLayer = true
-        layer?.cornerRadius = 12
+        layer?.cornerRadius = Design.Radius.medium
         layer?.masksToBounds = true
     }
     required init?(coder: NSCoder) { fatalError() }
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        let path = NSBezierPath(roundedRect: bounds, xRadius: 12, yRadius: 12)
+        let path = NSBezierPath(roundedRect: bounds, xRadius: Design.Radius.medium, yRadius: Design.Radius.medium)
         (isDark ? NSColor(white: 0.14, alpha: 0.88) : NSColor(white: 0.98, alpha: 0.88)).setFill()
         path.fill()
-        Design.drawSpecularBevel(in: bounds, cornerRadius: 12, isDark: isDark)
+        Design.drawSpecularBevel(in: bounds, cornerRadius: Design.Radius.medium, isDark: isDark)
     }
 }
 
@@ -185,7 +185,7 @@ final class PillSelectionView: NSView {
 }
 
 func group(_ rows: [NSView], inset: CGFloat = 17, spacing: CGFloat = 0) -> NSBox {
-    let box = DesignCardBox(); box.boxType = .custom; box.cornerRadius = 12; box.borderWidth = 0.5
+    let box = DesignCardBox(); box.boxType = .custom; box.cornerRadius = Design.Radius.medium; box.borderWidth = 0.5
     box.borderColor = Design.border; box.fillColor = Design.card; box.contentViewMargins = .zero
     box.shadow = Design.cardShadow()
     let stack = vertical(rows, spacing: spacing); box.addSubview(stack); pin(stack, to: box, inset: inset)
@@ -562,9 +562,7 @@ final class SidebarLaunchButton: NSButton {
         let rect = bounds.insetBy(dx: 0.5, dy: 1.5)
         let path = NSBezierPath(roundedRect: rect, xRadius: 9, yRadius: 9)
 
-        let accentTint = isDark
-            ? NSColor(srgbRed: 0.38, green: 0.68, blue: 1.0, alpha: 1.0)
-            : Design.blue
+        let accentTint = Design.activeBlue
 
         if isUpdatePrompt {
             if isHighlighted {
@@ -813,28 +811,60 @@ final class PillBadge: NSView {
 }
 func pillBadge(_ title: String, color: NSColor) -> PillBadge { PillBadge(title, color: color) }
 
-// MARK: - Apple HIG Modern Avatar View (40pt Frosted Circular Badge)
-func iconBadge(_ name: String, tint: NSColor, size: CGFloat = 24) -> NSView {
+// MARK: - Apple HIG Modern Avatar View & Shared Tinted Icon Container
+func tintedIconBox(
+    size: CGFloat,
+    cornerRadius: CGFloat,
+    tint: NSColor,
+    neutral: Bool = false,
+    lightNeutralAlpha: CGFloat = 0.045,
+    darkFillAlpha: CGFloat = 0.18,
+    lightFillAlpha: CGFloat = 0.10,
+    darkBorderAlpha: CGFloat = 0.32,
+    lightBorderAlpha: CGFloat = 0.18
+) -> NSBox {
     let box = NSBox()
     box.boxType = .custom
-    box.cornerRadius = round(size * 0.26 * 2.0) / 2.0
+    box.cornerRadius = cornerRadius
     box.fillColor = NSColor(name: nil) { app in
         let isDark = app.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        return tint.withAlphaComponent(isDark ? 0.18 : 0.11)
+        if neutral {
+            return isDark ? NSColor.white.withAlphaComponent(0.07) : NSColor.black.withAlphaComponent(lightNeutralAlpha)
+        }
+        return tint.withAlphaComponent(isDark ? darkFillAlpha : lightFillAlpha)
     }
     box.borderWidth = 0.5
     box.borderColor = NSColor(name: nil) { app in
         let isDark = app.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        return tint.withAlphaComponent(isDark ? 0.34 : 0.20)
+        if neutral {
+            return isDark ? NSColor.white.withAlphaComponent(0.12) : NSColor.black.withAlphaComponent(0.08)
+        }
+        return tint.withAlphaComponent(isDark ? darkBorderAlpha : lightBorderAlpha)
     }
     box.translatesAutoresizingMaskIntoConstraints = false
-    NSLayoutConstraint.activate([box.widthAnchor.constraint(equalToConstant: size), box.heightAnchor.constraint(equalToConstant: size)])
+    NSLayoutConstraint.activate([
+        box.widthAnchor.constraint(equalToConstant: size),
+        box.heightAnchor.constraint(equalToConstant: size)
+    ])
+    box.setAccessibilityElement(false)
+    return box
+}
+
+func iconBadge(_ name: String, tint: NSColor, size: CGFloat = 24) -> NSView {
+    let box = tintedIconBox(
+        size: size,
+        cornerRadius: round(size * 0.26 * 2.0) / 2.0,
+        tint: tint,
+        darkFillAlpha: 0.18,
+        lightFillAlpha: 0.11,
+        darkBorderAlpha: 0.34,
+        lightBorderAlpha: 0.20
+    )
     let ptSize: CGFloat = size == 24 ? 13 : (size >= 36 ? 17.5 : 15)
     let image = symbol(name, size: ptSize, color: tint)
     image.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: ptSize, weight: .semibold)
     box.addSubview(image)
     NSLayoutConstraint.activate([image.centerXAnchor.constraint(equalTo: box.centerXAnchor), image.centerYAnchor.constraint(equalTo: box.centerYAnchor)])
-    box.setAccessibilityElement(false)
     return box
 }
 func settingRow(icon: String, tint: NSColor, title: String, badge: NSView? = nil, subtitle: String, control: NSView) -> NSView {
@@ -859,29 +889,13 @@ func settingRow(icon: String, tint: NSColor, title: String, badge: NSView? = nil
     captions.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     control.setContentHuggingPriority(.required, for: .horizontal)
     control.setContentCompressionResistancePriority(.required, for: .horizontal)
-    let iconBox = NSBox()
-    iconBox.boxType = .custom
-    iconBox.cornerRadius = 7.5
-    iconBox.fillColor = NSColor(name: nil) { app in
-        let isDark = app.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        if icon == "app-icon" {
-            return isDark ? NSColor.white.withAlphaComponent(0.07) : NSColor.black.withAlphaComponent(0.04)
-        }
-        return tint.withAlphaComponent(isDark ? 0.18 : 0.10)
-    }
-    iconBox.borderWidth = 0.5
-    iconBox.borderColor = NSColor(name: nil) { app in
-        let isDark = app.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        if icon == "app-icon" {
-            return isDark ? NSColor.white.withAlphaComponent(0.12) : NSColor.black.withAlphaComponent(0.08)
-        }
-        return tint.withAlphaComponent(isDark ? 0.32 : 0.18)
-    }
-    iconBox.translatesAutoresizingMaskIntoConstraints = false
-    NSLayoutConstraint.activate([
-        iconBox.widthAnchor.constraint(equalToConstant: 28),
-        iconBox.heightAnchor.constraint(equalToConstant: 28)
-    ])
+    let iconBox = tintedIconBox(
+        size: 28,
+        cornerRadius: 7.5,
+        tint: tint,
+        neutral: icon == "app-icon",
+        lightNeutralAlpha: 0.04
+    )
     if icon == "app-icon", let markImg = Design.brandMarkImage() {
         let imgView = NSImageView(image: markImg)
         imgView.imageScaling = .scaleProportionallyUpOrDown
@@ -903,7 +917,6 @@ func settingRow(icon: String, tint: NSColor, title: String, badge: NSView? = nil
             iconView.centerYAnchor.constraint(equalTo: iconBox.centerYAnchor)
         ])
     }
-    iconBox.setAccessibilityElement(false)
     let row = horizontal([iconBox, captions, flexibleSpace(), control], spacing: 11)
     row.alignment = .centerY
     return row

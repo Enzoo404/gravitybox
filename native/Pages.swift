@@ -173,27 +173,20 @@ final class DashboardPage: NSObject {
     private static func makeHeaderIconBadge(symbolName: String, tint: NSColor) -> NSView {
         let iconView = symbol(symbolName, size: 12, color: tint)
         iconView.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 11.5, weight: .semibold)
-        let iconBox = NSBox()
-        iconBox.boxType = .custom
-        iconBox.cornerRadius = 6
-        iconBox.fillColor = NSColor(name: nil) { app in
-            app.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? tint.withAlphaComponent(0.18) : tint.withAlphaComponent(0.10)
-        }
-        iconBox.borderWidth = 0.5
-        iconBox.borderColor = NSColor(name: nil) { app in
-            app.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? tint.withAlphaComponent(0.30) : tint.withAlphaComponent(0.16)
-        }
-        iconBox.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            iconBox.widthAnchor.constraint(equalToConstant: 22),
-            iconBox.heightAnchor.constraint(equalToConstant: 22)
-        ])
+        let iconBox = tintedIconBox(
+            size: 22,
+            cornerRadius: 6,
+            tint: tint,
+            darkFillAlpha: 0.18,
+            lightFillAlpha: 0.10,
+            darkBorderAlpha: 0.30,
+            lightBorderAlpha: 0.16
+        )
         iconBox.addSubview(iconView)
         NSLayoutConstraint.activate([
             iconView.centerXAnchor.constraint(equalTo: iconBox.centerXAnchor),
             iconView.centerYAnchor.constraint(equalTo: iconBox.centerYAnchor)
         ])
-        iconBox.setAccessibilityElement(false)
         return iconBox
     }
 
@@ -414,7 +407,7 @@ final class DashboardPage: NSObject {
         let interval = now.timeIntervalSince(lastMetricsFetchTime)
         let timeExpired = interval >= 15.0
 
-        let currentKey = "\(status.taskRevision)_\(status.working)_\(status.enabled)_\(status.mode)_\(app.activeAccountId)_\(status.accountsRevision)_\(status.activeAccountEmail)_\(status.activeFiveHourQuota ?? -1)_\(status.liveAccountEmail)"
+        let currentKey = "\(app.activeAccountId)_\(status.accountsRevision)_\(status.activeAccountEmail)_\(status.activeFiveHourQuota ?? -1)_\(status.liveAccountEmail)"
         if !force && !timeExpired && currentKey == metricsKey { return }
         metricsLoading = true
 

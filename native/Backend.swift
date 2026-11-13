@@ -18,6 +18,7 @@ final class BackendBridge {
     private(set) var isRestarting = false
     private let queue = DispatchQueue(label: "local.gravitybox.bridge", qos: .userInitiated)
     private let controlQueue = DispatchQueue(label:"local.gravitybox.control",qos:.userInitiated,attributes:.concurrent)
+    private let controlSemaphore = DispatchSemaphore(value: 4)
     private static let maxReplyBytes = 4_000_000
     #if NATIVE_UI_TEST
     var fixtureReply: (([String:Any]) -> [String:Any])?
@@ -253,8 +254,11 @@ final class BackendBridge {
             "usage_snapshot_release", "usage_ledger_review", "api_pricing_revalue_preview", "auto_switch_get", "auto_switch_best",
             "account_recovery_info", "api_pricing_get"
         ]
-        let channel = readOnlyCommands.contains(command) ? controlQueue : queue
+        let useControlThrottle = readOnlyCommands.contains(command)
+        let channel = useControlThrottle ? controlQueue : queue
         channel.async { [self] in
+            if useControlThrottle { controlSemaphore.wait() }
+            defer { if useControlThrottle { controlSemaphore.signal() } }
             let result = Result { try request(payload) }
             DispatchQueue.main.async { guard requestGeneration == self.generation else { return }; completion(result) }
         }

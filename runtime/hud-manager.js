@@ -729,8 +729,8 @@ export class AntigravityHudManager {
 (function attachGlobalHudController() {
   globalThis.__GRAVITYBOX_ATTACH_HUD__ = attachGlobalHudController;
   if (typeof document === 'undefined') return;
-  const boot = globalThis.__AGZH_BOOT__;
-  if (boot !== undefined && !globalThis.__AGZH_ENGINE_V1__) return;
+  const boot = globalThis.__GRAVITYBOX_BOOT__;
+  if (boot !== undefined && !globalThis.__GRAVITYBOX_ENGINE_V1__) return;
   const initialEnabled = boot?.hudEnabled !== false;
   if (globalThis.__GRAVITYBOX_HUD_V1__?.active) {
     globalThis.__GRAVITYBOX_HUD_V1__.setEnabled?.(initialEnabled);
@@ -738,7 +738,7 @@ export class AntigravityHudManager {
     return;
   }
   if (!document.body && boot === undefined) return;
-  const initialLang = globalThis.__AGZH_ENGINE_V1__?.getLanguageMode?.() || 'zh';
+  const initialLang = globalThis.__GRAVITYBOX_ENGINE_V1__?.getLanguageMode?.() || 'zh';
   const manager = new AntigravityHudManager({
     languageMode: initialLang,
     enabled: initialEnabled,

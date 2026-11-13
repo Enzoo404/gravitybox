@@ -23,27 +23,49 @@ export function isVerifiedVersion(version?: string): boolean {
   return typeof version === 'string' && VERIFIED_VERSIONS.has(version);
 }
 
-/** 取回回环界面服务内容。界面服务是自签名 HTTPS，需要 rejectUnauthorized: false。 */
-export function fetchBuffer(url: string, timeout = 10000): Promise<Buffer> {
+export const normalizeText = (text: string): string => text.replace(/\s+/g, ' ').trim();
+
+function fetchLoopbackBytes(
+  url: string,
+  timeout = 10000,
+  options: { withHash?: boolean; originError?: string; sizeError?: string; timeoutError?: string } = {}
+): Promise<{ buffer: Buffer; hash: string }> {
   const parsed = new URL(url);
-  if (!['127.0.0.1', '[::1]'].includes(parsed.hostname) || !['https:', 'http:'].includes(parsed.protocol) || parsed.username || parsed.password) return Promise.reject(new Error('只允许读取本机界面包'));
-  const secure = url.startsWith('https:');
+  if (!['127.0.0.1', '[::1]'].includes(parsed.hostname) || !['https:', 'http:'].includes(parsed.protocol) || parsed.username || parsed.password) {
+    return Promise.reject(new Error(options.originError ?? '只允许读取本机界面包'));
+  }
+  const secure = parsed.protocol === 'https:';
   const get = secure ? httpsGet : httpGet;
   return new Promise((resolve, reject) => {
-    const request = get(url, secure ? { rejectUnauthorized: false, timeout } : { timeout }, response => {
+    const request = get(parsed, secure ? { rejectUnauthorized: false, timeout } : { timeout }, response => {
       if (response.statusCode !== 200) {
         response.resume();
         reject(new Error(`HTTP ${response.statusCode}`));
         return;
       }
-      const chunks: Buffer[] = []; let size = 0;
+      const chunks: Buffer[] = [];
+      const hash = options.withHash ? createHash('sha256') : null;
+      let size = 0;
       response.on('error', reject);
-      response.on('data', chunk => { size += chunk.length; if (size > 20_000_000) { request.destroy(new Error('界面包超过大小限制')); return; } chunks.push(chunk); });
-      response.on('end', () => resolve(Buffer.concat(chunks)));
+      response.on('data', (chunk: Buffer) => {
+        size += chunk.length;
+        if (size > 20_000_000) {
+          request.destroy(new Error(options.sizeError ?? '界面包超过大小限制'));
+          return;
+        }
+        if (hash) hash.update(chunk);
+        chunks.push(chunk);
+      });
+      response.on('end', () => resolve({ buffer: Buffer.concat(chunks), hash: hash ? hash.digest('hex') : '' }));
     });
-    request.on('timeout', () => request.destroy(new Error('读取界面包超时')));
+    request.on('timeout', () => request.destroy(new Error(options.timeoutError ?? '读取界面包超时')));
     request.on('error', reject);
   });
+}
+
+/** 取回回环界面服务内容。界面服务是自签名 HTTPS，需要 rejectUnauthorized: false。 */
+export async function fetchBuffer(url: string, timeout = 10000): Promise<Buffer> {
+  return (await fetchLoopbackBytes(url, timeout)).buffer;
 }
 
 export async function fetchBundleFromOrigin(origin: string, timeout = 10000): Promise<string> {
@@ -287,8 +309,6 @@ export function extractUiStrings(source: string): ExtractedString[] {
     .sort((a, b) => a.text.localeCompare(b.text));
 }
 
-const normalize = (text: string) => text.replace(/\s+/g, ' ').trim();
-
 /** 对比提取结果与当前词典，筛选出缺失词条。 */
 export function findMissingStrings(extracted: { text: string; kinds?: string[] }[], dictionary: Dictionary): string[] {
   const entries = dictionary.entries;
@@ -299,7 +319,7 @@ export function findMissingStrings(extracted: { text: string; kinds?: string[] }
   }
   for (const item of extracted) {
     if (item.kinds?.includes('template') || item.kinds?.includes('fragment')) continue;
-    const key = normalize(item.text);
+    const key = normalizeText(item.text);
     if (Object.hasOwn(entries, key)) continue;
     if (foldedMap.has(key.toLowerCase())) continue;
     missing.push(key);
@@ -328,18 +348,15 @@ export function createPendingList(appVersion: string, bundleSha256: string, miss
 }
 
 /** Hash during download. Only extraction callers need a decoded source string. */
-export async function fetchBundleWithHash(origin:string,timeout=8000):Promise<{source:string;hash:string;bytes:number}>{
-  const url=new URL('/main.js',origin);
-  if(!['127.0.0.1','[::1]'].includes(url.hostname)||!['http:','https:'].includes(url.protocol)||url.username||url.password)throw new Error('仅允许本机界面资源');
-  return new Promise((resolve,reject)=>{
-    const get=url.protocol==='https:'?httpsGet:httpGet;
-    const request=get(url,{rejectUnauthorized:false,timeout},response=>{
-      if(response.statusCode!==200){response.resume();reject(new Error(`HTTP ${response.statusCode}`));return;}
-      const chunks:Buffer[]=[];const hash=createHash('sha256');let size=0;
-      response.on('data',(chunk:Buffer)=>{size+=chunk.length;if(size>20_000_000){request.destroy(new Error('界面包过大'));return;}hash.update(chunk);chunks.push(chunk);});
-      response.on('error',reject);response.on('end',()=>resolve({source:Buffer.concat(chunks).toString('utf8'),hash:hash.digest('hex'),bytes:size}));
-    });request.on('error',reject);request.on('timeout',()=>request.destroy(new Error('界面包读取超时')));
+export async function fetchBundleWithHash(origin: string, timeout = 8000): Promise<{ source: string; hash: string; bytes: number }> {
+  const url = new URL('/main.js', origin);
+  const { buffer, hash } = await fetchLoopbackBytes(url.href, timeout, {
+    withHash: true,
+    originError: '仅允许本机界面资源',
+    sizeError: '界面包过大',
+    timeoutError: '界面包读取超时',
   });
+  return { source: buffer.toString('utf8'), hash, bytes: buffer.length };
 }
 
 /** Keep extractor evidence; generic text is a label, never invent a button role. */

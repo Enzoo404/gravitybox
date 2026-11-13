@@ -41,7 +41,7 @@ test('其他本机服务不能冒充 Antigravity 页面服务', async () => {
   } finally { await new Promise(resolve => server.close(resolve)); }
 });
 test('原子保存触发热更新；无效 JSON 保留有效词典；删除覆盖恢复基础译文', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'agzh-dict-'));
+  const dir = await mkdtemp(join(tmpdir(), 'gravitybox-dict-'));
   const base = join(dir, 'base'), user = join(dir, 'user');
   await mkdir(base); await mkdir(user);
   await writeFile(join(base, 'base.json'), JSON.stringify({ Settings: '设置' }));
@@ -82,7 +82,7 @@ test('原子保存触发热更新；无效 JSON 保留有效词典；删除覆�
 });
 
 test('同层新增版本词典层可以覆盖 base，且不会让整份词典加载失败', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'agzh-layer-'));
+  const dir = await mkdtemp(join(tmpdir(), 'gravitybox-layer-'));
   const base = join(dir, 'base');
   await mkdir(base);
   await writeFile(join(base, 'base.json'), JSON.stringify({ Settings: '设置', History: '历史记录' }));
@@ -154,7 +154,7 @@ test('Controller 弹性模式：后台异步比对界面包指纹，发现新词
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   const port = server.address().port;
   const origin = `http://127.0.0.1:${port}`;
-  const stateDir = await mkdtemp(join(tmpdir(), 'agzh-test-state-'));
+  const stateDir = await mkdtemp(join(tmpdir(), 'gravitybox-test-state-'));
 
   try {
     let latestStatus;

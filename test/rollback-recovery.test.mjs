@@ -10,16 +10,16 @@ import {AccountSwitchService, DatabaseTransaction} from '../dist/account-switch.
 async function fixture(t, withDatabase = true) {
   const root = await mkdtemp(join(tmpdir(), 'gb-undo-recovery-'));
   t.after(() => rm(root, {recursive:true, force:true}));
-  const stateDir=join(root,'state'), profile=join(root,'profile'), externalDir=join(root,'external');
-  await mkdir(join(profile,'User/globalStorage'),{recursive:true}); await mkdir(externalDir);
+  const stateDir=join(root,'state'), profile=join(root,'profile');
+  await mkdir(join(profile,'User/globalStorage'),{recursive:true});
   const db=join(profile,'User/globalStorage/state.vscdb');
   const sql=s=>execFileSync('/usr/bin/sqlite3',[db,s],{encoding:'utf8'}).trim();
   if(withDatabase) sql('CREATE TABLE ItemTable(key TEXT PRIMARY KEY,value TEXT);');
-  const manager=new AccountsManager(stateDir,{externalDir}), keychain=new MockKeychainAdapter();
+  const manager=new AccountsManager(stateDir), keychain=new MockKeychainAdapter();
   await keychain.writePassword('gemini','antigravity','synthetic-initial');
   const a=await manager.upsertAccount({email:'a@example.invalid',refreshToken:'synthetic-a',accessToken:'access-a',expiresIn:3600});
   const b=await manager.upsertAccount({email:'b@example.invalid',refreshToken:'synthetic-b',accessToken:'access-b',expiresIn:3600});
-  const options={stateDir,profile,externalDir,keychain,isRunning:async()=>false};
+  const options={stateDir,profile,keychain,isRunning:async()=>false};
   const service=new AccountSwitchService(manager,options); await service.switchAccount(b.id);
   const journal=join(stateDir,'account-switch-journal-stable.json'), undo=journal+'.rollback.json';
   const snapshot=async()=>({db:withDatabase?sql('SELECT key,value FROM ItemTable ORDER BY key;'):'absent',index:await readFile(join(stateDir,'accounts.json'),'utf8'),password:await keychain.readPassword('gemini','antigravity'),account:await readFile(join(stateDir,'accounts',b.id+'.json'),'utf8')});
@@ -61,7 +61,7 @@ test('补偿也失败：持久恢复记录阻止清除，下次服务重建后�
   assert.equal((await stat(f.undo)).mode&0o777,0o600);
   await assert.rejects(f.service.clearRecovery(recovery.digest),/恢复材料不可清除/);
   blocked=false;
-  const next=new AccountSwitchService(new AccountsManager(f.stateDir,{externalDir:f.options.externalDir}),f.options);
+  const next=new AccountSwitchService(new AccountsManager(f.stateDir),f.options);
   await next.rollback();assert.equal(JSON.parse(await readFile(f.journal)).status,'rolled-back');
   assert.equal(await f.keychain.readPassword('gemini','antigravity'),'synthetic-initial');
   assert.notEqual((await f.snapshot()).db,before.db);

@@ -1,7 +1,7 @@
-/* Original runtime engine for AGZH. Runs in an isolated CDP world; no application code is patched. */
+/* Original runtime engine for GravityBox. Runs in an isolated CDP world; no application code is patched. */
 (function bootstrapRuntime() {
   'use strict';
-  const options = globalThis.__AGZH_BOOT__;
+  const options = globalThis.__GRAVITYBOX_BOOT__;
   if (!options || location.origin !== options.origin) return;
   if (options.path === '/fixture' && location.pathname !== '/fixture') return;
   const allowedPath=location.pathname==='/'||/^\/(?:history|sidecars|customizations|automations|settings|settings-standalone|terminal-standalone|new-project|onboarding|multi|artifact|s|chatski-connect)(?:\/.*)?$/i.test(location.pathname)||/^\/c(?:\/|\/(?:[0-9a-f-]{36}|_new)(?:\/.*)?)?$/i.test(location.pathname)||/^\/(?:forked|view|battle)\/.*$/i.test(location.pathname)||(options.path==='/fixture'&&location.pathname==='/fixture');
@@ -48,13 +48,13 @@
   if(options.conservative&&options.path!=='/fixture'&&!options.shellValidated){
     const ready=()=>!!document.body&&(!!systemSettingsPane()||(!!document.querySelector('[aria-label*="Sidebar" i],[aria-label*="侧边栏"],[data-testid*="sidebar" i],[data-testid="agent-input-box"]')&&!!document.querySelector('[data-testid="model-selector-trigger"],a[href="/history"],a[href="/customizations"],[data-testid="agent-input-box"],textarea,input'))||(/^\/(?:settings(?:\/[^?#]*)?|settings-standalone)$/.test(location.pathname)&&!!document.querySelector('[role="dialog"][aria-label="Settings"],[role="dialog"][aria-label="设置"],[data-testid*="settings"]')&&!!document.querySelector('[role="tablist"],nav,[role="navigation"]'))||(location.pathname==='/terminal-standalone'&&!!document.querySelector('.xterm,.monaco-editor,[data-testid*="terminal"]')));
     if(!ready()){
-      globalThis.__AGZH_PENDING_BOOT__?.cancel();let stopped=false;const watcher=new MutationObserver(()=>{if(!stopped&&ready()){cancel();options.shellValidated=true;bootstrapRuntime();}});const timeout=setTimeout(()=>cancel(),5000);
-      function cancel(){stopped=true;watcher.disconnect();clearTimeout(timeout);delete globalThis.__AGZH_PENDING_BOOT__;}
-      globalThis.__AGZH_PENDING_BOOT__={cancel};watcher.observe(document,{childList:true,subtree:true});return;
+      globalThis.__GRAVITYBOX_PENDING_BOOT__?.cancel();let stopped=false;const watcher=new MutationObserver(()=>{if(!stopped&&ready()){cancel();options.shellValidated=true;bootstrapRuntime();}});const timeout=setTimeout(()=>cancel(),5000);
+      function cancel(){stopped=true;watcher.disconnect();clearTimeout(timeout);delete globalThis.__GRAVITYBOX_PENDING_BOOT__;}
+      globalThis.__GRAVITYBOX_PENDING_BOOT__={cancel};watcher.observe(document,{childList:true,subtree:true});return;
     }options.shellValidated=true;
   }
 
-  const KEY = '__AGZH_ENGINE_V1__';
+  const KEY = '__GRAVITYBOX_ENGINE_V1__';
   if (options.translationEnabled === false) {
     // HUD-only connection: expose the lifecycle contract without installing
     // translators, project markers, mutation observers or scan collectors.
@@ -64,7 +64,7 @@
     globalThis[KEY] = {
       state, getLanguageMode: () => 'en', refresh() {},
       update(next) { dictionary = next; }, setShortcutEnabled() {},
-      dispose() { delete globalThis[KEY]; delete globalThis.__AGZH_BOOT__; },
+      dispose() { delete globalThis[KEY]; delete globalThis.__GRAVITYBOX_BOOT__; },
     };
     globalThis.__GRAVITYBOX_ATTACH_HUD__?.();
     return;
@@ -72,23 +72,23 @@
   if (globalThis[KEY]) { globalThis[KEY].setShortcutEnabled?.(options.shortcutEnabled !== false); globalThis[KEY].update(options.dictionary); return; }
   let shortcutEnabled = options.path === '/fixture' && options.shortcutEnabled !== false;
   const ownedProjectMarkers = new Set();
-  const UI = '[data-agzh-ui],button,a[href],h1,h2,h3,h4,[role="navigation"],[role="button"],[role="menuitem"],[role="tab"],[role="option"],[role="tooltip"],[role="dialog"],[role="status"],[role="alert"],[role="banner"],label,th,td,summary,figcaption,.monaco-menu-item,[data-sonner-toast],[role="listitem"],[role="region"],[data-testid*="settings"],[data-testid*="preferences"],[data-testid*="empty"],[data-testid*="notice"],[data-testid*="banner"],[data-testid*="card"],[data-testid*="header"],[data-testid*="sidecar"],[data-testid*="trigger"],[data-testid="agent-input-box"],[contenteditable="true"][role="combobox"]+p,[data-testid="cascade-system-message-toolbar"],[data-testid="turn-cards-container"],[data-select-popup],[role="menu"],[role="listbox"]';
+  const UI = '[data-gravitybox-ui],button,a[href],h1,h2,h3,h4,[role="navigation"],[role="button"],[role="menuitem"],[role="tab"],[role="option"],[role="tooltip"],[role="dialog"],[role="status"],[role="alert"],[role="banner"],label,th,td,summary,figcaption,.monaco-menu-item,[data-sonner-toast],[role="listitem"],[role="region"],[data-testid*="settings"],[data-testid*="preferences"],[data-testid*="empty"],[data-testid*="notice"],[data-testid*="banner"],[data-testid*="card"],[data-testid*="header"],[data-testid*="sidecar"],[data-testid*="trigger"],[data-testid="agent-input-box"],[contenteditable="true"][role="combobox"]+p,[data-testid="cascade-system-message-toolbar"],[data-testid="turn-cards-container"],[data-select-popup],[role="menu"],[role="listbox"]';
   const UI_SELECTOR = 'button, [role="button"], [role="tab"], [role="menuitem"], [role="tooltip"], [role="option"], label, option, th, td, summary, figcaption, .monaco-menu-item, [data-sonner-toast], [role="listitem"], [role="region"], h1, h2, h3, h4, [data-select-popup], [role="menu"], [role="listbox"]';
   /* PROTECTED keeps user content, code and editors in English. `[data-testid="conversation-row-sidebar"]`
      is the container the app really uses for the conversation list: its title <span> is NOT inside
      `a[href^="/c/"]`, so relying on the anchor alone left conversation titles translatable. */
-  const PROTECTED = 'script,style,code,pre,input,textarea,svg,canvas,.file-tree,[data-message-id],[contenteditable]:not([contenteditable="false"]),[data-agzh-protect],[data-message-author-role],[data-testid*="message"]:not([data-testid="cascade-system-message-toolbar"]),[data-testid*="conversation-title"],[data-testid="conversation-row-sidebar"],[data-testid*="conversation-row"],[data-testid*="model"],[data-testid*="artifact"],[data-testid="planner-response-text"],[data-testid="user-input-step"],[data-testid="breadcrumb-segment"],[data-testid="project-header"],[data-testid="project-selector-trigger"],a[href^="/c/"],a[href*="/c/"],.monaco-editor,.xterm,.markdown,.markdown-frontmatter,.markdown-alert-title,.notebook-markdown-cell,.prose,[role="log"],.chat-message,.message-content,.conversation-title,.terminal,.output-view,.debug-console,.code-view,.artifact-container,.model-item,.agzh-project-name,[data-testid*="attachment"],[data-testid*="file-chip"],[data-testid*="context-chip"]';
-  /* J01 positive user-content contract. A container marked `data-agzh-user-content` or an element
-     marked `data-agzh-user-name` is user-authored text: never translated, never collected. On top
+  const PROTECTED = 'script,style,code,pre,input,textarea,svg,canvas,.file-tree,[data-message-id],[contenteditable]:not([contenteditable="false"]),[data-gravitybox-protect],[data-message-author-role],[data-testid*="message"]:not([data-testid="cascade-system-message-toolbar"]),[data-testid*="conversation-title"],[data-testid="conversation-row-sidebar"],[data-testid*="conversation-row"],[data-testid*="model"],[data-testid*="artifact"],[data-testid="planner-response-text"],[data-testid="user-input-step"],[data-testid="breadcrumb-segment"],[data-testid="project-header"],[data-testid="project-selector-trigger"],a[href^="/c/"],a[href*="/c/"],.monaco-editor,.xterm,.markdown,.markdown-frontmatter,.markdown-alert-title,.notebook-markdown-cell,.prose,[role="log"],.chat-message,.message-content,.conversation-title,.terminal,.output-view,.debug-console,.code-view,.artifact-container,.model-item,.gravitybox-project-name,[data-testid*="attachment"],[data-testid*="file-chip"],[data-testid*="context-chip"]';
+  /* J01 positive user-content contract. A container marked `data-gravitybox-user-content` or an element
+     marked `data-gravitybox-user-name` is user-authored text: never translated, never collected. On top
      of the explicit contract (usable by adapters and tests) entity surfaces are recognised
      structurally so user names stay English even on unmarked builds: links to a plugin/skill/
      session/automation detail page carry the entity name, and a heading / name field / list row /
      option row that belongs to an entity card is a name, not interface copy. Genuine controls
      (buttons, tabs, command menus) remain translatable: a `[role="menuitem"]` only counts as a name
      inside an entity container or a row with per-item actions. */
-  const USER_CONTENT = '[data-agzh-user-content],[data-agzh-user-name]';
+  const USER_CONTENT = '[data-gravitybox-user-content],[data-gravitybox-user-name]';
   const ENTITY_HREF = /^\/(?:c(?:\/|\/(?:[0-9a-f-]{36}|_new)(?:\/.*)?)?|customizations\/(?:plugins|skills|automations)\/[\w.-]+|marketplaces\/[\w.-]+\/plugins\/[\w.-]+|automations\/[\w.-]+|projects\/[\w.-]+|sidecars\/[\w.-]+)$/i;
-  const ENTITY_CONTAINER = '[data-agzh-user-content],[data-testid="automation-card"],[data-testid="automation-row"],[data-testid="automation-item"],[data-testid="automation-list-item"],[data-testid*="workspace"],[data-testid*="project"],[data-testid*="skill"],[data-testid*="plugin"],[data-testid*="marketplace"],[data-testid*="session"]';
+  const ENTITY_CONTAINER = '[data-gravitybox-user-content],[data-testid="automation-card"],[data-testid="automation-row"],[data-testid="automation-item"],[data-testid="automation-list-item"],[data-testid*="workspace"],[data-testid*="project"],[data-testid*="skill"],[data-testid*="plugin"],[data-testid*="marketplace"],[data-testid*="session"]';
   const ENTITY_ROW = '[data-testid*="card"],[data-testid*="row"],li,[role="listitem"],[role="option"],[role="menuitem"],tr';
   const ROW_ACTIONS = '[data-testid*="actions"],[data-testid*="menu-trigger"],[aria-label*="More actions" i],[aria-label*="更多操作"],[aria-label="More options" i]';
   const USER_NAME_ROW = 'h1,h2,h3,h4,[data-testid*="name"],[data-testid*="title"]';
@@ -326,18 +326,18 @@
 
   function injectMicroPatch() {
     try {
-      if (typeof document === 'undefined' || document.getElementById('__agzh_micro_patch__')) return;
+      if (typeof document === 'undefined' || document.getElementById('__gravitybox_micro_patch__')) return;
       const target = document.head || document.documentElement;
       if (!target) return;
       const style = document.createElement('style');
-      style.id = '__agzh_micro_patch__';
+      style.id = '__gravitybox_micro_patch__';
       style.textContent = `
-        button[data-agzh-loc="1"], [role="button"][data-agzh-loc="1"], [role="tab"][data-agzh-loc="1"],
-        button[data-agzh-ui], [role="button"][data-agzh-ui], [role="tab"][data-agzh-ui] {
+        button[data-gravitybox-loc="1"], [role="button"][data-gravitybox-loc="1"], [role="tab"][data-gravitybox-loc="1"],
+        button[data-gravitybox-ui], [role="button"][data-gravitybox-ui], [role="tab"][data-gravitybox-ui] {
           white-space: nowrap;
         }
-        p[data-agzh-loc="1"], .description[data-agzh-loc="1"],
-        p[data-agzh-ui], .description[data-agzh-ui] {
+        p[data-gravitybox-loc="1"], .description[data-gravitybox-loc="1"],
+        p[data-gravitybox-ui], .description[data-gravitybox-ui] {
           line-height: 1.5;
         }
       `;
@@ -381,14 +381,14 @@
      can flip "translatable <-> protected" (protection-relevant classes, role, contenteditable,
      protection markers, data-testid) invalidates the element, and therefore its recorded subtree. */
   const protectionTokens = new WeakMap();
-  const PROTECTIVE_CLASSES = new Set(['chat-message', 'message-content', 'conversation-title', 'terminal', 'output-view', 'debug-console', 'code-view', 'artifact-container', 'model-item', 'markdown', 'markdown-frontmatter', 'markdown-alert-title', 'notebook-markdown-cell', 'prose', 'file-tree', 'agzh-project-name']);
-  const PROTECTION_ATTRS = ['class', 'role', 'contenteditable', 'data-testid', 'data-agzh-protect', 'data-agzh-user-content', 'data-agzh-user-name'];
+  const PROTECTIVE_CLASSES = new Set(['chat-message', 'message-content', 'conversation-title', 'terminal', 'output-view', 'debug-console', 'code-view', 'artifact-container', 'model-item', 'markdown', 'markdown-frontmatter', 'markdown-alert-title', 'notebook-markdown-cell', 'prose', 'file-tree', 'gravitybox-project-name']);
+  const PROTECTION_ATTRS = ['class', 'role', 'contenteditable', 'data-testid', 'data-gravitybox-protect', 'data-gravitybox-user-content', 'data-gravitybox-user-name'];
   function protectionToken(el) {
     const raw = typeof el.className === 'string' ? el.className : '';
     let protective = '';
     for (const token of raw.split(/\s+/)) if (token && PROTECTIVE_CLASSES.has(token)) protective += token + ' ';
     return protective + '|' + (el.getAttribute('role') || '') + '|' + (el.getAttribute('contenteditable') || '') +
-      '|' + (el.hasAttribute('data-agzh-protect') ? 'p' : '') + (el.hasAttribute('data-agzh-user-content') ? 'u' : '') + (el.hasAttribute('data-agzh-user-name') ? 'n' : '') +
+      '|' + (el.hasAttribute('data-gravitybox-protect') ? 'p' : '') + (el.hasAttribute('data-gravitybox-user-content') ? 'u' : '') + (el.hasAttribute('data-gravitybox-user-name') ? 'n' : '') +
       '|' + (el.getAttribute('data-testid') || '');
   }
   function protectionChanged(el) {
@@ -417,7 +417,7 @@
          after the header itself is gone; the class is also part of PROTECTED. Guard the write:
          classList.add on an element that already has the class is a no-op, but an unconditional
          write produced a mutation on every scan and drove the flush timer into a busy loop. */
-      if (matches(node, 'button,[role="button"]') && !node.classList.contains('agzh-project-name')) { node.classList.add('agzh-project-name'); ownedProjectMarkers.add(new WeakRef(node)); }
+      if (matches(node, 'button,[role="button"]') && !node.classList.contains('gravitybox-project-name')) { node.classList.add('gravitybox-project-name'); ownedProjectMarkers.add(new WeakRef(node)); }
     }
     projectNames = next;
   }
@@ -435,7 +435,7 @@
     const value = normalize(original);
     if (!MODEL_LABELS.has(value) && !MODEL_LIMIT_LABEL.test(value) && !MODEL_PERCENT_LEFT.test(value) && !MODEL_GROUP_LABEL.test(value) && !MODEL_RESET_LABEL.test(value)) return false;
     // Only fixed interface labels may cross model containers. Content, names and editors stay protected.
-    return ancestors(element).every(el => !matches(el, PROTECTED) || (el.hasAttribute('data-testid') && /model/.test(el.getAttribute('data-testid')) && !matches(el, '[data-agzh-protect],[contenteditable],.model-item')));
+    return ancestors(element).every(el => !matches(el, PROTECTED) || (el.hasAttribute('data-testid') && /model/.test(el.getAttribute('data-testid')) && !matches(el, '[data-gravitybox-protect],[contenteditable],.model-item')));
   }
 
   function isRelativeTimeBadge(element) {
@@ -443,7 +443,7 @@
     // A time-shaped user title/body is still user content. Only a leaf badge inside a known row
     // can bypass the row's protection; use its saved original so Chinese does not change eligibility.
     const row = element.closest('[data-testid="conversation-row-sidebar"]');
-    if (!row || element.matches('.truncate,[data-testid*="title"]') || element.closest('.truncate,[data-agzh-protect],.markdown,.prose,[data-message-author-role]')) return false;
+    if (!row || element.matches('.truncate,[data-testid*="title"]') || element.closest('.truncate,[data-gravitybox-protect],.markdown,.prose,[data-message-author-role]')) return false;
     if (ancestors(element).some(el => el !== row && el.matches(PROTECTED))) return false;
     const text = element.firstChild;
     const original = nodeSlots.get(text)?.get('')?.original ?? element.textContent ?? '';
@@ -1491,7 +1491,7 @@
     const el = attr ? node : node.parentElement;
     if (current === null) {
       if (slots) { slots.delete(attr); if (!slots.size) activeNodes.delete(node); }
-      if (el && el.nodeType === Node.ELEMENT_NODE && !slots?.size) delete el.dataset.agzhLoc;
+      if (el && el.nodeType === Node.ELEMENT_NODE && !slots?.size) delete el.dataset.gravityboxLoc;
       return;
     }
     if (!translatable(node, attr, scan)) {
@@ -1499,7 +1499,7 @@
          drop the slot so a later re-entry starts from the real text instead of a stale value. */
       if (old && current === old.last) setValue(node, attr, old.original);
       if (slots) { slots.delete(attr); if (!slots.size) activeNodes.delete(node); }
-      if (el && el.nodeType === Node.ELEMENT_NODE && !slots?.size) delete el.dataset.agzhLoc;
+      if (el && el.nodeType === Node.ELEMENT_NODE && !slots?.size) delete el.dataset.gravityboxLoc;
       return;
     }
     if (old?.group) {
@@ -1529,9 +1529,9 @@
 
     if (el && el.nodeType === Node.ELEMENT_NODE) {
       if (languageMode === 'zh' && next !== original) {
-        el.dataset.agzhLoc = '1';
+        el.dataset.gravityboxLoc = '1';
       } else if (languageMode === 'en' || next === original) {
-        delete el.dataset.agzhLoc;
+        delete el.dataset.gravityboxLoc;
       }
     }
   }
@@ -1606,7 +1606,7 @@
       slots.delete('');
       if (!slots.size) activeNodes.delete(node);
     }
-    delete el.dataset.agzhLoc;
+    delete el.dataset.gravityboxLoc;
   }
 
   /* J04 (conservative): the template is the element's direct children rendered as text runs plus
@@ -1675,8 +1675,8 @@
       for (let k = 0; k < items.length; k++) writeGroupSlot(items[k].node, el, k === 0 ? part : '', items[k].original, groupKeys);
     }
     auditRecord(norm, zh, el, 'template', groupKeys);
-    if (languageMode === 'zh') el.dataset.agzhLoc = '1';
-    else delete el.dataset.agzhLoc;
+    if (languageMode === 'zh') el.dataset.gravityboxLoc = '1';
+    else delete el.dataset.gravityboxLoc;
     for (let i = inlineElements.length - 1; i >= 0; i--) queue.add(inlineElements[i]);
     return true;
   }
@@ -1720,8 +1720,8 @@
       inlineGroupContainers.add(el);
       for (let k = 0; k < items.length; k++) writeGroupSlot(items[k].node, el, k === 0 ? zh : '', items[k].original, groupKeys);
       auditRecord(norm, zh, el, 'template', groupKeys);
-      if (languageMode === 'zh') el.dataset.agzhLoc = '1';
-      else delete el.dataset.agzhLoc;
+      if (languageMode === 'zh') el.dataset.gravityboxLoc = '1';
+      else delete el.dataset.gravityboxLoc;
       return true;
     }
     const normPlaceholders = placeholderTokens(norm), zhPlaceholders = placeholderTokens(zh);
@@ -1875,9 +1875,9 @@
     }
     maxSliceMs = Math.max(maxSliceMs, performance.now() - flushStarted);
   }
-  const observerOptions = { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['title', 'aria-label', 'data-tooltip', 'placeholder', 'class', 'role', 'contenteditable', 'data-testid', 'data-agzh-protect', 'data-agzh-user-content', 'data-agzh-user-name'] };
+  const observerOptions = { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['title', 'aria-label', 'data-tooltip', 'placeholder', 'class', 'role', 'contenteditable', 'data-testid', 'data-gravitybox-protect', 'data-gravitybox-user-content', 'data-gravitybox-user-name'] };
   function observe(root) { if (!observed.has(root)) { observed.add(root); observer.observe(root, observerOptions); } }
-  /* Any mutation of class / role / contenteditable / data-agzh-protect can switch a node between
+  /* Any mutation of class / role / contenteditable / data-gravitybox-protect can switch a node between
      "translatable" and "protected", so a reconcile pass is requested; the reconcile walks only the
      recorded nodes instead of re-scanning the changed node's whole subtree. */
   observer = new MutationObserver(mutations => {
@@ -1976,12 +1976,12 @@
           setValue(node, attr, targetVal);
           const el = attr ? node : node.parentElement;
           if (el && el.nodeType === Node.ELEMENT_NODE) {
-            if (languageMode === 'en') delete el.dataset.agzhLoc;
-            else el.dataset.agzhLoc = '1';
+            if (languageMode === 'en') delete el.dataset.gravityboxLoc;
+            else el.dataset.gravityboxLoc = '1';
           }
         }
       }
-      try{globalThis.__agzhLanguageChanged?.(languageMode);}catch{}
+      try{globalThis.__gravityboxLanguageChanged?.(languageMode);}catch{}
       try{globalThis.__GRAVITYBOX_HUD_V1__?.setLanguage?.(languageMode);}catch{}
       return { mode: languageMode, activeNodes: activeNodes.size, groups: 0 };
     },
@@ -2131,10 +2131,10 @@
         window.removeEventListener('keydown', handleKeydown, true);
       }
       if (toastTimer) { clearTimeout(toastTimer); toastTimer = null; }
-      const toast = document.getElementById('__agzh_toast__');
+      const toast = document.getElementById('__gravitybox_toast__');
       if (toast) toast.remove();
 
-      const style = document.getElementById('__agzh_micro_patch__');
+      const style = document.getElementById('__gravitybox_micro_patch__');
       if (style) style.remove();
       let restored = 0; let skipped = 0;
       for (const node of activeNodes) {
@@ -2143,13 +2143,13 @@
           if (slots) for (const [attr, slot] of slots) {
             if (getValue(node, attr) === slot.last) { setValue(node, attr, slot.original); restored++; } else skipped++;
             const el = attr ? node : node.parentElement;
-            if (el && el.nodeType === Node.ELEMENT_NODE) delete el.dataset.agzhLoc;
+            if (el && el.nodeType === Node.ELEMENT_NODE) delete el.dataset.gravityboxLoc;
           }
         }
       }
       skippedRestores = skipped;
-      for (const ref of ownedProjectMarkers) ref.deref()?.classList.remove('agzh-project-name'); ownedProjectMarkers.clear();
-      if (globalThis.__AGZH_BOOT__ === options) delete globalThis.__AGZH_BOOT__;
+      for (const ref of ownedProjectMarkers) ref.deref()?.classList.remove('gravitybox-project-name'); ownedProjectMarkers.clear();
+      if (globalThis.__GRAVITYBOX_BOOT__ === options) delete globalThis.__GRAVITYBOX_BOOT__;
       activeNodes.clear(); observed.clear(); inlineGroupContainers.clear(); unsupportedInlineGroupSet.clear(); delete globalThis[KEY];
       return { restored, skipped, active: false };
     }
@@ -2159,11 +2159,11 @@
   function showToast(message, duration=1200) {
     try {
       if (typeof document === 'undefined') return;
-      let toast = document.getElementById('__agzh_toast__');
+      let toast = document.getElementById('__gravitybox_toast__');
       if (!toast) {
         toast = document.createElement('div');
-        toast.id = '__agzh_toast__';
-        toast.setAttribute('data-agzh-protect', 'true');
+        toast.id = '__gravitybox_toast__';
+        toast.setAttribute('data-gravitybox-protect', 'true');
         Object.assign(toast.style, {
           position: 'fixed',
           top: '16px',
@@ -2227,7 +2227,7 @@
   }
 
   globalThis[KEY] = api;
-  globalThis.__AGZH_ATTACH_DEEP_SCAN__?.();
+  globalThis.__GRAVITYBOX_ATTACH_DEEP_SCAN__?.();
   globalThis.__GRAVITYBOX_ATTACH_HUD__?.();
   try {
     window.addEventListener('popstate', checkRoute);

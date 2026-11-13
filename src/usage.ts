@@ -1,205 +1,63 @@
 import { ALLOWED_DATA_DIRECTORY_NAMES, type DataDirectoryName } from './application-target.js';
-import { CATALOG_PRICING_VERSION } from './model-catalog.js';
-import { SqliteReadSnapshot } from './sqlite-read.js';
-import { readdir, readFile, lstat } from 'node:fs/promises';
+import { lstat, readFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { basename, join } from 'node:path';
 import { homedir } from 'node:os';
-import { atomicJson, atomicText, readOptionalJson } from './files.js';
-import { createHash } from 'node:crypto';
-import { APP_VERSION } from './version.js';
-import type { LedgerSnapshot } from './usage-aggregate.js';
+import { atomicJson, atomicText } from './files.js';
+import { formatLocalDate, type LedgerSnapshot } from './usage-aggregate.js';
 import { UsageLedger, type LedgerEvent } from './usage-ledger.js';
-import { ProtobufReader, ProtobufWriter } from './protobuf.js';
 import {
-  DEFAULT_API_PRICES,
   DEFAULT_PRICING_FEED_URLS,
-  PRICING_METADATA,
   calculateEstimatedUsd,
   canonicalActivePricingKeys,
-  matchPricingKeys,
-  mergePricingEntries,
-  priceStatus,
-  resolvePricingForTimestamp,
   resolvePricingFromTable,
-  validateRawPrices,
   type ApiPricing,
   type ApiPricingEntry,
   type ApiPricingInterval,
 } from './pricing.js';
+import {
+  ledgerEventsEqual,
+  resolveDatabaseModelFullName,
+  type AvailableAccountUsageOption,
+  type DailyTokenUsage,
+  type FileCacheEntry,
+  type GenerationEvent,
+  type HourlyTokenUsage,
+  type ModelTokenUsage,
+  type TokenUsagePeriod,
+  type TokenUsageSummary,
+  type TokenUsageTotals,
+} from './usage-types.js';
+import {
+  buildPricingSyncStatus,
+  executeRemotePricingSync,
+  loadPricingSyncState,
+  loadRawPricingTable,
+  resolvePricingTableFromRaw,
+  saveCustomPricingCache,
+  selectRemotePricingCandidateUrls,
+  type PricingSyncMutableState,
+} from './usage-pricing.js';
+import {
+  discoverDatabaseFiles as discoverDatabaseFilesInDir,
+  scanDatabaseEvents as scanDatabaseEventsWithContext,
+  type DiscoveredDbStat,
+  type UsageScanContext,
+} from './usage-scanner.js';
+import { buildUsageSummaryReport } from './usage-report.js';
+
 export {
-  ProtobufReader,
-  ProtobufWriter,
-  DEFAULT_API_PRICES,
-  DEFAULT_PRICING_FEED_URLS,
-  PRICING_METADATA,
-  calculateEstimatedUsd,
-  matchPricingKeys,
-  priceStatus,
-  resolvePricingForTimestamp,
-  type ApiPricing,
-  type ApiPricingEntry,
-  type ApiPricingInterval,
+  resolveDatabaseModelFullName,
+  type AvailableAccountUsageOption,
+  type DailyTokenUsage,
+  type GenerationEvent,
+  type HourlyTokenUsage,
+  type ModelTokenUsage,
+  type TokenUsagePeriod,
+  type TokenUsageSummary,
+  type TokenUsageTotals,
 };
-
-try {
-  process.loadEnvFile?.();
-} catch (error: any) {
-  if (error?.code !== 'ENOENT') {
-    // ignore
-  }
-}
-
-export interface TokenUsageTotals {
-  input_tokens: number;
-  output_tokens: number;
-  cached_tokens: number;
-  cache_write_tokens?: number;
-  total_tokens: number;
-  request_count: number;
-}
-
-export interface ModelTokenUsage {
-  model: string;
-  input_tokens: number;
-  output_tokens: number;
-  cached_tokens: number;
-  cache_write_tokens?: number;
-  total_tokens: number;
-  request_count: number;
-  estimated_usd: number;
-  priced?: boolean;
-  partiallyPriced?: boolean;
-  unpriced_tokens?: number;
-  pricingKey?: string; pricingStatus?: string; pricingProvenance?: ApiPricing["provenance"] | null;
-}
-
-export interface DailyTokenUsage {
-  date: string; // YYYY-MM-DD
-  input_tokens: number;
-  output_tokens: number;
-  cached_tokens: number;
-  cache_write_tokens?: number;
-  total_tokens: number;
-  request_count: number;
-}
-
-export interface HourlyTokenUsage {
-  hour: string; // YYYY-MM-DD HH:00
-  input_tokens: number;
-  output_tokens: number;
-  cached_tokens: number;
-  cache_write_tokens?: number;
-  total_tokens: number;
-  request_count: number;
-}
-
-export interface TokenUsagePeriod {
-  totals: TokenUsageTotals;
-  estimated_usd: number;
-  by_model: ModelTokenUsage[];
-  priced_models?: number;
-  unpriced_models?: number;
-}
-
-export interface TokenUsageSummary {
-  today: TokenUsagePeriod;
-  last_7_days: TokenUsagePeriod;
-  last_30_days: TokenUsagePeriod;
-  all_time: TokenUsagePeriod;
-  daily_trends: DailyTokenUsage[];
-  today_hourly: HourlyTokenUsage[];
-  databases_scanned: number;
-  databases_discovered?: number;
-  scan_scope_description?: string;
-  generations_scanned: number;
-  skipped_large_records: number;
-  generated_at: number;
-  priced_models?: number;
-  unpriced_models?: number;
-  failed_databases_count?: number;
-  has_error?: boolean;
-  hasError?: boolean;
-  availability?: 'complete' | 'partial' | 'cached' | 'unavailable';
-  unknown_time_records?: number;
-  unknown_time_tokens?: number;
-  database_diagnostics?: { id: string; state: string; category: string; lastSuccessAt?: number }[];
-  snapshot_id?: string;
-  last_attempt_at?: number;
-  pricing_warnings?: string[];
-  unattributed_requests?: number;
-  unattributed_tokens?: number;
-  ledger_review_records?: number;
-  historical_amount_receipts?: { unmatchedCount: number; unmatchedUsd: number };
-  available_accounts?: AvailableAccountUsageOption[];
-  selected_account_id?: string;
-}
-
-export interface AvailableAccountUsageOption {
-  id: string; // 'all' | accountId | email
-  label: string; // '全部账号' | 'account-one@example.invalid' | 'account-two@example.invalid'
-  email?: string;
-  name?: string | null;
-  type?: 'all' | 'account';
-  total_tokens?: number;
-  request_count?: number;
-}
-
-export interface GenerationEvent {
-  event_key?: string;
-  source_id?: string;
-  source_observed_at?: number;
-  generation_index?: number;
-  legacy_event_key?: string;
-  account_confidence?: 'observed' | 'unknown' | 'legacy';
-  model: string;
-  input_tokens: number;
-  output_tokens: number;
-  cached_tokens: number;
-  cache_write_tokens?: number;
-  total_tokens: number;
-  timestamp_seconds: number;
-  account_id?: string;
-  account_email?: string;
-  account_type?: 'consumer' | 'enterprise_vertex' | 'unknown';
-  project_id?: string;
-}
-
-/**
- * 基于 Antigravity 数据库 (gen_metadata) 提取真实 Response model 名称（如 "gemini-3.8-flash-n", "gemini-3.8-flash-exp-a"），不包含推理程度 high/medium/low。
- * 针对 Vertex AI / GCP 路径前缀（如 publishers/google/models/gemini-4-carbon）自动解耦并清洗为规范模型名称。
- */
-export function resolveDatabaseModelFullName(
-  modelId: string | null | undefined,
-  label: string | null | undefined
-): string {
-  const cleanId = typeof modelId === 'string' ? modelId.trim() : '';
-  if (cleanId) {
-    const stripped = cleanId
-      .replace(/^(?:projects\/[^/]+\/locations\/[^/]+\/)?(?:publishers\/[^/]+\/)?models\//i, '')
-      .replace(/^publishers\/[^/]+\/models\//i, '')
-      .replace(/^(?:vertex_ai|google|anthropic|openai)\//i, '')
-      .replace(/^models\//i, '')
-      .replace(/:(?:predict|generateContent|streamGenerateContent)$/i, '');
-    if (stripped) return stripped;
-    return cleanId;
-  }
-  const cleanLabel = typeof label === 'string' ? label.trim() : '';
-  if (cleanLabel) {
-    return cleanLabel
-      .replace(/\s*[（(]\s*(?:extra[\s-]*low|high|medium|low|thinking|max)\s*[）)]\s*$/i, '')
-      .replace(/\s+(?:extra[\s-]*low|high|medium|low|thinking|max)\s*$/i, '')
-      .trim() || cleanLabel;
-  }
-  return '未知模型';
-}
-
-export function formatLocalDate(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
 
 export class UsageStatsManager {
   private rateLocksPath: string;
@@ -223,21 +81,8 @@ export class UsageStatsManager {
   private pricingWarnings:string[]=[];
   private snapshots = new Map<string,{events:GenerationEvent[];prices:Record<string,ApiPricing>;rawPricing:Record<string,ApiPricingEntry>;summary:TokenUsageSummary;expires:number; pins:number; ledger?:LedgerSnapshot}>();
   private scanAbort?: AbortController;
-  private fileCache = new Map<
-    string,
-    {
-      mtimeMs: number;
-      size: number;
-      walMtimeMs: number;
-      walSize: number;
-      events: GenerationEvent[];
-      generationsScanned: number;
-      skippedLargeRecords: number;
-      hasError?: boolean;
-      error?: string;
-      lastSuccessAt?: number;
-    }
-  >();
+  private fileCache = new Map<string, FileCacheEntry>();
+  private totalCachedEvents = 0;
 
   private persistCachePath?: string;
   private persistLoaded = false;
@@ -286,6 +131,7 @@ export class UsageStatsManager {
   private lastCheckSuccess = false;
   private nextAutoSyncAt = 0;
   private syncStateLoaded = false;
+  private syncStatePromise?: Promise<void>;
   private lastSyncError: string | null = null;
   private lastSyncedSourceUrl = '';
   private lastSyncedVersion = '';
@@ -496,6 +342,31 @@ export class UsageStatsManager {
     }
   }
 
+  private setFileCacheEntry(dbPath: string, entry: FileCacheEntry): void {
+    const existing = this.fileCache.get(dbPath);
+    if (existing) {
+      this.totalCachedEvents -= existing.events.length;
+    } else if (this.fileCache.size >= 2000) {
+      const oldestKey = this.fileCache.keys().next().value;
+      if (oldestKey) {
+        const evicted = this.fileCache.get(oldestKey);
+        if (evicted) this.totalCachedEvents -= evicted.events.length;
+        this.fileCache.delete(oldestKey);
+      }
+    }
+    if (this.totalCachedEvents > 50_000) {
+      for (const [key, value] of this.fileCache) {
+        if (this.totalCachedEvents <= 50_000) break;
+        if (key !== dbPath) {
+          this.fileCache.delete(key);
+          this.totalCachedEvents -= value.events.length;
+        }
+      }
+    }
+    this.fileCache.set(dbPath, entry);
+    this.totalCachedEvents += entry.events.length;
+  }
+
   private async loadPersistentFileCache(): Promise<void> {
     if (this.persistLoaded || !this.persistCachePath) return;
     this.persistLoaded = true;
@@ -504,7 +375,7 @@ export class UsageStatsManager {
       if (raw && raw.version === 3 && typeof raw.entries === 'object' && raw.entries !== null) {
         for (const [k, v] of Object.entries(raw.entries as Record<string, any>)) {
           if (v && typeof v.mtimeMs === 'number' && typeof v.size === 'number' && Array.isArray(v.events) && v.events.every((e: GenerationEvent) => typeof e.event_key === 'string') && !v.hasError && !this.fileCache.has(k)) {
-            this.fileCache.set(k, v);
+            this.setFileCacheEntry(k, v);
           }
         }
       }
@@ -720,7 +591,7 @@ export class UsageStatsManager {
         next.account_type = previous.account_type;
       }
     }
-    if (previous && JSON.stringify(previous) === JSON.stringify(next)) return;
+    if (previous && ledgerEventsEqual(previous, next)) return;
     this.usageLedgerEvents.set(key, next);
     if (this.usageLedgerEvents.size > 50_000) this.largeLedger = true;
     this.pendingLedgerEvents.set(key, next);
@@ -855,65 +726,25 @@ export class UsageStatsManager {
     return resolvePricingFromTable(pricingTable, modelName, timestampSeconds);
   }
 
-  private validateRawPrices(table: unknown): Record<string, ApiPricingEntry> {
-    return validateRawPrices(table);
-  }
-
   private calendarKey() { const d=new Date();return formatLocalDate(d)+':'+d.getTimezoneOffset()+':'+Intl.DateTimeFormat().resolvedOptions().timeZone; }
 
-  private mergePricingEntries(merged: Record<string, ApiPricingEntry>, entries: object, warning: string): void {
-    mergePricingEntries(merged, entries, warning, this.pricingWarnings);
+  async getRawPricingTable(): Promise<Record<string, ApiPricingEntry>> {
+    const { merged, warnings } = await loadRawPricingTable(this.remotePricingCachePath, this.pricingCachePath);
+    this.pricingWarnings = warnings;
+    return merged;
   }
 
-  async getRawPricingTable(): Promise<Record<string, ApiPricingEntry>> {
-    this.pricingWarnings = [];
-    const merged: Record<string, ApiPricingEntry> = Object.assign(Object.create(null), DEFAULT_API_PRICES);
-
-    // 1. 尝试合并本地远程缓存（禁止早于内置目录日期的旧远端缓存降级覆盖较新的官方目录）
-    try {
-      const rawRemote = await readFile(this.remotePricingCachePath, 'utf8');
-      const parsedRemote = JSON.parse(rawRemote);
-      const remotePrices = parsedRemote && typeof parsedRemote === 'object' && parsedRemote.prices ? parsedRemote.prices : parsedRemote;
-      const remoteVer = typeof parsedRemote?.feedVersion === 'string' ? parsedRemote.feedVersion.trim() : '';
-      const isOlderDatedFeed = /^\d{4}-\d{2}-\d{2}$/.test(remoteVer)
-        && /^\d{4}-\d{2}-\d{2}$/.test(CATALOG_PRICING_VERSION)
-        && remoteVer < CATALOG_PRICING_VERSION;
-      if (remotePrices && typeof remotePrices === 'object' && !Array.isArray(remotePrices)) {
-        const filteredRemote = isOlderDatedFeed
-          ? Object.fromEntries(Object.entries(remotePrices).filter(([k]) => !Object.hasOwn(merged, k)))
-          : remotePrices;
-        this.mergePricingEntries(merged, filteredRemote, '远程价格条目待修复：');
-      }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        this.pricingWarnings.push('远程价格缓存无法读取');
-      }
-    }
-
-    // 2. 尝试合并用户自定义价格缓存（最高优先级）
-    try {
-      const rawCustom = await readFile(this.pricingCachePath, 'utf8');
-      const cached = JSON.parse(rawCustom);
-      if (cached && typeof cached === 'object' && !Array.isArray(cached)) {
-        this.mergePricingEntries(merged, cached, '自定义价格条目待修复：');
-      }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        this.pricingWarnings.push('自定义价格无法读取');
-      }
-    }
-
-    return merged;
+  private resolvePricingTableFromRaw(
+    raw: Record<string, ApiPricingEntry>,
+    timestampSeconds = Math.floor(Date.now() / 1000),
+    allowedKeys?: Set<string>
+  ): Record<string, ApiPricing> {
+    return resolvePricingTableFromRaw(raw, timestampSeconds, allowedKeys);
   }
 
   async getPricingTable(timestampSeconds = Math.floor(Date.now() / 1000)): Promise<Record<string, ApiPricing>> {
     const raw = await this.getRawPricingTable();
-    const resolved: Record<string, ApiPricing> = Object.create(null);
-    for (const key of Object.keys(raw)) {
-      const p = this.resolvePricing(raw, key, timestampSeconds);
-      if (p) resolved[key] = p;
-    }
-    return resolved;
+    return this.resolvePricingTableFromRaw(raw, timestampSeconds);
   }
 
   private canonicalActivePricingKeys(modelIds?: Iterable<string> | null): Set<string> {
@@ -929,90 +760,80 @@ export class UsageStatsManager {
     activeModelIds?: Iterable<string> | null
   ): Promise<Record<string, ApiPricing>> {
     const raw = await this.getRawPricingTable();
-    const allowedKeys = this.canonicalActivePricingKeys(activeModelIds);
-    const resolved: Record<string, ApiPricing> = Object.create(null);
-    for (const key of Object.keys(raw)) {
-      if (!allowedKeys.has(key)) continue;
-      const p = this.resolvePricing(raw, key, timestampSeconds);
-      if (p) resolved[key] = p;
+    return this.resolvePricingTableFromRaw(raw, timestampSeconds, this.canonicalActivePricingKeys(activeModelIds));
+  }
+
+  private pricingSyncStateSnapshot(): PricingSyncMutableState {
+    return {
+      lastRemoteSyncAt: this.lastRemoteSyncAt,
+      lastSyncSuccess: this.lastSyncSuccess,
+      lastCheckAt: this.lastCheckAt,
+      lastCheckSuccess: this.lastCheckSuccess,
+      nextAutoSyncAt: this.nextAutoSyncAt,
+      lastSyncError: this.lastSyncError,
+      lastSyncedSourceUrl: this.lastSyncedSourceUrl,
+      lastSyncedVersion: this.lastSyncedVersion,
+    };
+  }
+
+  private applyPricingSyncState(next: PricingSyncMutableState): void {
+    this.lastRemoteSyncAt = next.lastRemoteSyncAt;
+    this.lastSyncSuccess = next.lastSyncSuccess;
+    this.lastCheckAt = next.lastCheckAt;
+    this.lastCheckSuccess = next.lastCheckSuccess;
+    this.nextAutoSyncAt = next.nextAutoSyncAt;
+    this.lastSyncError = next.lastSyncError;
+    this.lastSyncedSourceUrl = next.lastSyncedSourceUrl;
+    this.lastSyncedVersion = next.lastSyncedVersion;
+  }
+
+  private async ensureSyncStateLoaded(): Promise<void> {
+    if (this.syncStateLoaded) return;
+    if (!this.syncStatePromise) {
+      this.syncStatePromise = (async () => {
+        const snapshot = this.pricingSyncStateSnapshot();
+        await loadPricingSyncState(this.remotePricingCachePath, this.pricingSyncStatePath, snapshot);
+        this.applyPricingSyncState(snapshot);
+        this.syncStateLoaded = true;
+      })().finally(() => {
+        this.syncStatePromise = undefined;
+      });
     }
-    return resolved;
+    await this.syncStatePromise;
   }
 
   async syncRemotePricing(feedUrl?: string, force = false): Promise<{ synced: boolean; error?: string; count?: number; sourceUrl?: string; version?: string; healedCount?: number }> {
-    const candidateUrls = feedUrl
-      ? [feedUrl]
-      : (this.customRemoteUrlConfigured && this.fallbackPricingUrls === DEFAULT_PRICING_FEED_URLS)
-      ? [this.remotePricingUrl]
-      : (this.remotePricingUrl && !this.fallbackPricingUrls.includes(this.remotePricingUrl))
-      ? [this.remotePricingUrl, ...this.fallbackPricingUrls]
-      : this.fallbackPricingUrls;
-
+    await this.ensureSyncStateLoaded();
+    const candidateUrls = selectRemotePricingCandidateUrls({
+      feedUrl,
+      customRemoteUrlConfigured: this.customRemoteUrlConfigured,
+      remotePricingUrl: this.remotePricingUrl,
+      fallbackPricingUrls: this.fallbackPricingUrls,
+    });
     const now = Date.now();
     if (!force && now < this.nextAutoSyncAt) {
       return { synced: false, error: '检查频率限制（24小时）' };
     }
-
-    let lastError: any = null;
-    for (const targetUrl of candidateUrls) {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 6000);
-      try {
-        const res = await fetch(targetUrl, { signal: controller.signal, headers: { 'User-Agent': `GravityBox/${APP_VERSION}` } });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-        const prices = data && typeof data === 'object' && data.prices ? data.prices : data;
-        const validated = this.validateRawPrices(prices);
-        const feedVersion = (data && typeof data === 'object' && typeof data.version === 'string') ? data.version : 'unknown';
-        await atomicJson(this.remotePricingCachePath, {
-          version: 1,
-          syncedAt: new Date(now).toISOString(),
-          sourceUrl: targetUrl,
-          feedVersion,
-          prices: validated,
-        });
-        this.lastRemoteSyncAt = now;
-        this.lastCheckAt = now;
-        this.nextAutoSyncAt = now + 86_400_000;
-        this.syncStateLoaded = true;
-        this.lastSyncSuccess = true;
-        this.lastCheckSuccess = true;
-        this.lastSyncError = null;
-        this.lastSyncedSourceUrl = targetUrl;
-        this.lastSyncedVersion = feedVersion;
-        await atomicJson(this.pricingSyncStatePath, {
-          lastCheckAt: now,
-          lastCheckSuccess: true,
-          lastSyncError: null,
-        }).catch(() => {});
-        this.cachedSummariesByAccount.clear();
-        this.lastAggregationKeysByAccount.clear();
-        let healedCount = 0;
-        try {
-          healedCount = await this.autoHealUnpricedHistory();
-        } catch {}
-        return { synced: true, count: Object.keys(validated).length, sourceUrl: targetUrl, version: feedVersion, healedCount };
-      } catch (err: any) {
-        lastError = err;
-        continue;
-      } finally {
-        clearTimeout(timer);
-      }
-    }
-
-    // 所有候选源均尝试失败：保留上次成功同步时间，仅推进检查时间戳与 5 分钟重试冷却
-    this.nextAutoSyncAt = now + 300_000;
-    this.lastCheckAt = now;
+    const snapshot = this.pricingSyncStateSnapshot();
+    const result = await executeRemotePricingSync({
+      candidateUrls,
+      remotePricingCachePath: this.remotePricingCachePath,
+      pricingSyncStatePath: this.pricingSyncStatePath,
+      state: snapshot,
+      now,
+    });
+    this.applyPricingSyncState(snapshot);
     this.syncStateLoaded = true;
-    this.lastSyncSuccess = false;
-    this.lastCheckSuccess = false;
-    this.lastSyncError = lastError?.message ?? String(lastError);
-    await atomicJson(this.pricingSyncStatePath, {
-      lastCheckAt: now,
-      lastCheckSuccess: false,
-      lastSyncError: this.lastSyncError,
-    }).catch(() => {});
-    return { synced: false, error: this.lastSyncError ?? undefined };
+    if (!result.synced) {
+      return result;
+    }
+    this.cachedSummariesByAccount.clear();
+    this.lastAggregationKeysByAccount.clear();
+    let healedCount = 0;
+    try {
+      healedCount = await this.autoHealUnpricedHistory();
+    } catch {}
+    return { ...result, healedCount };
   }
 
   async getPricingSyncStatus(): Promise<{
@@ -1026,59 +847,18 @@ export class UsageStatsManager {
     sourceUrl: string;
     modelCount: number;
   }> {
-    if (!this.syncStateLoaded) {
-      this.syncStateLoaded = true;
-      if (!this.lastRemoteSyncAt) {
-        const data = await readOptionalJson<{ syncedAt?: string; sourceUrl?: string; feedVersion?: string }>(
-          this.remotePricingCachePath,
-          'remote-pricing-cache.json'
-        );
-        if (data?.syncedAt) {
-          this.lastRemoteSyncAt = Date.parse(data.syncedAt) || 0;
-          this.lastSyncSuccess = true;
-          this.lastSyncedSourceUrl = data.sourceUrl ?? '';
-          this.lastSyncedVersion = data.feedVersion ?? '';
-        }
-      }
-      const checkData = await readOptionalJson<{ lastCheckAt?: number; lastCheckSuccess?: boolean; lastSyncError?: string | null }>(
-        this.pricingSyncStatePath,
-        'pricing-sync-state.json'
-      );
-      if (checkData && typeof checkData === 'object') {
-        if (typeof checkData.lastCheckAt === 'number' && Number.isFinite(checkData.lastCheckAt)) {
-          this.lastCheckAt = checkData.lastCheckAt;
-        }
-        if (typeof checkData.lastCheckSuccess === 'boolean') {
-          this.lastCheckSuccess = checkData.lastCheckSuccess;
-        }
-        if (typeof checkData.lastSyncError === 'string' || checkData.lastSyncError === null) {
-          this.lastSyncError = checkData.lastSyncError;
-        }
-      }
-    }
+    await this.ensureSyncStateLoaded();
     const activeTable = await this.getActivePricingTable();
-    const rawVersion = this.lastSyncedVersion || PRICING_METADATA.version;
-    const effectiveVersion = /^\d{4}-\d{2}-\d{2}$/.test(rawVersion)
-      && /^\d{4}-\d{2}-\d{2}$/.test(PRICING_METADATA.version)
-      && rawVersion < PRICING_METADATA.version
-      ? PRICING_METADATA.version
-      : rawVersion;
-    const effectiveCheckAt = Math.max(this.lastCheckAt, this.lastRemoteSyncAt);
-    return {
+    return buildPricingSyncStatus({
       autoSyncEnabled: this.autoRemotePricingSync,
-      lastSyncAt: this.lastRemoteSyncAt,
-      lastCheckAt: effectiveCheckAt,
-      lastSyncSuccess: this.lastSyncSuccess,
-      lastCheckSuccess: this.lastCheckAt ? this.lastCheckSuccess : this.lastSyncSuccess,
-      lastSyncError: this.lastSyncError,
-      feedVersion: effectiveVersion,
-      sourceUrl: this.lastSyncedSourceUrl || this.remotePricingUrl,
+      state: this.pricingSyncStateSnapshot(),
+      remotePricingUrl: this.remotePricingUrl,
       modelCount: Object.keys(activeTable).length,
-    };
+    });
   }
 
   async savePricingTable(table: Record<string, ApiPricing | ApiPricingInterval[]>): Promise<void> {
-    await atomicJson(this.pricingCachePath, this.validateRawPrices(table));
+    await saveCustomPricingCache(this.pricingCachePath, table);
     this.cachedSummariesByAccount.clear();
     this.lastAggregationKeysByAccount.clear();
   }
@@ -1112,114 +892,29 @@ export class UsageStatsManager {
     return unpricedKeys.length;
   }
 
-  /** Use the bundled read-only driver; batches share the caller's transaction. */
-  private async querySqlite(dbPath: string, sql: string, signal?: AbortSignal, reader?: SqliteReadSnapshot): Promise<{ ok: boolean; rows: any[]; error?: string }> {
-    if(reader)return reader.query(sql);
-    const owned = new SqliteReadSnapshot(dbPath, signal);
-    try { return await owned.query(sql); } finally { await owned.close(); }
-  }
-
-  private discoveredStats = new Map<string, { mtimeMs: number; size: number; walMtimeMs: number; walSize: number; at: number }>();
+  private discoveredStats = new Map<string, DiscoveredDbStat>();
 
   /**
    * 发现全部会话数据库；修改时间仅决定读取顺序，默认不截断统计范围。
    */
   async discoverDatabaseFiles(maxFiles = Number.POSITIVE_INFINITY): Promise<string[]> {
-    this.discoveryErrors=[];
-    const issue=(path:string,error:unknown)=>this.discoveryErrors.push({id:createHash('sha256').update(path).digest('hex').slice(0,10),state:'discovery_failed',category:(error as NodeJS.ErrnoException).code==='EACCES'?'目录访问受限':'数据库发现失败'});
-    const list: { path: string; mtime: number }[] = [];
-    const now = Date.now();
-    this.discoveredStats.clear();
-    const allowedDirs = new Set<string>(this.dataDirectoryNames);
-    try {
-      const entries = await readdir(this.geminiDir, { withFileTypes: true });
-      for (const entry of entries) {
-        if (!entry.isDirectory() || !allowedDirs.has(entry.name)) continue;
-        const convDir = join(this.geminiDir, entry.name, 'conversations');
-        try {
-          const convFiles = await readdir(convDir);
-          const fileSet = new Set(convFiles);
-          const dbFiles = convFiles.filter(f => f.endsWith('.db'));
-          const batchSize = 32;
-          for (let i = 0; i < dbFiles.length; i += batchSize) {
-            const slice = dbFiles.slice(i, i + batchSize);
-            await Promise.all(slice.map(async file => {
-              const fullPath = join(convDir, file);
-              try {
-                const st = await lstat(fullPath);
-                if (!st.isFile() || st.isSymbolicLink()) return;
-                const wal = fileSet.has(file + '-wal') ? await lstat(fullPath + '-wal').catch(() => null) : null;
-                const walMtimeMs = wal?.mtimeMs ?? 0;
-                const walSize = wal?.size ?? 0;
-                this.discoveredStats.set(fullPath, { mtimeMs: st.mtimeMs, size: st.size, walMtimeMs, walSize, at: now });
-                list.push({ path: fullPath, mtime: Math.max(st.mtimeMs, walMtimeMs) });
-              } catch (error) { issue(fullPath, error); }
-            }));
-          }
-        } catch (error) { if ((error as NodeJS.ErrnoException).code!=='ENOENT') issue(convDir,error); }
-      }
-    } catch (error) { if ((error as NodeJS.ErrnoException).code!=='ENOENT') issue(this.geminiDir,error); }
-
-    // 检查归档库
-    for (const dirName of this.dataDirectoryNames) {
-      const archivePath = join(this.geminiDir, dirName, 'token_usage_archive.db');
-      try {
-        const st = await lstat(archivePath);
-        if (st.isFile() && !st.isSymbolicLink()) {
-          this.discoveredStats.set(archivePath, { mtimeMs: st.mtimeMs, size: st.size, walMtimeMs: 0, walSize: 0, at: now });
-          list.push({ path: archivePath, mtime: st.mtimeMs });
-        }
-      } catch(error) { if((error as NodeJS.ErrnoException).code!=='ENOENT'&&(error as NodeJS.ErrnoException).code!=='ENOTDIR')issue(archivePath,error); }
-    }
-
-    list.sort((a, b) => b.mtime - a.mtime);
-    this.lastDiscoveredDatabaseCount = list.length;
-    return list.slice(0, maxFiles).map(x => x.path);
+    const res = await discoverDatabaseFilesInDir(this.geminiDir, this.dataDirectoryNames, this.discoveredStats, maxFiles);
+    this.discoveryErrors = res.errors;
+    this.lastDiscoveredDatabaseCount = res.discoveredCount;
+    return res.paths;
   }
 
-  private async blobRows(dbPath: string, table: 'gen_metadata' | 'steps', column: 'data' | 'metadata', where: string, onRows?: (rows: any[]) => void, knownIndex?: any[], signal?: AbortSignal, reader?: SqliteReadSnapshot): Promise<{ ok: boolean; rows: any[]; error?: string }> {
-    const index = knownIndex ? { ok: true, rows: knownIndex } : await this.querySqlite(dbPath, `SELECT idx, length(${column}) as size FROM ${table} WHERE ${where} ORDER BY idx;`, signal, reader);
-    if (!index.ok) return index;
-    const result: any[] = [];
-    let batch: any[] = [], bytes = 0;
-    const flush = async () => {
-      signal?.throwIfAborted();
-      if (!batch.length) return;
-      const ids = batch.map(row => Number(row.idx)).filter(Number.isSafeInteger);
-      if (ids.length !== batch.length) throw new Error('数据库记录索引格式不支持');
-      const reply = await this.querySqlite(dbPath, `SELECT idx, length(${column}) as size, ${column} as data_blob FROM ${table} WHERE idx IN (${ids.join(',')}) ORDER BY idx;`, signal, reader);
-      if (!reply.ok) throw new Error(reply.error);
-      if (onRows) onRows(reply.rows); else result.push(...reply.rows);
-      batch = []; bytes = 0;
+  private scanContext(): UsageScanContext {
+    return {
+      discoveredStats: this.discoveredStats,
+      fileCache: this.fileCache,
+      setFileCacheEntry: (dbPath, entry) => this.setFileCacheEntry(dbPath, entry),
+      markFileCacheDirty: () => { this.fileCacheDirty = true; },
+      lookupObservedContext: (ts) => this.lookupObservedContext(ts),
+      loadUsageLedger: () => this.loadUsageLedger(),
+      upsertLedger: (event) => this.upsertLedger(event),
+      getLedgerEvent: (eventKey) => this.usageLedgerEvents.get(eventKey),
     };
-    try {
-      for (const row of index.rows) {
-        if (row.size > 16777216) {
-          await flush();
-          const projected=reader?await reader.projectBlob(table,column,Number(row.idx)):null;
-          const value=projected?.ok?projected.rows[0]:{...row,data_hex:''};
-          if(onRows)onRows([value]);else result.push(value);continue;
-        }
-        if (batch.length >= 200 || (bytes + row.size > 2 * 1024 * 1024 && batch.length)) await flush();
-        batch.push(row); bytes += Number(row.size) || 0;
-      }
-      await flush();
-      result.sort((a,b) => Number(a.idx)-Number(b.idx));
-      return { ok: true, rows: result };
-    } catch (error) { return { ok: false, rows: [], error: (error as Error).message }; }
-  }
-
-  private isTransientSqliteReadError(message = ''): boolean {
-    return /跨批读取期间变化|busy|locked|no such table|连接已关闭|超出单批预算|unable to open/i.test(message);
-  }
-
-  private async isInitializingOrRemovedDb(dbPath: string, errorMessage = ''): Promise<boolean> {
-    const stat = await lstat(dbPath).catch((err: NodeJS.ErrnoException) => (err?.code === 'ENOENT' ? null : undefined));
-    if (stat === null) return true;
-    if (stat && /no such table/i.test(errorMessage) && (stat.size <= 4096 || Date.now() - stat.mtimeMs < 60_000)) {
-      return true;
-    }
-    return false;
   }
 
   /**
@@ -1234,278 +929,7 @@ export class UsageStatsManager {
     usedCached?: boolean;
     cacheHit?: boolean;
   }> {
-    let lastResult = await this.scanDatabaseEventsOnce(dbPath, bypassCache, signal);
-    for (let attempt = 1; attempt <= 2; attempt++) {
-      if (!lastResult.hasError || signal?.aborted || !this.isTransientSqliteReadError(lastResult.error)) break;
-      await new Promise(resolve => setTimeout(resolve, attempt * 100));
-      if (signal?.aborted) break;
-      lastResult = await this.scanDatabaseEventsOnce(dbPath, true, signal);
-    }
-    if (lastResult.hasError && !signal?.aborted && await this.isInitializingOrRemovedDb(dbPath, lastResult.error)) {
-      const cached = this.fileCache.get(dbPath);
-      return {
-        events: cached?.events ?? [],
-        generationsScanned: cached?.generationsScanned ?? 0,
-        skippedLargeRecords: cached?.skippedLargeRecords ?? 0,
-        hasError: false,
-        usedCached: Boolean(cached),
-      };
-    }
-    return lastResult;
-  }
-
-  private async scanDatabaseEventsOnce(dbPath: string, bypassCache = false, signal?: AbortSignal): Promise<{
-    events: GenerationEvent[];
-    generationsScanned: number;
-    skippedLargeRecords: number;
-    hasError?: boolean;
-    error?: string;
-    usedCached?: boolean;
-    cacheHit?: boolean;
-  }> {
-    let fileStat: any = null;
-    let walStat: any = null;
-    let sourceId = '';
-    try {
-      this.discoveredStats.delete(dbPath);
-      fileStat = await lstat(dbPath);
-      sourceId = createHash('sha256').update(JSON.stringify([basename(dbPath), fileStat.dev, fileStat.ino, fileStat.birthtimeMs])).digest('hex');
-      try { walStat = await lstat(`${dbPath}-wal`); } catch {}
-      if (!bypassCache) {
-        const cached = this.fileCache.get(dbPath);
-        if (
-          cached && cached.events.every(event => event.source_id === sourceId) &&
-          cached.mtimeMs === fileStat.mtimeMs &&
-          cached.size === fileStat.size &&
-          cached.walMtimeMs === (walStat?.mtimeMs ?? 0) &&
-          cached.walSize === (walStat?.size ?? 0)
-        ) {
-          return {
-            events: cached.events,
-            generationsScanned: cached.generationsScanned,
-            skippedLargeRecords: cached.skippedLargeRecords,
-            hasError: cached.hasError ?? false, error: cached.error,
-            cacheHit: true,
-          };
-        }
-      }
-    } catch {
-      // ignore
-    }
-
-    const reader=new SqliteReadSnapshot(dbPath,signal);
-    try {
-    // 1. Read lengths first, then bounded binary batches without hexadecimal expansion.
-    const genRes = await this.querySqlite(dbPath, 'SELECT idx, length(data) as size FROM gen_metadata WHERE data IS NOT NULL ORDER BY idx;', signal, reader);
-
-    if (!genRes.ok) {
-      // 数据库损坏或查询失败：保留历史有效缓存并标记错误，绝不伪造成真实零
-      const cached = this.fileCache.get(dbPath);
-      if (cached) {
-        return {
-          events: cached.events,
-          generationsScanned: cached.generationsScanned,
-          skippedLargeRecords: cached.skippedLargeRecords,
-          hasError: true,
-          error: genRes.error, usedCached: true,
-        };
-      }
-      return {
-        events: [],
-        generationsScanned: 0,
-        skippedLargeRecords: 0,
-        hasError: true,
-        error: genRes.error,
-      };
-    }
-
-    const genRows = genRes.rows;
-    if (genRows.length > 50_000) {
-      const cached = this.fileCache.get(dbPath);
-      return { events: cached?.events ?? [], generationsScanned: 0, skippedLargeRecords: genRows.length,
-        hasError: true, usedCached: !!cached, error: '单库生成记录超过有界读取预算；已保留已有账本，请分批归档后重试' };
-    }
-    const events: GenerationEvent[] = [];
-    let generationsScanned = 0;
-    let skippedLargeRecords = 0;
-    if (genRows.length === 0) {
-      if (fileStat) {
-        this.fileCache.set(dbPath, {
-          mtimeMs: fileStat.mtimeMs,
-          size: fileStat.size,
-          walMtimeMs: walStat?.mtimeMs ?? 0,
-          walSize: walStat?.size ?? 0,
-          events: [],
-          generationsScanned: 0,
-          skippedLargeRecords: 0,
-          hasError: false,
-          lastSuccessAt: Math.floor(Date.now() / 1000),
-        });
-        this.fileCacheDirty = true;
-      }
-      return { events: [], generationsScanned: 0, skippedLargeRecords: 0, hasError: false };
-    }
-
-    const validTimestamp=(value:number)=>Number.isSafeInteger(value)&&value>=946684800&&value<=Date.now()/1000+86400;
-    const pendingStepLinks: { event: GenerationEvent; indices: number[]; execution: Buffer | null; usage: Buffer }[] = [];
-    const parseRows = (rows: any[]) => {
-      for (const row of rows) {
-      generationsScanned++;
-      if (row.size > 16 * 1024 * 1024 && !row.projected) {
-        // Skip oversized blobs > 16MB
-        skippedLargeRecords++;
-        continue;
-      }
-      if (!row.data_blob && !row.data_hex) continue;
-
-      const blob = row.data_blob instanceof Uint8Array ? Buffer.from(row.data_blob.buffer, row.data_blob.byteOffset, row.data_blob.byteLength) : Buffer.from(row.data_hex, 'hex');
-      const wrapped = ProtobufReader.findField(blob, 1);
-      if (!wrapped) continue;
-
-      const modelId = ProtobufReader.findString(wrapped, 19);
-      const label = ProtobufReader.findString(wrapped, 21);
-      const usage = ProtobufReader.findField(wrapped, 4);
-
-      if (!usage) continue;
-      // ModelUsageStats field 1 is the model enum, not token usage.
-      const cacheWriteTokens = ProtobufReader.findVarint(usage, 4) ?? 0;
-      const rawInput = ProtobufReader.findVarint(usage, 2) ?? 0;
-      const outputTokens = ProtobufReader.findVarint(usage, 3) ?? 0;
-      const cachedTokens = ProtobufReader.findVarint(usage, 5) ?? 0;
-      const inputTokens = rawInput;
-      const totalTokens = inputTokens + cachedTokens + cacheWriteTokens + outputTokens;
-
-      if (totalTokens === 0) continue;
-
-      let timestamp = 0;
-      const timingBuf = ProtobufReader.findField(wrapped, 9);
-      if (timingBuf) {
-        const innerTiming = ProtobufReader.findField(timingBuf, 4);
-        if (innerTiming) {
-          timestamp = ProtobufReader.findVarint(innerTiming, 1) ?? 0;
-        }
-      }
-      if(!validTimestamp(timestamp))timestamp=0;
-
-      const assignedModel = resolveDatabaseModelFullName(modelId, label);
-      const lockModelKey = modelId || label || '未知模型';
-
-      // Only requests first observed after a positively observed identity can be attributed.
-      // Unknown timestamps and pre-start history remain unknown, regardless of database mtime.
-      const observedCtx = this.lookupObservedContext(timestamp);
-      const canAttributeToCurrent = Boolean(observedCtx);
-      const accountId = observedCtx?.id;
-      const accountEmail = observedCtx?.email;
-      const accountType = canAttributeToCurrent ? (observedCtx?.account_type ?? 'unknown') : undefined;
-      const execution = ProtobufReader.findField(blob, 4)?.toString('hex') ?? '';
-      const legacyKey = createHash('sha256').update(JSON.stringify([
-        basename(dbPath), row.idx, execution || undefined, lockModelKey, rawInput, cachedTokens, cacheWriteTokens, outputTokens,
-      ])).digest('hex');
-      const eventObj: GenerationEvent = {
-        event_key: createHash('sha256').update(JSON.stringify([
-          sourceId, row.idx, execution,
-        ])).digest('hex'),
-        source_id: sourceId, generation_index: Number(row.idx), legacy_event_key: legacyKey,
-        account_confidence: canAttributeToCurrent ? 'observed' : 'unknown',
-        model: assignedModel,
-        input_tokens: inputTokens,
-        output_tokens: outputTokens,
-        cached_tokens: cachedTokens,
-        ...(cacheWriteTokens>0?{cache_write_tokens:cacheWriteTokens}:{}),
-        total_tokens: totalTokens,
-        timestamp_seconds: timestamp,
-        ...(accountId ? { account_id: accountId, account_email: accountEmail } : (accountEmail ? { account_email: accountEmail } : {})),
-        ...(accountType ? { account_type: accountType } : {}),
-      };
-      if (timestamp === 0) {
-        const indices = ProtobufReader.stepIndices(blob);
-        if (indices !== null) {
-          pendingStepLinks.push({ event: eventObj, indices, execution: ProtobufReader.findField(blob, 4), usage });
-        }
-      }
-      events.push(eventObj);
-
-    }
-    };
-    const dataRes = await this.blobRows(dbPath, 'gen_metadata', 'data', 'data IS NOT NULL', parseRows, genRows, signal, reader);
-    if (!dataRes.ok) {
-      const previous = this.fileCache.get(dbPath);
-      return { events: previous?.events ?? events, generationsScanned, skippedLargeRecords, hasError: true, error: dataRes.error, usedCached: !!previous };
-    }
-
-    // 2. 仅当存在缺失内联时间戳的生成记录时，按需查询 steps 表（消除 99% 常规库的多余 PRAGMA + steps 查询）
-    let stepOk = true;
-    if (events.some(event => event.timestamp_seconds <= 0)) {
-      const stepTimes=new Map<number,{timestamp:number;usage:Buffer|null;execution:Buffer|null}>();
-      const stepSchema=await reader.query('PRAGMA table_info(steps);');
-      const stepColumns=new Set(stepSchema.rows.map(row=>row.name));
-      const stepRes = !stepSchema.ok || !['idx','metadata','step_type'].every(column=>stepColumns.has(column)) ? {ok:false,error:'时间表结构缺失或不支持',rows:[]} : await this.blobRows(dbPath, 'steps', 'metadata', 'step_type = 15', rows => {
-        for (const row of rows) {
-          const metaBuf = row.data_blob instanceof Uint8Array ? Buffer.from(row.data_blob.buffer, row.data_blob.byteOffset, row.data_blob.byteLength) : Buffer.from(row.data_hex || '', 'hex');
-          const tsBuf = ProtobufReader.findField(metaBuf, 1);
-          const rawTime=tsBuf?ProtobufReader.findVarint(tsBuf,1)??0:0;
-          const timestamp=validTimestamp(rawTime)?rawTime:0;
-          stepTimes.set(Number(row.idx),{timestamp,usage:ProtobufReader.findField(metaBuf,9),execution:ProtobufReader.findField(metaBuf,12)});
-        }
-      }, undefined, signal, reader);
-      stepOk = stepRes.ok;
-      if (stepRes.ok && pendingStepLinks.length > 0) {
-        for (const item of pendingStepLinks) {
-          const linked = item.indices.map(idx => stepTimes.get(idx)).filter((step): step is NonNullable<typeof step> => !!step);
-          if (linked.length === 1 && item.execution && linked[0]!.execution?.equals(item.execution) && linked[0]!.usage?.equals(item.usage)) {
-            item.event.timestamp_seconds = linked[0]!.timestamp;
-            const obs = this.lookupObservedContext(item.event.timestamp_seconds);
-            if (obs) {
-              item.event.account_id = obs.id;
-              item.event.account_email = obs.email;
-              item.event.account_type = obs.account_type;
-              item.event.account_confidence = 'observed';
-            }
-          }
-        }
-      }
-    }
-
-    const after = await lstat(dbPath).catch(() => null);
-    if (!await reader.verifyUnchanged() || !after || after.dev !== fileStat?.dev || after.ino !== fileStat?.ino) {
-      const previous = this.fileCache.get(dbPath);
-      return { events: previous?.events ?? events, generationsScanned, skippedLargeRecords,
-        hasError: true, usedCached: !!previous, error: '数据库在跨批读取期间变化，请重试' };
-    }
-    const observedAt = performance.timeOrigin + performance.now();
-    for (const event of events) event.source_observed_at = observedAt;
-    await this.loadUsageLedger();
-    for (const event of events) {
-      this.upsertLedger({ ...event, db_file: basename(dbPath) });
-      Object.assign(event, this.usageLedgerEvents.get(event.event_key!));
-    }
-    const unknownTime = events.some(event => event.timestamp_seconds <= 0);
-    const hasError = !stepOk && unknownTime;
-    const timeError = hasError ? '时间信息读取失败，部分记录时间未知' : undefined;
-    if (fileStat) {
-      if (!this.fileCache.has(dbPath) && this.fileCache.size >= 2000) {
-        const oldestKey = this.fileCache.keys().next().value;
-        if (oldestKey) this.fileCache.delete(oldestKey);
-      }
-      let cachedEventCount = [...this.fileCache.values()].reduce((sum, value) => sum + value.events.length, 0);
-      for (const [key, value] of this.fileCache) {
-        if (cachedEventCount <= 50_000) break;
-        if (key !== dbPath) { this.fileCache.delete(key); cachedEventCount -= value.events.length; }
-      }
-      this.fileCache.set(dbPath, {
-        mtimeMs: fileStat.mtimeMs,
-        size: fileStat.size,
-        walMtimeMs: walStat?.mtimeMs ?? 0,
-        walSize: walStat?.size ?? 0,
-        events,
-        generationsScanned,
-        skippedLargeRecords, hasError, error: timeError, lastSuccessAt: hasError ? this.fileCache.get(dbPath)?.lastSuccessAt : Math.floor(Date.now()/1000),
-      });
-      if (!hasError) this.fileCacheDirty = true;
-    }
-
-    return { events, generationsScanned, skippedLargeRecords, hasError, error: timeError };
-    } finally { await reader.close(); }
+    return scanDatabaseEventsWithContext(this.scanContext(), dbPath, bypassCache, signal);
   }
 
   /** Privacy-preserving request rows: metrics only, no database paths or conversation content. */
@@ -1693,6 +1117,7 @@ export class UsageStatsManager {
       for (const event of allEvents) this.upsertLedger(event);
       await this.saveUsageLedger();
       const rawPricing = await this.getRawPricingTable();
+      if (this.rateLocksUnavailable && !this.pricingWarnings.some(w => w.includes('费率账本'))) this.pricingWarnings.push('历史费率账本不可读，未重新计价');
       const revision = await this.ledger.version();
       const aggregateKey = JSON.stringify([revision, this.calendarKey(), rawPricing, accountId ?? 'all', this.knownAccounts]);
       const prior = this.cachedSummariesByAccount.get(accKey)?.data;
@@ -1782,7 +1207,7 @@ export class UsageStatsManager {
     await this.loadRateLocks();
     if (this.rateLocksUnavailable && !this.pricingWarnings.some(w => w.includes('费率账本'))) this.pricingWarnings.push('历史费率账本不可读，未重新计价');
     const now = Math.floor(Date.now() / 1000);
-    const pricing = await this.getPricingTable(now);
+    const pricing = this.resolvePricingTableFromRaw(rawPricing, now);
     if (this.autoRemotePricingSync) {
       void this.syncRemotePricing().catch(() => {});
     }
@@ -1852,13 +1277,22 @@ export class UsageStatsManager {
       }
     }
 
-    // 3. 统计事件中的 token 和 request
+    // 3. 单遍统计各账号与全部账号的 token / request / 未归属量与凭据键集合
+    let unattributedRequests = 0;
+    let unattributedTokens = 0;
+    const knownReceiptKeys = new Set<string>();
+    const allOpt = accountMap.get('all')!;
     for (const ev of allEvents) {
-      const allOpt = accountMap.get('all')!;
+      if (ev.event_key) knownReceiptKeys.add(ev.event_key);
+      if (ev.legacy_event_key) knownReceiptKeys.add(ev.legacy_event_key);
       allOpt.total_tokens = (allOpt.total_tokens ?? 0) + ev.total_tokens;
       allOpt.request_count = (allOpt.request_count ?? 0) + 1;
 
-      if (!ev.account_id && !ev.account_email) continue;
+      if (!ev.account_id && !ev.account_email) {
+        unattributedRequests++;
+        unattributedTokens += ev.total_tokens;
+        continue;
+      }
 
       let targetKey: string | null = null;
       if (ev.account_id && accountMap.has(ev.account_id)) {
@@ -1904,247 +1338,37 @@ export class UsageStatsManager {
       });
     }
 
-    effectiveEvents.sort((a, b) => a.timestamp_seconds - b.timestamp_seconds);
-    const todayDate = new Date();
-    todayDate.setHours(0, 0, 0, 0);
-    const todayStart = Math.floor(todayDate.getTime() / 1000);
-    const tomorrowDate = new Date(todayDate); tomorrowDate.setDate(tomorrowDate.getDate()+1);
-    const tomorrowStart = Math.floor(tomorrowDate.getTime()/1000);
+    const summary = buildUsageSummaryReport({
+      allEvents,
+      effectiveEvents,
+      knownReceiptKeys,
+      unattributedRequests,
+      unattributedTokens,
+      accountMap,
+      accountId,
+      accKey,
+      now,
+      rawPricing,
+      pricing,
+      calKey,
+      rateLocks: this.rateLocks,
+      resolvePricing: (table, modelName, ts) => this.resolvePricing(table, modelName, ts),
+      lockedCost: (ev, price) => this.lockedCost(ev, price),
+      dbPathsCount: dbPaths.length,
+      archivedDbCount,
+      lastDiscoveredDatabaseCount: this.lastDiscoveredDatabaseCount,
+      cachedDatabasesCount,
+      liveEventsCount,
+      generationsScanned,
+      skippedLargeRecords,
+      failedDatabasesCount,
+      diagnostics,
+      ledgerCorrupt: this.ledgerCorrupt,
+      archivedUnavailable: this.archivedUnavailable,
+      storageWarnings: this.storageWarnings,
+      pricingWarnings: this.pricingWarnings,
+    });
 
-    // 7天与30天采用本地自然日零点边界，确保总量与每日趋势 100% 对账
-    const sevenDaysDate = new Date(todayDate);
-    sevenDaysDate.setDate(sevenDaysDate.getDate() - 6);
-    const sevenDaysStart = Math.floor(sevenDaysDate.getTime() / 1000);
-
-    const thirtyDaysDate = new Date(todayDate);
-    thirtyDaysDate.setDate(thirtyDaysDate.getDate() - 29);
-    const thirtyDaysStart = Math.floor(thirtyDaysDate.getTime() / 1000);
-
-    const buildPeriod = (filterFn: (ev: GenerationEvent) => boolean): TokenUsagePeriod => {
-      const filtered = effectiveEvents.filter(filterFn);
-      const modelMap = new Map<string, { in: number; out: number; cached: number; write: number; total: number; count: number; cost: number; unpricedTokens: number }>();
-      let totalIn = 0;
-      let totalOut = 0;
-      let totalCached = 0;
-      let totalWrite = 0;
-      let totalAll = 0;
-      let totalCount = filtered.length;
-      let periodUsd = 0;
-
-      for (const ev of filtered) {
-        totalIn += ev.input_tokens;
-        totalOut += ev.output_tokens;
-        totalCached += ev.cached_tokens;
-        totalWrite += ev.cache_write_tokens ?? 0;
-        totalAll += ev.total_tokens;
-
-        const mKey = ev.model;
-        const entry = modelMap.get(mKey) ?? { in: 0, out: 0, cached: 0, write: 0, total: 0, count: 0, cost: 0, unpricedTokens: 0 };
-        entry.in += ev.input_tokens;
-        entry.out += ev.output_tokens;
-        entry.cached += ev.cached_tokens;
-        entry.write += ev.cache_write_tokens ?? 0;
-        entry.total += ev.total_tokens;
-        entry.count++;
-
-        const evPrice = this.resolvePricing(rawPricing, mKey, ev.timestamp_seconds);
-        const evCost = this.lockedCost(ev, evPrice);
-        if (evCost !== null) {
-          entry.cost += evCost;
-          periodUsd += evCost;
-        } else {
-          entry.unpricedTokens += ev.total_tokens;
-        }
-        modelMap.set(mKey, entry);
-      }
-
-      const byModel: ModelTokenUsage[] = [];
-      let pricedCount = 0;
-      let unpricedCount = 0;
-
-      for (const [mName, stats] of modelMap.entries()) {
-        const currentPrice = this.resolvePricing(rawPricing, mName, now);
-        const canonicalKey = matchPricingKeys(mName);
-        const isPriced = stats.unpricedTokens === 0;
-        if (isPriced || stats.cost > 0) {
-          if (isPriced) pricedCount++; else unpricedCount++;
-          const mUsd = Math.round(stats.cost * 1e8) / 1e8;
-          byModel.push({
-            model: mName,
-            input_tokens: stats.in,
-            output_tokens: stats.out,
-            cached_tokens: stats.cached,
-            ...(stats.write > 0 ? { cache_write_tokens: stats.write } : {}),
-            total_tokens: stats.total,
-            request_count: stats.count,
-            estimated_usd: mUsd,
-            priced: isPriced,
-            partiallyPriced: !isPriced,
-            unpriced_tokens: stats.unpricedTokens,
-            pricingKey: canonicalKey || mName,
-            pricingStatus: currentPrice ? priceStatus(currentPrice, now * 1000) : 'historical',
-            pricingProvenance: currentPrice?.provenance ?? null,
-          });
-        } else {
-          unpricedCount++;
-          byModel.push({
-            model: mName,
-            input_tokens: stats.in,
-            output_tokens: stats.out,
-            cached_tokens: stats.cached,
-            ...(stats.write > 0 ? { cache_write_tokens: stats.write } : {}),
-            total_tokens: stats.total,
-            request_count: stats.count,
-            estimated_usd: 0,
-            priced: false,
-            unpriced_tokens: stats.unpricedTokens,
-          });
-        }
-      }
-
-      byModel.sort((a, b) => b.total_tokens - a.total_tokens);
-
-      return {
-        totals: {
-          input_tokens: totalIn,
-          output_tokens: totalOut,
-          cached_tokens: totalCached,
-          ...(totalWrite > 0 ? { cache_write_tokens: totalWrite } : {}),
-          total_tokens: totalAll,
-          request_count: totalCount,
-        },
-        estimated_usd: Math.round(periodUsd * 1e8) / 1e8,
-        by_model: byModel,
-        priced_models: pricedCount,
-        unpriced_models: unpricedCount,
-      };
-    };
-
-    // 今日按小时统计（仅记录今日产生消耗的小时桶，无消耗时为空）
-    const hourlyMap = new Map<string, HourlyTokenUsage>();
-
-    // 连续自然日零值序列（至少覆盖近 30 天，若存在更早事件则从最早日期连续补齐至今日，最长回溯 365 天，杜绝全部周期断档）
-    const dailyMap = new Map<string, DailyTokenUsage>();
-    let earliestStartDate = new Date(thirtyDaysDate);
-    const maxBackfillDate = new Date(todayDate);
-    maxBackfillDate.setDate(maxBackfillDate.getDate() - 365);
-    for (const ev of effectiveEvents) {
-      if (ev.timestamp_seconds > 0) {
-        const evDay = new Date(ev.timestamp_seconds * 1000);
-        evDay.setHours(0, 0, 0, 0);
-        const clamped = evDay < maxBackfillDate ? maxBackfillDate : evDay;
-        if (clamped < earliestStartDate) earliestStartDate = clamped;
-        break;
-      }
-    }
-    for (let cur = new Date(earliestStartDate); cur <= todayDate; cur.setDate(cur.getDate() + 1)) {
-      const curStr = formatLocalDate(cur);
-      dailyMap.set(curStr, {
-        date: curStr,
-        input_tokens: 0,
-        output_tokens: 0,
-        cached_tokens: 0,
-        total_tokens: 0,
-        request_count: 0,
-      });
-    }
-
-    for (const ev of effectiveEvents) {
-      if (ev.timestamp_seconds <= 0) continue; // 排除未知时间戳，不污染每日和每小时统计
-      const d = new Date(ev.timestamp_seconds * 1000);
-      const dateStr = formatLocalDate(d);
-
-      // Daily: 严格采用本地自然日对齐
-      if (ev.timestamp_seconds > 0) {
-        const dEntry = dailyMap.get(dateStr) ?? {
-          date: dateStr,
-          input_tokens: 0,
-          output_tokens: 0,
-          cached_tokens: 0,
-          total_tokens: 0,
-          request_count: 0,
-        };
-        dEntry.input_tokens += ev.input_tokens;
-        dEntry.output_tokens += ev.output_tokens;
-        dEntry.cached_tokens += ev.cached_tokens;
-        if(ev.cache_write_tokens)dEntry.cache_write_tokens=(dEntry.cache_write_tokens??0)+ev.cache_write_tokens;
-        dEntry.total_tokens += ev.total_tokens;
-        dEntry.request_count++;
-        dailyMap.set(dateStr, dEntry);
-      }
-
-      // Hourly: 严格归入本地今日 0 点起的小时桶
-      if (ev.timestamp_seconds >= todayStart && ev.timestamp_seconds < tomorrowStart) {
-        const hourStr = `${dateStr} ${String(d.getHours()).padStart(2, '0')}:00`;
-        const hEntry = hourlyMap.get(hourStr) ?? {
-          hour: hourStr,
-          input_tokens: 0,
-          output_tokens: 0,
-          cached_tokens: 0,
-          total_tokens: 0,
-          request_count: 0,
-        };
-        hEntry.input_tokens += ev.input_tokens;
-        hEntry.output_tokens += ev.output_tokens;
-        hEntry.cached_tokens += ev.cached_tokens;
-        if(ev.cache_write_tokens)hEntry.cache_write_tokens=(hEntry.cache_write_tokens??0)+ev.cache_write_tokens;
-        hEntry.total_tokens += ev.total_tokens;
-        hEntry.request_count++;
-        hourlyMap.set(hourStr, hEntry);
-      }
-    }
-
-    const totalDiscovered = (this.lastDiscoveredDatabaseCount || dbPaths.length) + archivedDbCount;
-    const totalScanned = dbPaths.length + archivedDbCount;
-    const allTimePeriod = buildPeriod(() => true);
-    const knownReceiptKeys = new Set(allEvents.flatMap(event => [event.event_key, event.legacy_event_key].filter((key): key is string => !!key)));
-    const unmatchedReceipts = Object.entries(this.rateLocks).filter(([key]) => !knownReceiptKeys.has(key));
-    if (unmatchedReceipts.length) this.storageWarnings.add('历史金额凭据缺少原始用量或时间，已单独保留待核对，不计入Token和请求数');
-    const summary: TokenUsageSummary = {
-      today: buildPeriod(ev => ev.timestamp_seconds >= todayStart && ev.timestamp_seconds < tomorrowStart),
-      last_7_days: buildPeriod(ev => ev.timestamp_seconds >= sevenDaysStart && ev.timestamp_seconds < tomorrowStart),
-      last_30_days: buildPeriod(ev => ev.timestamp_seconds >= thirtyDaysStart && ev.timestamp_seconds < tomorrowStart),
-      all_time: allTimePeriod,
-      unattributed_requests: allEvents.filter(event => !event.account_id && !event.account_email).length,
-      unattributed_tokens: allEvents.filter(event => !event.account_id && !event.account_email).reduce((sum, event) => sum + event.total_tokens, 0),
-      historical_amount_receipts: { unmatchedCount: unmatchedReceipts.length, unmatchedUsd: unmatchedReceipts.reduce((sum, [, receipt]) => sum + receipt.usd, 0) },
-      daily_trends: [...dailyMap.values()].sort((a, b) => a.date.localeCompare(b.date)),
-      today_hourly: [...hourlyMap.values()].sort((a, b) => a.hour.localeCompare(b.hour)),
-      available_accounts: [...accountMap.values()],
-      selected_account_id: accountId || 'all',
-      databases_scanned: totalScanned,
-      databases_discovered: totalDiscovered,
-      scan_scope_description: totalDiscovered > totalScanned
-        ? `已读取 ${totalScanned}/${totalDiscovered} 个会话数据库`
-        : archivedDbCount > 0
-          ? `全部 ${totalScanned} 个会话数据库（含 ${archivedDbCount} 个已归档）`
-          : `全部 ${dbPaths.length} 个会话数据库`,
-      generations_scanned: generationsScanned,
-      skipped_large_records: skippedLargeRecords,
-      generated_at: now,
-      priced_models: allTimePeriod.priced_models,
-      unpriced_models: allTimePeriod.unpriced_models,
-      failed_databases_count: failedDatabasesCount,
-      has_error: this.ledgerCorrupt || this.archivedUnavailable || failedDatabasesCount > 0 || skippedLargeRecords > 0 || effectiveEvents.some(e=>e.timestamp_seconds<=0),
-      hasError: this.ledgerCorrupt || this.archivedUnavailable || failedDatabasesCount > 0 || skippedLargeRecords > 0 || effectiveEvents.some(e=>e.timestamp_seconds<=0),
-      availability: (failedDatabasesCount > 0 && effectiveEvents.length === 0) || (failedDatabasesCount >= dbPaths.length && dbPaths.length > 0 && liveEventsCount === 0) ? 'unavailable'
-        : cachedDatabasesCount === dbPaths.length && dbPaths.length > 0 ? 'cached' : this.storageWarnings.size > 0 || failedDatabasesCount > 0 || skippedLargeRecords > 0 || effectiveEvents.some(e=>e.timestamp_seconds<=0) ? 'partial' : 'complete',
-      unknown_time_records: effectiveEvents.filter(e=>e.timestamp_seconds<=0).length,
-      unknown_time_tokens: effectiveEvents.filter(e=>e.timestamp_seconds<=0).reduce((n,e)=>n+e.total_tokens,0),
-      database_diagnostics: diagnostics,
-      snapshot_id: (() => {
-        const hash = createHash('sha256');
-        hash.update(`account:${accKey}\n`);
-        for (const ev of allEvents) {
-          hash.update(`${ev.model}|${ev.timestamp_seconds}|${ev.input_tokens}|${ev.output_tokens}|${ev.cached_tokens}|${ev.cache_write_tokens ?? 0}|${ev.total_tokens}\n`);
-          hash.update(`locked-cost:${ev.event_key ? this.rateLocks[ev.event_key]?.usd ?? 'unpriced' : 'unpriced'}\n`);
-        }
-        hash.update(JSON.stringify([pricing, this.calendarKey()]));
-        return hash.digest('hex').slice(0, 20);
-      })(),
-      last_attempt_at: now,
-      pricing_warnings: [...this.pricingWarnings, ...this.storageWarnings],
-    };
 
     if (this.rateLocksDirty) {
       // Commit before exposing a new summary: never report an unlocked historical amount.

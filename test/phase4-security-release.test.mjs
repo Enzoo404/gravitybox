@@ -15,9 +15,7 @@ async function setupSandbox() {
   const dir = await mkdtemp(join(tmpdir(), 'gb-test-phase4-'));
   const stateDir = join(dir, 'state');
   const profile = join(dir, 'profile');
-  const externalDir = join(dir, 'external');
   await mkdir(join(profile, 'User', 'globalStorage'), { recursive: true });
-  await mkdir(join(externalDir, 'accounts'), { recursive: true });
   await mkdir(stateDir, { recursive: true });
 
   const db = join(profile, 'User', 'globalStorage', 'state.vscdb');
@@ -27,7 +25,7 @@ async function setupSandbox() {
   await manager.init();
   const keychain = new MockKeychainAdapter();
   await keychain.writePassword('gemini', 'antigravity', 'initial-keychain-pass');
-  return { dir, stateDir, profile, externalDir, manager, keychain };
+  return { dir, stateDir, profile, manager, keychain };
 }
 
 function makeAccount(id, email) {
@@ -50,20 +48,9 @@ test('A18: 历史切号归档深度不可逆脱敏，杜绝 Base64/Protobuf 凭�
     const acc3 = await env.manager.upsertAccount(makeAccount('acc-3', 'user3@example.com'));
     const acc4 = await env.manager.upsertAccount(makeAccount('acc-4', 'user4@example.com'));
 
-    await writeFile(join(env.externalDir, 'accounts.json'), JSON.stringify({
-      accounts: [
-        { id: 'ext-1', email: 'user1@example.com' },
-        { id: 'ext-2', email: 'user2@example.com' },
-        { id: 'ext-3', email: 'user3@example.com' },
-        { id: 'ext-4', email: 'user4@example.com' },
-      ],
-      current_account_id: 'ext-1',
-    }));
-
     const service = new AccountSwitchService(env.manager, {
       stateDir: env.stateDir,
       profile: env.profile,
-      externalDir: env.externalDir,
       keychain: env.keychain,
       isRunning: async () => false,
     });

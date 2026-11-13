@@ -28,6 +28,7 @@ const SUBAGENT_TOOL_NAMES = new Set([
 const MAX_CACHED_CONVERSATIONS = 24;
 const ACTIVE_DB_RECENCY_MS = 60 * 60 * 1000;
 const INLINE_BLOB_LIMIT_BYTES = 65_536;
+const UTF8_DECODER = new TextDecoder('utf-8');
 
 /**
  * 解析 Protobuf Timestamp / Duration (field 1: 秒数 int64/uint64, field 2: 纳秒数 int32)
@@ -118,7 +119,6 @@ function parseModelInfoBlob(buf: Uint8Array): { maxTokens?: number; modelName?: 
   const cursor = { pos: 0 };
   let maxTokens: number | undefined;
   let modelName: string | undefined;
-  const decoder = new TextDecoder('utf-8');
 
   while (cursor.pos < buf.length) {
     const tag = Number(decodeVarint64(buf, cursor));
@@ -132,7 +132,7 @@ function parseModelInfoBlob(buf: Uint8Array): { maxTokens?: number; modelName?: 
       const len = Number(decodeVarint64(buf, cursor));
       if (!Number.isSafeInteger(len) || len < 0 || cursor.pos + len > buf.length) break;
       if ((fieldNum === 8 || fieldNum === 12 || fieldNum === 20) && len > 0 && len < 256) {
-        const str = decoder.decode(buf.subarray(cursor.pos, cursor.pos + len)).trim();
+        const str = UTF8_DECODER.decode(buf.subarray(cursor.pos, cursor.pos + len)).trim();
         if (str && (!modelName || fieldNum === 20)) modelName = str;
       }
       cursor.pos += len;
@@ -152,7 +152,6 @@ function parseChatToolCallBlob(buf: Uint8Array): { name?: string; childIds: stri
   const cursor = { pos: 0 };
   let name: string | undefined;
   const candidateSlices: Array<{ start: number; end: number }> = [];
-  const decoder = new TextDecoder('utf-8');
 
   while (cursor.pos < buf.length) {
     const tag = Number(decodeVarint64(buf, cursor));
@@ -163,7 +162,7 @@ function parseChatToolCallBlob(buf: Uint8Array): { name?: string; childIds: stri
       const len = Number(decodeVarint64(buf, cursor));
       if (!Number.isSafeInteger(len) || len < 0 || cursor.pos + len > buf.length) break;
       if (fieldNum === 2 && len > 0 && len < 256) {
-        name = decoder.decode(buf.subarray(cursor.pos, cursor.pos + len)).trim();
+        name = UTF8_DECODER.decode(buf.subarray(cursor.pos, cursor.pos + len)).trim();
       } else if ((fieldNum === 3 || fieldNum === 8) && len > 0 && len < 65536) {
         candidateSlices.push({ start: cursor.pos, end: cursor.pos + len });
       }
@@ -177,7 +176,7 @@ function parseChatToolCallBlob(buf: Uint8Array): { name?: string; childIds: stri
   const childIds = new Set<string>();
   if (name && SUBAGENT_TOOL_NAMES.has(name)) {
     for (const slice of candidateSlices) {
-      const jsonStr = decoder.decode(buf.subarray(slice.start, slice.end));
+      const jsonStr = UTF8_DECODER.decode(buf.subarray(slice.start, slice.end));
       for (const m of jsonStr.matchAll(UUID_REGEX_GLOBAL)) {
         if (m[0]) childIds.add(m[0].toLowerCase());
       }
@@ -192,7 +191,7 @@ function parseChatToolCallBlob(buf: Uint8Array): { name?: string; childIds: stri
 function extractUuidsFromBlob(buf: Uint8Array | null | undefined, maxBytes = 65536): string[] {
   if (!buf || buf.length === 0) return [];
   const slice = buf.length > maxBytes ? buf.subarray(0, maxBytes) : buf;
-  const text = new TextDecoder('utf-8', { fatal: false }).decode(slice);
+  const text = UTF8_DECODER.decode(slice);
   const found = new Set<string>();
   for (const m of text.matchAll(UUID_REGEX_GLOBAL)) {
     if (m[0]) found.add(m[0].toLowerCase());
@@ -409,7 +408,7 @@ export function parseLatestGenMetadataBlob(
   if (!dataBlob || dataBlob.length === 0) return out;
 
   const buf: Uint8Array = dataBlob;
-  const decoder = new TextDecoder('utf-8');
+  const decoder = UTF8_DECODER;
   const cursor = { pos: 0 };
 
   while (cursor.pos < buf.length) {
@@ -1250,7 +1249,6 @@ interface CachedConversationState {
   verifiedSniffedChildren: Set<string>;
   genMetadata?: ParsedGenMetadata;
   generations: Map<number, ParsedGenMetadata>;
-  lastMetrics?: ConversationHudMetrics;
 }
 
 /**
@@ -1443,7 +1441,6 @@ export class ConversationMetricsEngine {
         generations.set(item.idx, parsed);
       }
 
-      baseSteps = baseSteps.map(step => ({ ...step, generation: undefined }));
       const stepByIndex = new Map(baseSteps.map(step => [step.idx, step]));
       for (const generation of generations.values()) {
         const linked = [...new Set(generation.stepIndices ?? [])]
@@ -1654,23 +1651,50 @@ export class ConversationMetricsEngine {
       }));
       const descendants: ParsedConversationStep[] = [];
       const processedEdges = new Set<string>();
+      const SUBAGENT_READ_CONCURRENCY = 4;
       while (pendingChildren.length > 0) {
-        const edge = pendingChildren.shift()!;
-        const childId = edge.childId.toLowerCase();
-        const edgeKey = `${edge.parentId}::${childId}`;
-        if (processedEdges.has(edgeKey) || verifiedChildIds.has(childId) ||
-            childId === mainIdLower || childId === mainTrajLower) continue;
-        processedEdges.add(edgeKey);
-        try {
-          const childDbPath = this.resolveDbPath(childId);
-          const childState = await this.readSingleDbState(childDbPath, childId);
-          if (!childState) {
-            if (edge.explicit) {
-              const childStat = await lstat(childDbPath).catch(() => null);
-              if (childStat && childStat.size > 4096) failedChildCount++;
+        const wave: Array<{
+          edge: { childId: string; parentId: string; explicit: boolean; sniffed: boolean };
+          childId: string;
+          childDbPath: string;
+        }> = [];
+        const waveChildIds = new Set<string>();
+        while (wave.length < SUBAGENT_READ_CONCURRENCY && pendingChildren.length > 0) {
+          const edge = pendingChildren[0]!;
+          const childId = edge.childId.toLowerCase();
+          if (waveChildIds.has(childId)) break;
+          pendingChildren.shift();
+          const edgeKey = `${edge.parentId}::${childId}`;
+          if (processedEdges.has(edgeKey) || verifiedChildIds.has(childId) ||
+              childId === mainIdLower || childId === mainTrajLower) continue;
+          processedEdges.add(edgeKey);
+          waveChildIds.add(childId);
+          wave.push({ edge, childId, childDbPath: this.resolveDbPath(childId) });
+        }
+        if (wave.length === 0) continue;
+        const results = await Promise.all(wave.map(async (item) => {
+          try {
+            const childState = await this.readSingleDbState(item.childDbPath, item.childId);
+            if (!childState) {
+              if (item.edge.explicit) {
+                const childStat = await lstat(item.childDbPath).catch(() => null);
+                if (childStat && childStat.size > 4096) return { item, childState: null, failed: true };
+              }
+              return { item, childState: null, failed: false };
             }
+            return { item, childState, failed: false };
+          } catch {
+            return { item, childState: null, failed: item.edge.explicit };
+          }
+        }));
+        for (const { item, childState, failed } of results) {
+          if (failed) {
+            failedChildCount++;
             continue;
           }
+          if (!childState) continue;
+          const { edge, childId } = item;
+          if (verifiedChildIds.has(childId)) continue;
           if (childState.fromErrorFallback) {
             failedChildCount++;
           }
@@ -1716,8 +1740,6 @@ export class ConversationMetricsEngine {
           for (const nested of childState.childConversationIds) {
             pendingChildren.push({ childId: nested, parentId: childId, explicit: true, sniffed: false });
           }
-        } catch {
-          if (edge.explicit) failedChildCount++;
         }
       }
       combinedSteps = [...mainState.steps, ...descendants];
@@ -1771,7 +1793,6 @@ export class ConversationMetricsEngine {
       steps: combinedSteps,
     });
 
-    mainState.lastMetrics = metrics;
     return metrics;
   }
 

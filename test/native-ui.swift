@@ -268,18 +268,6 @@ import Cocoa
             check(maintSheet.cachePage.sheetDoneButton.frame.maxX > maintSheet.cachePage.clearButton.frame.minX, "Maintenance 完成 button must align at bottom-right")
             try capture(maintSheet.sheet.contentView!, output.appendingPathComponent("\(theme)-maintenance-sheet.png"))
             maintSheet.closeSheet(); pump()
-            let card = MenuStatusCard(target:assistant,account:accounts[0],enabled:true)
-            let host = NSWindow(contentRect:NSRect(x:0,y:0,width:320,height:600),styleMask:[.titled],backing:.buffered,defer:false)
-            host.appearance = NSAppearance(named:appearance)
-            let surface = DesignSurface(Design.card); host.contentView = surface
-            card.autoresizingMask = []; surface.addSubview(card); card.frame.origin = .zero
-            card.updateHeight()
-            host.setContentSize(NSSize(width:320,height:card.frame.height)); host.contentView?.layoutSubtreeIfNeeded(); pump()
-            check(card.emailLabel.stringValue == "alex@example.invalid","Full email lost")
-            check(card.emailLabel.bounds.width > 200,"Identity width still compressed")
-            try capture(surface,output.appendingPathComponent("\(theme)-menu-default.png"))
-            card.toggleAccountList(); pump(); host.setContentSize(NSSize(width:320,height:card.frame.height)); host.contentView?.layoutSubtreeIfNeeded()
-            try capture(surface,output.appendingPathComponent("\(theme)-menu-accounts.png")); host.orderOut(nil)
             let allAccounts = accounts
             accounts = [allAccounts[2]]; activeId = "c"; assistant.activeAccountId = "c"; assistant.cachedAccounts = accounts
             window.setFrame(NSRect(origin:window.frame.origin,size:NSSize(width:880,height:580)),display:true)
@@ -297,12 +285,17 @@ import Cocoa
             }
             check(assistant.accountsPage?.activeId == "c", "AccountsPage must preserve configured activeId when liveAccountEmail is not in saved accounts")
             try capture(window.contentView!,output.appendingPathComponent("\(theme)-free-model-quota.png"))
-            let freeCard = MenuStatusCard(target:assistant,account:accounts[0],enabled:true)
-            card.removeFromSuperview(); surface.addSubview(freeCard); freeCard.frame.origin = .zero; freeCard.updateHeight()
-            host.setContentSize(NSSize(width:320,height:freeCard.frame.height)); host.contentView?.layoutSubtreeIfNeeded(); pump()
-            check(freeCard.gemini5h.titleLabel.stringValue == "模型配额" && freeCard.gemini5h.valueLabel.stringValue == "100%", "Menu must show FREE model quota")
-            check(freeCard.claude5h.resetLabel.stringValue.contains("6天23小时"), "Menu must preserve the real long model reset")
-            try capture(surface,output.appendingPathComponent("\(theme)-free-model-menu.png"))
+            let freeMenuPanel = MenuPanelController(app: assistant)
+            let freeHost = NSWindow(contentRect: NSRect(x: 0, y: 0, width: MenuPanelController.panelWidth, height: MenuPanelController.defaultPanelHeight), styleMask: [.titled], backing: .buffered, defer: false)
+            freeHost.appearance = NSAppearance(named: appearance)
+            freeHost.contentViewController = freeMenuPanel
+            freeMenuPanel.selectTab(1, persist: false); freeMenuPanel.panelWillOpen(); pump()
+            freeHost.setContentSize(freeMenuPanel.preferredContentSize); freeHost.contentView?.layoutSubtreeIfNeeded(); pump()
+            check(freeMenuPanel.quotaEmailLabel.stringValue == "third@example.invalid", "Full email lost on MenuPanelController")
+            check(freeMenuPanel.quotaGemini5h.titleLabel.stringValue == "模型配额" && freeMenuPanel.quotaGemini5h.valueLabel.stringValue == "100%", "Menu must show FREE model quota")
+            check(freeMenuPanel.quotaClaude5h.resetLabel.stringValue.contains("6天23小时"), "Menu must preserve the real long model reset")
+            try capture(freeHost.contentView!,output.appendingPathComponent("\(theme)-free-model-menu.png"))
+            freeHost.orderOut(nil)
             accounts = allAccounts; activeId = "a"; assistant.activeAccountId = "a"; assistant.cachedAccounts = accounts
         }
         assistant.accountsPage!.fetch(); pump()
@@ -872,16 +865,14 @@ import Cocoa
         stableSettings.update()
         check(stableSettings.translationSwitch.isEnabled == false, "translationSwitch must remain greyed out / disabled when backend is unreachable due to Gatekeeper quarantine interception")
         check(stableSettings.translationSwitch.toolTip == nil, "translationSwitch must not show hover tooltip when backend is unreachable")
-        let menuDisabled = NSMenu()
-        assistant.menuNeedsUpdate(menuDisabled)
+        let menuDisabled = assistant.buildMoreMenu()
         let toggleDisabled = menuDisabled.items.first { $0.title == "界面汉化" }
         check(toggleDisabled?.isEnabled == false, "Menu bar translation toggle must be disabled when backend is unreachable")
 
         assistant.reachable = true
         stableSettings.update()
         check(stableSettings.translationSwitch.isEnabled == true, "translationSwitch must become enabled once backend is reachable after quarantine clearance")
-        let menuEnabled = NSMenu()
-        assistant.menuNeedsUpdate(menuEnabled)
+        let menuEnabled = assistant.buildMoreMenu()
         let toggleEnabled = menuEnabled.items.first { $0.title == "界面汉化" }
         check(toggleEnabled?.isEnabled == true, "Menu bar translation toggle must become enabled once backend is reachable")
 
@@ -1142,7 +1133,7 @@ import Cocoa
             }
         }
 
-        let result:[String:Any] = ["stableOnlySelectionPassed":true,"nativeLayouts":captures.count,"captures":captures,"menuCaptures":4,"safeSwitchSharedFlowPassed":true,"emailWidthPassed":true,"partialPricingPassed":true,"nativeAssertions":assertionCount,"scope":"isolated synthetic AppKit fixture; not installed-app acceptance"]
+        let result:[String:Any] = ["stableOnlySelectionPassed":true,"nativeLayouts":captures.count,"captures":captures,"menuCaptures":6,"safeSwitchSharedFlowPassed":true,"emailWidthPassed":true,"partialPricingPassed":true,"nativeAssertions":assertionCount,"scope":"isolated synthetic AppKit fixture; not installed-app acceptance"]
         try JSONSerialization.data(withJSONObject:result,options:[.prettyPrinted,.sortedKeys]).write(to:output.appendingPathComponent("native-ui-results.json"))
         window.orderOut(nil)
         print("24 current-page native layouts and 4 menu states; fixture checks passed")

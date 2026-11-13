@@ -29,6 +29,10 @@ struct DesktopApplicationTarget {
         app.bundleIdentifier == bundleIdentifier && app.bundleURL?.standardizedFileURL.path == URL(fileURLWithPath: path).standardizedFileURL.path
     }
     static func matchesAny(_ app: NSRunningApplication) -> Bool { DesktopApplicationTarget().matchesStrict(app) }
+    static func isRegisteredRunning() -> Bool {
+        NSRunningApplication.runningApplications(withBundleIdentifier: DesktopApplicationTarget().bundleIdentifier)
+            .contains(where: matchesAny)
+    }
     static func preferredLaunchPath(fallbackChannel: String = "stable") -> String { DesktopApplicationTarget().path }
 }
 
