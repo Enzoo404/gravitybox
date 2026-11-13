@@ -939,4 +939,87 @@ describe('HudInstance 与 AntigravityHudManager 生产模块生命周期、垂�
     assert.equal(sr.querySelector('#val-turn-dur').textContent, '14秒');
     inst.dispose();
   });
+
+  it('子智能体切换间隙或 turns 延迟落库时，本轮用时保持单调递增不暂停、不回退', () => {
+    const inst = new HudInstance({ cascadeId: 'pane-subagent-monotonic', isPrimaryPane: true });
+    const composer = new FakeElement('div');
+    composer.setAttribute('data-testid', 'agent-input-box');
+    inst.mount(composer);
+    const sr = inst.host.shadowRoot;
+
+    // 1. 子智能体运行到 23s，且起初 turns 尚未写入 DB（turns=0）
+    inst.switchConversation('conv-subagent-clock', 'gemini-3.8-flash', true, true, 1);
+    inst.updateMetrics({
+      conversationId: 'conv-subagent-clock',
+      sessionRevision: inst.getSessionRevision(),
+      metricsSequence: 1,
+      isStreaming: true,
+      isSubagentRunning: true,
+      runningSubagentCount: 1,
+      session: {
+        turns: 0,
+        steps: 3,
+        subagentCount: 1,
+        currentTurnDurationSeconds: 23.0,
+        currentTurnDurationFormatted: '23秒',
+        currentTurnDurationFormattedEn: '23s',
+        currentTurnDurationCompactZh: '本轮 23s',
+        currentTurnDurationCompactEn: 'Turn 23s',
+      },
+      tokens: { totalTokens: 100 },
+      context: { hasUsageData: true, usedRatio: 0.1 },
+    });
+    assert.equal(sr.querySelector('#hud-txt-session .hud-turn-dur').textContent, '· 本轮 23s');
+
+    // 2. 子智能体切换瞬间短暂出现 idle 抖动且后端仅上报 20s，绝不能从 23s 回退到 20s
+    inst.notifyModelOrStreamingChange(null, false, false, 0, null, 'idle');
+    inst.updateMetrics({
+      conversationId: 'conv-subagent-clock',
+      sessionRevision: inst.getSessionRevision(),
+      metricsSequence: 2,
+      isStreaming: false,
+      isSubagentRunning: false,
+      runningSubagentCount: 0,
+      session: {
+        turns: 0,
+        steps: 3,
+        subagentCount: 1,
+        currentTurnDurationSeconds: 20.0,
+        currentTurnDurationFormatted: '20秒',
+        currentTurnDurationFormattedEn: '20s',
+        currentTurnDurationCompactZh: '本轮 20s',
+        currentTurnDurationCompactEn: 'Turn 20s',
+      },
+      tokens: { totalTokens: 100 },
+      context: { hasUsageData: true, usedRatio: 0.1 },
+    });
+    assert.equal(sr.querySelector('#hud-txt-session .hud-turn-dur').textContent, '· 本轮 23s');
+    assert.equal(sr.querySelector('#val-turn-dur').textContent, '23秒');
+
+    // 3. 父对话恢复流式并延迟落库 turns: 0 -> 1 且 backendSec=20s，计时仍应从 >=23s 继续前进
+    inst.notifyModelOrStreamingChange('gemini-3.8-flash', true, true, 1, null, 'executing');
+    inst.updateMetrics({
+      conversationId: 'conv-subagent-clock',
+      sessionRevision: inst.getSessionRevision(),
+      metricsSequence: 3,
+      isStreaming: true,
+      isSubagentRunning: true,
+      runningSubagentCount: 1,
+      session: {
+        turns: 1,
+        steps: 4,
+        subagentCount: 1,
+        currentTurnDurationSeconds: 20.0,
+        currentTurnDurationFormatted: '20秒',
+        currentTurnDurationFormattedEn: '20s',
+        currentTurnDurationCompactZh: '本轮 20s',
+        currentTurnDurationCompactEn: 'Turn 20s',
+      },
+      tokens: { totalTokens: 120 },
+      context: { hasUsageData: true, usedRatio: 0.12 },
+    });
+    assert.equal(sr.querySelector('#hud-txt-session .hud-turn-dur').textContent, '· 本轮 23s');
+    assert.ok(inst.turnClockTimer !== null, '子智能体恢复活跃后客户端时钟必须继续运行');
+    inst.dispose();
+  });
 });

@@ -747,12 +747,14 @@ export interface ComputeHudMetricsInput {
     status?: number;
     t_start?: number | null;
     startTimeSeconds?: number | null;
+    createdAtSeconds?: number | null;
     t_first_token?: number | null;
     firstTokenSeconds?: number | null;
     t_end?: number | null;
     endTimeSeconds?: number | null;
     finishedGeneratingSeconds?: number | null;
     completedAtSeconds?: number | null;
+    childConversationIds?: string[];
     rawInput?: number;
     rawInputTokens?: number;
     cachedTokens?: number;
@@ -988,15 +990,40 @@ export function buildConversationHudMetrics(input: ComputeHudMetricsInput): Conv
   const turnSteps = lastTurnStartIndex >= 0 ? contextSteps.slice(lastTurnStartIndex) : contextSteps;
   let currentTurnModelDurationSeconds = 0;
   let currentTurnToolDurationSeconds = 0;
+  let turnWallStart: number | null = null;
+  let turnCompletedEnd: number | null = null;
+  let hasActiveStepInTurn = false;
+  let hasSubagentStepInTurn = false;
   const nowSeconds = nowMs / 1000;
   const allowActiveInference = input.allowDbActiveStepInference !== false;
 
+  const trackWallStart = (ts: number | null | undefined) => {
+    if (validSeconds(ts)) {
+      turnWallStart = turnWallStart === null ? ts : Math.min(turnWallStart, ts);
+    }
+  };
+  const trackWallEnd = (ts: number | null | undefined) => {
+    if (validSeconds(ts)) {
+      turnCompletedEnd = turnCompletedEnd === null ? ts : Math.max(turnCompletedEnd, ts);
+    }
+  };
+
   for (const step of turnSteps) {
     const stepType = step.step_type ?? step.stepType ?? 0;
+    const stepStart = step.t_start ?? step.startTimeSeconds ?? step.createdAtSeconds;
+    trackWallStart(stepStart);
     if (stepType === 14) continue;
     const start = step.t_start ?? step.startTimeSeconds;
     const end = step.t_end ?? step.endTimeSeconds;
     const rawStatus = step.status ?? 3;
+    if (
+      Boolean(step.isSubagentStep) ||
+      stepType === 127 ||
+      Boolean(step.toolCallName && SUBAGENT_TOOL_NAMES.has(step.toolCallName)) ||
+      (step.childConversationIds && step.childConversationIds.length > 0)
+    ) {
+      hasSubagentStepInTurn = true;
+    }
     const complete =
       rawStatus === 3 ||
       (rawStatus === 5 &&
@@ -1005,6 +1032,14 @@ export function buildConversationHudMetrics(input: ComputeHudMetricsInput): Conv
           step.completedAtSeconds != null ||
           step.t_end != null));
     const hasInterval = validSeconds(start) && validSeconds(end) && end > start;
+    if (complete) {
+      trackWallEnd(end ?? step.finishedGeneratingSeconds ?? step.completedAtSeconds ?? start);
+    } else if (
+      (allowActiveInference && ACTIVE_STEP_STATUSES.has(rawStatus)) ||
+      (isStreaming && (ACTIVE_STEP_STATUSES.has(rawStatus) || end == null))
+    ) {
+      hasActiveStepInTurn = true;
+    }
 
     if (stepType === 15) {
       const gen = step.generation;
@@ -1035,7 +1070,42 @@ export function buildConversationHudMetrics(input: ComputeHudMetricsInput): Conv
     }
   }
 
-  const currentTurnDurationSeconds = currentTurnModelDurationSeconds + currentTurnToolDurationSeconds;
+  const childStepsAll = steps.length > contextSteps.length ? steps.slice(contextSteps.length) : [];
+  const childStepsInTurn = childStepsAll.filter((step) => {
+    const start = step.t_start ?? step.startTimeSeconds ?? step.createdAtSeconds;
+    const end = step.t_end ?? step.endTimeSeconds ?? step.finishedGeneratingSeconds ?? step.completedAtSeconds;
+    if (turnWallStart !== null) {
+      if (validSeconds(start)) return start >= turnWallStart - 1;
+      if (validSeconds(end)) return end >= turnWallStart - 1;
+      return false;
+    }
+    return isSubagentRunning;
+  });
+  for (const childStep of childStepsInTurn) {
+    const start = childStep.t_start ?? childStep.startTimeSeconds ?? childStep.createdAtSeconds;
+    const end = childStep.t_end ?? childStep.endTimeSeconds ?? childStep.finishedGeneratingSeconds ?? childStep.completedAtSeconds;
+    const childStatus = childStep.status ?? 3;
+    trackWallStart(start);
+    if (!ACTIVE_STEP_STATUSES.has(childStatus)) {
+      trackWallEnd(end ?? start);
+    } else if (allowActiveInference) {
+      hasActiveStepInTurn = true;
+    }
+  }
+
+  const hasSubagentInTurn = Boolean(isSubagentRunning || hasSubagentStepInTurn || childStepsInTurn.length > 0);
+  const stepDurationSum = currentTurnModelDurationSeconds + currentTurnToolDurationSeconds;
+  let currentTurnDurationSeconds = stepDurationSum;
+  if (hasSubagentInTurn && turnWallStart !== null) {
+    const completedWallSpan = turnCompletedEnd !== null && turnCompletedEnd > turnWallStart
+      ? turnCompletedEnd - turnWallStart
+      : 0;
+    if (isStreaming || isSubagentRunning || hasActiveStepInTurn) {
+      currentTurnDurationSeconds = Math.max(0, nowSeconds - turnWallStart, completedWallSpan);
+    } else if (completedWallSpan > 0) {
+      currentTurnDurationSeconds = completedWallSpan;
+    }
+  }
   const hasTurnDuration = turns > 0 || (turnSteps.length > 0 && currentTurnDurationSeconds > 0) || isStreaming;
   const currentTurnDurationFormatted = hasTurnDuration
     ? formatTurnDurationCard(currentTurnDurationSeconds, 'zh')

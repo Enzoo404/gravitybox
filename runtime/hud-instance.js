@@ -210,11 +210,13 @@ export class HudInstance {
     this.hoverLeaveTimer = null;
     this.turnClockTimer = null;
     this.turnClockAnchor = null;
+    this.turnHighWaterMark = null;
     this.lastMetrics = createDefaultMetrics('default', 0);
   }
 
   resetToEmptyState() {
     this.stopTurnClock();
+    this.turnHighWaterMark = null;
     this.currentConvId = null;
     this.currentModelId = '';
     this.domIsStreaming = false;
@@ -277,6 +279,7 @@ export class HudInstance {
     }
     if (changed) {
       this.stopTurnClock();
+      this.turnHighWaterMark = null;
       this.backendIsSubagentRunning = false;
       this.backendRunningSubagentCount = 0;
       this.backendActivityPhase = null;
@@ -999,22 +1002,65 @@ export class HudInstance {
   }
 
   syncTurnClock(metrics, isWorkingNow) {
-    if (!isWorkingNow || !this.shadow) {
-      this.stopTurnClock();
-      return;
-    }
     const s = metrics?.session || {};
     const backendSec = isRawNumber(s.currentTurnDurationSeconds) ? Math.max(0, s.currentTurnDurationSeconds) : 0;
     const turns = isRawNumber(s.turns) ? s.turns : 0;
+    const hasSubagentInTurn = Boolean(
+      this.isSubagentRunning ||
+      metrics?.isSubagentRunning ||
+      (isRawNumber(s.subagentCount) && s.subagentCount > 0) ||
+      (isRawNumber(s.subagentSteps) && s.subagentSteps > 0) ||
+      (this.turnHighWaterMark && this.turnHighWaterMark.turns === turns && this.turnHighWaterMark.hasSubagent)
+    );
+    if (!isWorkingNow || !this.shadow) {
+      if (this.turnClockAnchor) {
+        const liveSec = this.turnClockAnchor.baseSeconds + (Date.now() - this.turnClockAnchor.anchorMs) / 1000;
+        const prevHigh = this.turnHighWaterMark && this.turnHighWaterMark.turns === turns
+          ? this.turnHighWaterMark.seconds
+          : 0;
+        this.turnHighWaterMark = {
+          turns,
+          seconds: Math.max(backendSec, liveSec, prevHigh),
+          hasSubagent: hasSubagentInTurn,
+        };
+      }
+      this.stopTurnClock();
+      return;
+    }
     const nowMs = Date.now();
-    if (!this.turnClockAnchor || turns > this.turnClockAnchor.turns) {
-      this.turnClockAnchor = { baseSeconds: backendSec, anchorMs: nowMs, turns, lastRenderedSec: Math.round(backendSec) };
+    if (!this.turnClockAnchor) {
+      const sameTurnResumeFloor =
+        this.turnHighWaterMark &&
+        this.turnHighWaterMark.turns === turns &&
+        this.turnHighWaterMark.hasSubagent
+          ? this.turnHighWaterMark.seconds
+          : 0;
+      const startSec = Math.max(backendSec, sameTurnResumeFloor);
+      this.turnClockAnchor = { baseSeconds: startSec, anchorMs: nowMs, turns, lastRenderedSec: Math.round(startSec) };
+    } else if (turns > this.turnClockAnchor.turns) {
+      const liveSec = this.turnClockAnchor.baseSeconds + (nowMs - this.turnClockAnchor.anchorMs) / 1000;
+      if (this.turnClockAnchor.turns === 0 && turns === 1 && backendSec >= 2 && backendSec < liveSec) {
+        // Delayed SQLite flush of turn 1's USER_INPUT row mid-turn: keep live timer uninterrupted.
+        this.turnClockAnchor.turns = turns;
+      } else {
+        this.turnClockAnchor = { baseSeconds: backendSec, anchorMs: nowMs, turns, lastRenderedSec: Math.round(backendSec) };
+        this.turnHighWaterMark = null;
+      }
     } else {
       const liveSec = this.turnClockAnchor.baseSeconds + (nowMs - this.turnClockAnchor.anchorMs) / 1000;
       if (backendSec > liveSec + 0.5) {
         this.turnClockAnchor = { baseSeconds: backendSec, anchorMs: nowMs, turns, lastRenderedSec: Math.round(backendSec) };
       }
     }
+    const currentLive = this.turnClockAnchor.baseSeconds + (nowMs - this.turnClockAnchor.anchorMs) / 1000;
+    const prevHigh = this.turnHighWaterMark && this.turnHighWaterMark.turns === turns
+      ? this.turnHighWaterMark.seconds
+      : 0;
+    this.turnHighWaterMark = {
+      turns,
+      seconds: Math.max(backendSec, currentLive, prevHigh),
+      hasSubagent: hasSubagentInTurn,
+    };
     if (!this.turnClockTimer) {
       this.turnClockTimer = setInterval(() => this.tickTurnClock(), 250);
       if (typeof this.turnClockTimer?.unref === 'function') {
@@ -1055,6 +1101,9 @@ export class HudInstance {
       return;
     }
     const elapsedSec = this.turnClockAnchor.baseSeconds + (Date.now() - this.turnClockAnchor.anchorMs) / 1000;
+    if (this.turnHighWaterMark && this.turnHighWaterMark.turns === this.turnClockAnchor.turns) {
+      this.turnHighWaterMark.seconds = Math.max(this.turnHighWaterMark.seconds, elapsedSec);
+    }
     const roundedSec = Math.max(0, Math.round(elapsedSec));
     if (roundedSec === this.turnClockAnchor.lastRenderedSec) return;
     this.turnClockAnchor.lastRenderedSec = roundedSec;
@@ -1114,12 +1163,26 @@ export class HudInstance {
     const activeSubagentsBar = formatCompactCount(activeSubagents);
     const isWorkingNow = Boolean(this.isStreaming || this.isSubagentRunning);
     this.syncTurnClock(metrics, isWorkingNow);
+    const subagentTurnFloor =
+      !isWorkingNow &&
+      this.turnHighWaterMark &&
+      this.turnHighWaterMark.turns === rawTurns &&
+      this.turnHighWaterMark.hasSubagent
+        ? this.turnHighWaterMark.seconds
+        : 0;
+    const rawBackendTurnSec = isRawNumber(s.currentTurnDurationSeconds) ? Math.max(0, s.currentTurnDurationSeconds) : null;
+    const effectiveIdleTurnSec =
+      rawBackendTurnSec !== null
+        ? Math.max(rawBackendTurnSec, subagentTurnFloor)
+        : subagentTurnFloor > 0
+        ? subagentTurnFloor
+        : null;
     const liveElapsedSec = isWorkingNow && this.turnClockAnchor
       ? Math.max(
-          isRawNumber(s.currentTurnDurationSeconds) ? Math.max(0, s.currentTurnDurationSeconds) : 0,
+          rawBackendTurnSec ?? 0,
           this.turnClockAnchor.baseSeconds + (Date.now() - this.turnClockAnchor.anchorMs) / 1000
         )
-      : (isRawNumber(s.currentTurnDurationSeconds) ? Math.max(0, s.currentTurnDurationSeconds) : null);
+      : effectiveIdleTurnSec;
     const tpsText = (digits) =>
       s.outputTpsFormatted === '计算中...' ||
       (isWorkingNow && !(Number(s.samples?.timed) > 0) && s.outputTpsFormatted === '—')
@@ -1136,7 +1199,7 @@ export class HudInstance {
     }
     if (turnDurEl) {
       let compactDur;
-      if (isWorkingNow && liveElapsedSec !== null) {
+      if (liveElapsedSec !== null && (isWorkingNow || subagentTurnFloor > (rawBackendTurnSec ?? 0))) {
         compactDur = this.formatCompactTurnDuration(liveElapsedSec, isEn);
       } else {
         compactDur = isEn
@@ -1245,12 +1308,14 @@ export class HudInstance {
     setTxt('#lbl-tps', isEn ? 'Output Speed (TPS)' : '输出速度（TPS）');
     setTxt('#val-tps', tpsText(2));
     setTxt('#lbl-turn-dur', isEn ? 'Turn Duration' : '本轮用时');
-    const cardTurnSec = isWorkingNow && liveElapsedSec !== null ? liveElapsedSec : s.currentTurnDurationSeconds;
+    const cardTurnSec = liveElapsedSec !== null && (isWorkingNow || subagentTurnFloor > (rawBackendTurnSec ?? 0))
+      ? liveElapsedSec
+      : s.currentTurnDurationSeconds;
     const turnDurFormatted = isEn
-      ? (isRawNumber(cardTurnSec) && (isWorkingNow || s.currentTurnDurationFormattedEn !== '—')
+      ? (isRawNumber(cardTurnSec) && (isWorkingNow || subagentTurnFloor > (rawBackendTurnSec ?? 0) || s.currentTurnDurationFormattedEn !== '—')
         ? durationText(cardTurnSec, 'en')
         : (s.currentTurnDurationFormattedEn || '—'))
-      : (isRawNumber(cardTurnSec) && (isWorkingNow || s.currentTurnDurationFormatted !== '—')
+      : (isRawNumber(cardTurnSec) && (isWorkingNow || subagentTurnFloor > (rawBackendTurnSec ?? 0) || s.currentTurnDurationFormatted !== '—')
         ? durationText(cardTurnSec, 'zh')
         : (s.currentTurnDurationFormatted || '—'));
     setTxt('#val-turn-dur', turnDurFormatted);

@@ -628,3 +628,46 @@ test('长耗时工具运行超5分钟且带占位end时间戳、即使DOM进入�
     `应持续累计 188s + 600s (>=780s)，不能回退冻结在 188s，实际 ${result.session.currentTurnDurationSeconds}`
   );
 });
+
+test('异步与并行子智能体期间本轮用时不暂停、不重复叠加且完成后不回退', () => {
+  const nowSec = Date.now() / 1000;
+  const turnStart = nowSec - 23;
+  // 场景 1: 异步 invoke_subagent 本身仅耗时 0.02s，后台子智能体运行至当前时刻 (总墙钟 23s)
+  const mainSteps = [
+    step({ idx: 0, stepType: 14, startTimeSeconds: null, endTimeSeconds: null }),
+    step({ idx: 1, stepType: 15, status: 3, startTimeSeconds: turnStart, endTimeSeconds: turnStart + 10, rawInputTokens: 50, outputTokens: 20 }),
+    step({ idx: 2, stepType: 132, status: 3, isSubagentStep: true, toolCallName: 'invoke_subagent', startTimeSeconds: turnStart + 10, endTimeSeconds: turnStart + 10.02 }),
+    step({ idx: 3, stepType: 15, status: 3, startTimeSeconds: turnStart + 10.02, endTimeSeconds: turnStart + 20, rawInputTokens: 60, outputTokens: 15 }),
+  ];
+  const childRunningSteps = [
+    step({ idx: 0, stepType: 14 }),
+    step({ idx: 1, stepType: 15, status: 2, startTimeSeconds: turnStart + 10.05, endTimeSeconds: null }),
+  ];
+  const activeSubagentMetrics = buildConversationHudMetrics({
+    conversationId: 'subagent-active-wall',
+    isStreaming: false,
+    isSubagentRunning: true,
+    runningSubagentCount: 1,
+    contextSteps: mainSteps,
+    steps: [...mainSteps, ...childRunningSteps],
+  });
+  assert.ok(
+    activeSubagentMetrics.session.currentTurnDurationSeconds >= 22.8,
+    `子智能体后台运行 23s 时不能冻结在 20s，实际 ${activeSubagentMetrics.session.currentTurnDurationSeconds}`
+  );
+
+  // 场景 2: 两个并行子智能体同时跑 20s，本轮用时应按墙钟区间合并为 20s，而非 40s
+  const parallelSteps = [
+    step({ idx: 0, stepType: 14, startTimeSeconds: 100, endTimeSeconds: 100 }),
+    step({ idx: 1, stepType: 132, status: 3, isSubagentStep: true, startTimeSeconds: 100, endTimeSeconds: 120 }),
+    step({ idx: 2, stepType: 132, status: 3, isSubagentStep: true, startTimeSeconds: 100, endTimeSeconds: 120 }),
+  ];
+  const parallelMetrics = buildConversationHudMetrics({
+    conversationId: 'subagent-parallel-wall',
+    isStreaming: false,
+    isSubagentRunning: false,
+    contextSteps: parallelSteps,
+    steps: parallelSteps,
+  });
+  assert.equal(Number(parallelMetrics.session.currentTurnDurationSeconds.toFixed(1)), 20);
+});
