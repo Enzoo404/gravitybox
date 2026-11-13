@@ -137,7 +137,14 @@ import Cocoa
                     "browserBusy": false,
                     "scannedAt": Int(Date().timeIntervalSince1970)
                 ]
-            case "account_switch_preflight": return ["ok":preflightState != "error","safe":preflightState == "safe","appRunning":preflightState == "busy","hasRunningTask":preflightState == "busy","error":"隔离预检失败"]
+            case "account_switch_preflight": return [
+                "ok": preflightState != "error",
+                "safe": preflightState == "safe" || preflightState == "running_idle",
+                "appRunning": preflightState == "busy" || preflightState == "running_idle",
+                "stableRunning": preflightState == "running_idle",
+                "hasRunningTask": preflightState == "busy",
+                "error": "隔离预检失败"
+            ]
             case "account_switch": switches += 1; activeId = payload["id"] as? String ?? activeId; return ["ok":true,"message":"隔离事务完成"]
             case "account_recovery_info": return ["ok":true,"available":false]
             case "pause": lastTranslationCommand = "pause"; return ["ok":true]
@@ -503,9 +510,18 @@ import Cocoa
         assistant.switchAccountByIdFromMenu("b")
         check(assistant.activeAccountId == "a","Menu must not optimistically change current identity")
         waitUntil(description: "account switch to complete") {
-            switches >= 1
+            switches >= 1 && !assistant.accountSwitchInFlight
         }
         check(switches == 1, "Confirmed fixture switch must run exactly once")
+        let opensBeforeIdleSwitch = assistant.openedApplications
+        preflightState = "running_idle"
+        assistant.switchAccountByIdFromMenu("c")
+        waitUntil(description: "running_idle switch to complete and relaunch") {
+            switches >= 2 && !assistant.accountSwitchInFlight && assistant.openedApplications > opensBeforeIdleSwitch
+        }
+        check(switches == 2 && assistant.openedApplications == opensBeforeIdleSwitch + 1, "Switching while Antigravity was running must automatically relaunch Antigravity")
+        switches = 1; assistant.activeAccountId = "a"; activeId = "a"
+        preflightState = "safe"
         preflightState = "busy"; assistant.switchAccountByIdFromMenu("c"); pump()
         check(switches == 1,"Running official app must block switching")
         preflightState = "error"; assistant.switchAccountByIdFromMenu("c"); pump()

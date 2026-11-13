@@ -714,6 +714,7 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             let appRunning = payload["appRunning"] as? Bool == true
             let insidersRunning = payload["insidersRunning"] as? Bool == true
             let stableRunning = (payload["stableRunning"] as? Bool) ?? (appRunning && !insidersRunning)
+            let shouldQuitAndRelaunch = !insidersRunning && (stableRunning || Self.isAntigravityRunning())
             let hasRunningTask = (payload["hasRunningTask"] as? Bool == true) || (payload["safe"] as? Bool == false)
             let display: String
             if !name.isEmpty && name.caseInsensitiveCompare(email) != .orderedSame && !email.isEmpty {
@@ -728,16 +729,16 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
             }
             let performSwitch = { [weak self] in
                 guard let self else { return }
-                self.suppressLifecycleAutoQuit(seconds: 60.0)
+                self.suppressLifecycleAutoQuit(seconds: 75.0)
                 self.bridge.send(["command": "account_switch", "id": id, "target": "all", "autoRefreshToken": true]) { [weak self] response in
                     guard let self else { return }; self.accountSwitchInFlight = false
                     switch response {
                     case .failure(let error):
-                        if stableRunning { self.suppressLifecycleAutoQuit(seconds: 20.0); self.openAntigravity() }
+                        if shouldQuitAndRelaunch { self.relaunchAntigravityAfterSwitch() }
                         self.showMessage("切换账号失败：" + error.localizedDescription, error: true)
                     case .success(let value):
                         self.showMessage(value["message"] as? String ?? "已切换至账号：\(email)")
-                        if stableRunning { self.suppressLifecycleAutoQuit(seconds: 20.0); self.openAntigravity() }
+                        if shouldQuitAndRelaunch { self.relaunchAntigravityAfterSwitch() }
                         self.refresh(); self.accountsPage?.fetch(); self.overview?.fetch(); completion?()
                     }
                 }
@@ -751,13 +752,14 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
                         guard let self else { return }; self.accountSwitchInFlight = false
                         if case .success(let value) = response {
                             self.showMessage(value["message"] as? String ?? "已切换至账号：\(email)")
+                            if shouldQuitAndRelaunch { self.relaunchAntigravityAfterSwitch() }
                             self.refresh(); self.accountsPage?.fetch(); self.overview?.fetch(); completion?()
                         }
                     }
                     return
                 }
                 #endif
-                if stableRunning {
+                if shouldQuitAndRelaunch {
                     self.quitAntigravityAndWait { [weak self] exited in
                         guard let self else { return }
                         guard exited else {
@@ -842,18 +844,29 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
                     return Self.hasRunningAntigravityProcess(psOutput: output, appPaths: appPaths)
                 } catch { return false }
             }
+            func hasWorkspaceRegistration() -> Bool {
+                DispatchQueue.main.sync {
+                    Self.isAntigravityRunning()
+                }
+            }
             let start = Date()
             var retriedTerminate = false
-            while hasAntigravityProcesses() && Date().timeIntervalSince(start) < 20.0 {
+            while (hasAntigravityProcesses() || hasWorkspaceRegistration()) && Date().timeIntervalSince(start) < 20.0 {
                 if !retriedTerminate && Date().timeIntervalSince(start) >= 2.0 {
                     retriedTerminate = true
-                    for app in NSWorkspace.shared.runningApplications where DesktopApplicationTarget.matchesAny(app) && !app.isTerminated {
-                        _ = app.terminate()
+                    DispatchQueue.main.async {
+                        for app in NSWorkspace.shared.runningApplications where DesktopApplicationTarget.matchesAny(app) && !app.isTerminated {
+                            _ = app.terminate()
+                        }
                     }
                 }
                 Thread.sleep(forTimeInterval: 0.15)
             }
-            let exited = !hasAntigravityProcesses()
+            let exited = !hasAntigravityProcesses() && !hasWorkspaceRegistration()
+            if exited {
+                // Allow LaunchServices / runningboardd to finish unregistering the terminated app job before relaunch.
+                Thread.sleep(forTimeInterval: 0.3)
+            }
             DispatchQueue.main.async {
                 self?.suppressLifecycleAutoQuit(seconds: 20.0)
                 completion(exited)
@@ -1392,9 +1405,79 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenu
         #if NATIVE_UI_TEST
         openedApplications += 1; return
         #else
-        suppressLifecycleAutoQuit(seconds: 20.0)
+        suppressLifecycleAutoQuit(seconds: 30.0)
         let launchPath = DesktopApplicationTarget.preferredLaunchPath(fallbackChannel: Self.applicationChannel)
-        NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: launchPath), configuration: NSWorkspace.OpenConfiguration()) { [weak self] _, error in if let error { DispatchQueue.main.async { self?.showMessage(error.localizedDescription, error: true) } } }
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = true
+        config.createsNewApplicationInstance = false
+        NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: launchPath), configuration: config) { [weak self] _, error in
+            if let error {
+                DispatchQueue.main.async { self?.showMessage(error.localizedDescription, error: true) }
+            }
+        }
+        #endif
+    }
+
+    func relaunchAntigravityAfterSwitch(attemptsRemaining: Int = 3) {
+        #if NATIVE_UI_TEST
+        openedApplications += 1
+        return
+        #else
+        suppressLifecycleAutoQuit(seconds: 30.0)
+        let launchPath = DesktopApplicationTarget.preferredLaunchPath(fallbackChannel: Self.applicationChannel)
+        if attemptsRemaining <= 1 {
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                let proc = Process()
+                proc.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+                proc.arguments = ["-a", launchPath]
+                proc.standardOutput = FileHandle.nullDevice
+                proc.standardError = FileHandle.nullDevice
+                let launchError: Error? = {
+                    do {
+                        try proc.run()
+                        proc.waitUntilExit()
+                        return proc.terminationStatus == 0 ? nil : BackendFailure(message: "open exited with \(proc.terminationStatus)")
+                    } catch {
+                        return error
+                    }
+                }()
+                DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 1.2) { [weak self] in
+                    guard let self else { return }
+                    let running = DispatchQueue.main.sync { Self.isAntigravityRunning() }
+                    if !running {
+                        DispatchQueue.main.async {
+                            let detail = launchError?.localizedDescription ?? "请手动打开 Antigravity"
+                            self.showMessage("账号已切换，但自动重启 Antigravity 失败：\(detail)", error: true)
+                        }
+                    }
+                }
+            }
+            return
+        }
+
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = true
+        config.createsNewApplicationInstance = false
+        NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: launchPath), configuration: config) { [weak self] app, error in
+            guard let self else { return }
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 1.2) { [weak self] in
+                guard let self else { return }
+                let running = DispatchQueue.main.sync { Self.isAntigravityRunning() || (app != nil && app?.isTerminated == false) }
+                if running {
+                    DispatchQueue.main.async { self.antigravityWasRunning = true }
+                    return
+                }
+                if attemptsRemaining > 1 {
+                    DispatchQueue.main.async {
+                        self.relaunchAntigravityAfterSwitch(attemptsRemaining: attemptsRemaining - 1)
+                    }
+                } else if let error {
+                    DispatchQueue.main.async {
+                        self.showMessage("账号已切换，但自动重启 Antigravity 失败：\(error.localizedDescription)", error: true)
+                    }
+                }
+            }
+        }
         #endif
     }
     static var antigravityBundlePath: String { DesktopApplicationTarget.preferredLaunchPath(fallbackChannel: applicationChannel) }

@@ -279,7 +279,7 @@ final class BackendBridge {
     private func performRequest(_ payload: [String: Any]) throws -> [String: Any] {
         let command = payload["command"] as? String ?? ""
         // Long helpers (switch/import/maintenance) may legitimately take a while; status stays snappy.
-        let budget: TimeInterval = command == "stop" ? 30 : (command == "status" || command == "task_list" ? 8 : 45)
+        let budget: TimeInterval = command == "stop" ? 30 : (command == "account_switch" ? 65 : (command == "status" || command == "task_list" ? 8 : 45))
         let deadline = Date().addingTimeInterval(budget)
         let fd = try openSocket(deadline: deadline)
         defer { Darwin.close(fd) }
