@@ -76,24 +76,48 @@ final class AccountPolicySheet: NSObject {
         strategyPopup.selectItem(at: strat == "round_robin" ? 1 : 0)
         strategyPopup.translatesAutoresizingMaskIntoConstraints = false
         strategyPopup.heightAnchor.constraint(equalToConstant: 28).isActive = true
-        strategyPopup.widthAnchor.constraint(equalToConstant: 170).isActive = true
+        strategyPopup.widthAnchor.constraint(equalToConstant: 210).isActive = true
         strategyPopup.setAccessibilityLabel("推荐策略")
 
-        modelPopup.addItem(withTitle: "Gemini")
-        modelPopup.lastItem?.representedObject = "gemini"
-        modelPopup.addItem(withTitle: "Claude/GPT")
-        modelPopup.lastItem?.representedObject = "claude"
-        modelPopup.addItem(withTitle: "Gemini 4 Argon")
-        modelPopup.lastItem?.representedObject = "argon"
-        let monitored = config["monitored_model"] as? String ?? "gemini"
-        switch monitored {
-        case "claude": modelPopup.selectItem(at: 1)
-        case "argon": modelPopup.selectItem(at: 2)
-        default: modelPopup.selectItem(at: 0)
+        var modelChoices: [(title: String, key: String)] = [
+            ("Gemini 全系模型", "gemini_all"),
+            ("Gemini", "gemini"),
+            ("Claude/GPT", "claude"),
+            ("Gemini 4 Argon", "argon"),
+            ("Gemini 4 Carbon", "carbon")
+        ]
+        var seenModelKeys = Set(modelChoices.map { $0.key.lowercased() })
+        var seenModelTitles = Set(modelChoices.map { $0.title.lowercased() })
+        let accountPool = !app.cachedAccounts.isEmpty ? app.cachedAccounts : (app.accountsPage?.accounts ?? [])
+        for acc in accountPool {
+            for extra in QuotaPresentation.contract(acc).extraStandaloneModels {
+                let displayTitle = (!extra.modelName.isEmpty ? extra.modelName : extra.title).trimmingCharacters(in: .whitespacesAndNewlines)
+                let rawKey = (!extra.key.isEmpty ? extra.key : displayTitle).trimmingCharacters(in: .whitespacesAndNewlines)
+                let keyLower = rawKey.lowercased()
+                let titleLower = displayTitle.lowercased()
+                guard !keyLower.isEmpty, !seenModelKeys.contains(keyLower), !seenModelTitles.contains(titleLower) else { continue }
+                seenModelKeys.insert(keyLower)
+                seenModelTitles.insert(titleLower)
+                modelChoices.append((displayTitle, rawKey))
+            }
+        }
+        let rawMonitored = (config["monitored_model"] as? String ?? "gemini_all").trimmingCharacters(in: .whitespacesAndNewlines)
+        let monitoredLower = (rawMonitored.isEmpty || rawMonitored.lowercased() == "all") ? "gemini_all" : rawMonitored.lowercased()
+        if !seenModelKeys.contains(monitoredLower) {
+            modelChoices.append((rawMonitored, rawMonitored))
+        }
+        for choice in modelChoices {
+            modelPopup.addItem(withTitle: choice.title)
+            modelPopup.lastItem?.representedObject = choice.key
+        }
+        if let idx = modelChoices.firstIndex(where: { $0.key.lowercased() == monitoredLower || $0.title.lowercased() == monitoredLower }) {
+            modelPopup.selectItem(at: idx)
+        } else {
+            modelPopup.selectItem(at: 0)
         }
         modelPopup.translatesAutoresizingMaskIntoConstraints = false
         modelPopup.heightAnchor.constraint(equalToConstant: 28).isActive = true
-        modelPopup.widthAnchor.constraint(equalToConstant: 170).isActive = true
+        modelPopup.widthAnchor.constraint(equalToConstant: 210).isActive = true
         modelPopup.setAccessibilityLabel("监测模型组")
 
         reserve.stringValue = "\(intVal(config, "reserve_percentage", fallback: 10))"
@@ -121,6 +145,7 @@ final class AccountPolicySheet: NSObject {
             let subLbl = text(subtitle, size: 11, color: Design.secondary, wrap: true)
             subLbl.isHidden = subtitle.isEmpty
             let left = vertical([titleLbl, subLbl], spacing: 2)
+            fillWidth(subLbl, in: left)
             left.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
             control.setContentHuggingPriority(.required, for: .horizontal)
             control.setContentCompressionResistancePriority(.required, for: .horizontal)
@@ -137,13 +162,13 @@ final class AccountPolicySheet: NSObject {
         }
 
         let fields = vertical([
-            policyFormRow(title: "推荐排序方式", subtitle: "优先推荐 ULTRA / PRO 订阅账号，同等级下按此规则挑选", control: strategyPopup),
+            policyFormRow(title: "推荐排序方式", subtitle: "高阶订阅优先，同等级下按此规则排序", control: strategyPopup),
             divider(),
             policyFormRow(title: "监测模型范围", subtitle: "", control: modelPopup),
             divider(),
-            policyFormRow(title: "触发切换阈值", subtitle: "当前账号剩余配额低于或等于该值时提示切换", control: percentControl(reserve)),
+            policyFormRow(title: "触发切换阈值", subtitle: "当前配额 ≤ 此值时提示切换", control: percentControl(reserve)),
             divider(),
-            policyFormRow(title: "候选准入下限", subtitle: "备用账号剩余配额至少达到该值才参与推荐", control: percentControl(candidate))
+            policyFormRow(title: "候选准入下限", subtitle: "备用配额 ≥ 此值才参与推荐", control: percentControl(candidate))
         ], spacing: 12)
         for fieldRow in fields.arrangedSubviews { fillWidth(fieldRow, in: fields) }
 
@@ -155,20 +180,15 @@ final class AccountPolicySheet: NSObject {
         errorLabel.isHidden = true
 
         let headerBadge = iconBadge("arrow.triangle.2.circlepath", tint: Design.blue, size: 32)
-        let headerSub = text("当前账号配额偏低时，自动评估并推荐最佳备用账号", size: 11, color: Design.secondary, wrap: true)
-        let titleBlock = vertical([
-            text("智能切换配置", size: 16, weight: .semibold, color: .labelColor),
-            headerSub
-        ], spacing: 2)
-        titleBlock.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        fillWidth(headerSub, in: titleBlock)
-        let heading = horizontal([headerBadge, titleBlock, flexibleSpace()], spacing: 10)
+        let titleLabel = text("智能切换配置", size: 16, weight: .semibold, color: .labelColor)
+        let heading = horizontal([headerBadge, titleLabel, flexibleSpace()], spacing: 10)
         heading.alignment = .centerY
 
         let footer = horizontal([errorLabel, flexibleSpace(), cancel, saveButton], spacing: 8)
         footer.alignment = .centerY
 
-        let root = vertical([heading, group([fields], inset: 16), footer], spacing: 16)
+        let root = vertical([heading, group([fields], inset: 16), divider(), footer], spacing: 14)
+        for child in root.arrangedSubviews { fillWidth(child, in: root) }
         let surface = SheetVisualEffectView()
         let content = fixedPage(root)
         surface.addSubview(content)
@@ -176,6 +196,7 @@ final class AccountPolicySheet: NSObject {
         window.isOpaque = false
         window.backgroundColor = .clear
         window.contentView = surface
+        window.setContentSize(NSSize(width: 520, height: max(424, surface.fittingSize.height)))
         Design.applyControls(surface)
         for popup in [strategyPopup, modelPopup] {
             popup.focusRingType = .none
@@ -209,7 +230,7 @@ final class AccountPolicySheet: NSObject {
             return
         }
         let strat = strategyPopup.selectedItem?.representedObject as? String ?? "priority"
-        let model = modelPopup.selectedItem?.representedObject as? String ?? "gemini"
+        let model = modelPopup.selectedItem?.representedObject as? String ?? "all"
         saveButton.isEnabled = false
         app.bridge.send([
             "command": "auto_switch_set",

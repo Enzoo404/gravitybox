@@ -3,7 +3,7 @@ import { get as httpGet } from 'node:http';
 import { createHash } from 'node:crypto';
 import type { Dictionary } from './dictionary.js';
 
-/** 当前经过完整实机验收与界面对账的版本。 */
+/** 已收录的界面包指纹清单；不代表当前构建逐版本完成实机验收。 */
 export const SUPPORTED_BUNDLES = new Map([
   ['2.23.0', '867d1990b61d87f4b9ff8c5ecb1551c8688135267f32e56e02563f2d3e78fd68'],
   ['2.23.1', 'ad12ecf66061edab6a3835d1360e1bad50787bc7b2f2c9d86568281360864696'],
@@ -14,6 +14,9 @@ export const SUPPORTED_BUNDLES = new Map([
   ['2.29.0', '8d1196a22cd3eb9779e8faf5c31eb732d3df8d9d037b685733ed4e3d6cdfb5a2'],
   ['2.29.1', 'eec7297695f3b4f25d4e92f5f9d0bc4efeec86523cddcddddefc3410c5efe37a'],
   ['2.30.0', '35e0da21894a7f6560075eae2501c88fede5204eb6067fac2653e2c7a63dc403'],
+  ['2.31.0', '00c7aa77bcd1f0bce710f98a97be1e10c0b0fe91770d79216c94b47f2e591308'],
+  ['2.31.2', '00c7aa77bcd1f0bce710f98a97be1e10c0b0fe91770d79216c94b47f2e591308'],
+  ['2.32.1', '4c0a1ff5659e7dd92e6ad249a386c0dbce2c8e94b88522a2f366ff20b397081e'],
 ]);
 export const VERIFIED_VERSIONS = new Set(SUPPORTED_BUNDLES.keys());
 
@@ -21,27 +24,49 @@ export function isVerifiedVersion(version?: string): boolean {
   return typeof version === 'string' && VERIFIED_VERSIONS.has(version);
 }
 
-/** 取回回环界面服务内容。界面服务是自签名 HTTPS，需要 rejectUnauthorized: false。 */
-export function fetchBuffer(url: string, timeout = 10000): Promise<Buffer> {
+export const normalizeText = (text: string): string => text.replace(/\s+/g, ' ').trim();
+
+function fetchLoopbackBytes(
+  url: string,
+  timeout = 10000,
+  options: { withHash?: boolean; originError?: string; sizeError?: string; timeoutError?: string } = {}
+): Promise<{ buffer: Buffer; hash: string }> {
   const parsed = new URL(url);
-  if (!['127.0.0.1', '[::1]'].includes(parsed.hostname) || !['https:', 'http:'].includes(parsed.protocol) || parsed.username || parsed.password) return Promise.reject(new Error('只允许读取本机界面包'));
-  const secure = url.startsWith('https:');
+  if (!['127.0.0.1', '[::1]'].includes(parsed.hostname) || !['https:', 'http:'].includes(parsed.protocol) || parsed.username || parsed.password) {
+    return Promise.reject(new Error(options.originError ?? '只允许读取本机界面包'));
+  }
+  const secure = parsed.protocol === 'https:';
   const get = secure ? httpsGet : httpGet;
   return new Promise((resolve, reject) => {
-    const request = get(url, secure ? { rejectUnauthorized: false, timeout } : { timeout }, response => {
+    const request = get(parsed, secure ? { rejectUnauthorized: false, timeout } : { timeout }, response => {
       if (response.statusCode !== 200) {
         response.resume();
         reject(new Error(`HTTP ${response.statusCode}`));
         return;
       }
-      const chunks: Buffer[] = []; let size = 0;
+      const chunks: Buffer[] = [];
+      const hash = options.withHash ? createHash('sha256') : null;
+      let size = 0;
       response.on('error', reject);
-      response.on('data', chunk => { size += chunk.length; if (size > 20_000_000) { request.destroy(new Error('界面包超过大小限制')); return; } chunks.push(chunk); });
-      response.on('end', () => resolve(Buffer.concat(chunks)));
+      response.on('data', (chunk: Buffer) => {
+        size += chunk.length;
+        if (size > 20_000_000) {
+          request.destroy(new Error(options.sizeError ?? '界面包超过大小限制'));
+          return;
+        }
+        if (hash) hash.update(chunk);
+        chunks.push(chunk);
+      });
+      response.on('end', () => resolve({ buffer: Buffer.concat(chunks), hash: hash ? hash.digest('hex') : '' }));
     });
-    request.on('timeout', () => request.destroy(new Error('读取界面包超时')));
+    request.on('timeout', () => request.destroy(new Error(options.timeoutError ?? '读取界面包超时')));
     request.on('error', reject);
   });
+}
+
+/** 取回回环界面服务内容。界面服务是自签名 HTTPS，需要 rejectUnauthorized: false。 */
+export async function fetchBuffer(url: string, timeout = 10000): Promise<Buffer> {
+  return (await fetchLoopbackBytes(url, timeout)).buffer;
 }
 
 export async function fetchBundleFromOrigin(origin: string, timeout = 10000): Promise<string> {
@@ -102,6 +127,7 @@ const CSS_SIGNAL = /(?:^|[;{])\s*(?:--[\w-]+|@media|@keyframes|@supports|from|to
 const CODE_SIGNAL = /=>|&&|\|\||\$\{|\bfunction\b|\breturn\b|\bvar\b|\bconst\b|\blet\b|\btypeof\b|\bvoid 0\b|\bnew [A-Z]|\.push\(|\.map\(|Object\.|Array\.|JSON\.|Math\.|window\.|document\.|console\./;
 
 export function looksLikeNoise(text: string): boolean {
+  if (/^!(?:text|bg|border|p|m|w|h|flex|grid)-|\[&[^\]]*\]:/.test(text)) return true;
   if (!text) return true;
   if (text.length < 2 || text.length > 400) return true;
   if (!/[A-Za-z]/.test(text)) return true;
@@ -181,6 +207,10 @@ export function looksLikeNoise(text: string): boolean {
   if (/^(?:Command|Cmd|Ctrl|Control|Option|Alt|Shift)(?:\s+(?:Command|Cmd|Ctrl|Control|Option|Alt|Shift))*\s+[A-Z0-9]$/.test(text)) return true;
   if (/^(?:(?:height|width|min-height|max-height|opacity|transform|filter|all|color|background(?:-color)?|visibility)\s+\d*\.?\d+m?s(?:\s+(?:ease(?:-(?:in|out|in-out))?|linear))?(?:\s+\d*\.?\d+m?s)?(?:\s*,\s*|$))+$/.test(text)) return true;
   if (/^(?:Flash|Gemini|Claude|GPT|Gemma)(?:\s+(?:Lite|Pro|Flash|Max|Ultra|Mini|Nano|Thinking|High|Medium|Low|Argon)){0,3}$/.test(text)) return true;
+  /* 6. 代码示例字面量、过滤语法示例与键值调试前缀：非界面文案 */
+  if (/^`[^`]*`$/.test(text.trim())) return true;
+  if (/^[a-z_][a-z0-9_]*\s+in\s+\[[^\]]*\]$/.test(text.trim())) return true;
+  if (/^,\s*[a-zA-Z_][\w]*=$/.test(text.trim())) return true;
   return false;
 }
 
@@ -220,7 +250,7 @@ export type ExtractedString = { text: string; kinds: string[]; count: number };
 
 const PROP_PATTERN = new RegExp(String.raw`(?:^|[\s,{;(])(?:${UI_PROPERTIES.map(p => p.replace(/-/g, '\\-')).join('|')}):"`, 'g');
 
-export function extractUiStrings(source: string): ExtractedString[] {
+export function extractUiStrings(source: string, options?: { includeJsxRuntime?: boolean }): ExtractedString[] {
   const found = new Map<string, { text: string; kinds: Set<string>; count: number }>();
   const record = (text: string | null, kind: string) => {
     if (!text || !isEnglishSource(kind === 'template' ? text.replace(/\$\{[^}]+\}/g, 'variable') : text)) return;
@@ -240,11 +270,18 @@ export function extractUiStrings(source: string): ExtractedString[] {
     if (literal) { const property = match[0].slice(0,-2).match(/([\w-]+)$/)?.[1]; record(decodeLiteral(literal.raw), property ?? 'prop'); }
   }
 
-  // 2) createElement 文本子节点
+  // 2) createElement 文本子节点（及可选 React 18/19 jsx/jsxs children 字面量）
   const childPattern = /\.createElement\(\s*(?:"[^"]{1,40}"|[A-Za-z_$][\w$.]*)\s*,\s*(?:\{[^{}]*\}|\([^()]*\)|\s*\[[^[\]]*\]|[^,(){}[\]])*?,\s*("(?:[^"\\\n]|\\.)*")/g;
   while ((match = childPattern.exec(source))) {
     const decoded = decodeLiteral(match[1]!);
     if (decoded) { const tag = match[0].match(/createElement\(\s*"([^"]+)"/)?.[1]; record(decoded, tag === 'button' ? 'button' : /^h[1-6]$/.test(tag ?? '') ? 'heading' : 'text'); }
+  }
+  if (options?.includeJsxRuntime) {
+    const jsxChildPattern = /\b(?:jsx|jsxs|jsxDEV|_jsx|_jsxs)\(\s*(?:"([^"]{1,40})"|[A-Za-z_$][\w$.]*)\s*,\s*\{[^{}]*?\bchildren:\s*("(?:[^"\\\n]|\\.)*")/g;
+    while ((match = jsxChildPattern.exec(source))) {
+      const decoded = decodeLiteral(match[2]!);
+      if (decoded) { const tag = match[1]; record(decoded, tag === 'button' ? 'button' : /^h[1-6]$/.test(tag ?? '') ? 'heading' : 'text'); }
+    }
   }
 
   // 3) 三元/键值对中的界面串
@@ -284,8 +321,6 @@ export function extractUiStrings(source: string): ExtractedString[] {
     .sort((a, b) => a.text.localeCompare(b.text));
 }
 
-const normalize = (text: string) => text.replace(/\s+/g, ' ').trim();
-
 /** 对比提取结果与当前词典，筛选出缺失词条。 */
 export function findMissingStrings(extracted: { text: string; kinds?: string[] }[], dictionary: Dictionary): string[] {
   const entries = dictionary.entries;
@@ -293,10 +328,16 @@ export function findMissingStrings(extracted: { text: string; kinds?: string[] }
   const foldedMap = new Set<string>();
   for (const k of Object.keys(entries)) {
     foldedMap.add(k.toLowerCase());
+    if (k.startsWith('@ui:')) {
+      const parts = k.slice(4).split('|');
+      if (parts.length >= 3) {
+        foldedMap.add(parts.slice(2).join('|').toLowerCase());
+      }
+    }
   }
   for (const item of extracted) {
     if (item.kinds?.includes('template') || item.kinds?.includes('fragment')) continue;
-    const key = normalize(item.text);
+    const key = normalizeText(item.text);
     if (Object.hasOwn(entries, key)) continue;
     if (foldedMap.has(key.toLowerCase())) continue;
     missing.push(key);
@@ -325,18 +366,15 @@ export function createPendingList(appVersion: string, bundleSha256: string, miss
 }
 
 /** Hash during download. Only extraction callers need a decoded source string. */
-export async function fetchBundleWithHash(origin:string,timeout=8000):Promise<{source:string;hash:string;bytes:number}>{
-  const url=new URL('/main.js',origin);
-  if(!['127.0.0.1','[::1]'].includes(url.hostname)||!['http:','https:'].includes(url.protocol)||url.username||url.password)throw new Error('仅允许本机界面资源');
-  return new Promise((resolve,reject)=>{
-    const get=url.protocol==='https:'?httpsGet:httpGet;
-    const request=get(url,{rejectUnauthorized:false,timeout},response=>{
-      if(response.statusCode!==200){response.resume();reject(new Error(`HTTP ${response.statusCode}`));return;}
-      const chunks:Buffer[]=[];const hash=createHash('sha256');let size=0;
-      response.on('data',(chunk:Buffer)=>{size+=chunk.length;if(size>20_000_000){request.destroy(new Error('界面包过大'));return;}hash.update(chunk);chunks.push(chunk);});
-      response.on('error',reject);response.on('end',()=>resolve({source:Buffer.concat(chunks).toString('utf8'),hash:hash.digest('hex'),bytes:size}));
-    });request.on('error',reject);request.on('timeout',()=>request.destroy(new Error('界面包读取超时')));
+export async function fetchBundleWithHash(origin: string, timeout = 8000): Promise<{ source: string; hash: string; bytes: number }> {
+  const url = new URL('/main.js', origin);
+  const { buffer, hash } = await fetchLoopbackBytes(url.href, timeout, {
+    withHash: true,
+    originError: '仅允许本机界面资源',
+    sizeError: '界面包过大',
+    timeoutError: '界面包读取超时',
   });
+  return { source: buffer.toString('utf8'), hash, bytes: buffer.length };
 }
 
 /** Keep extractor evidence; generic text is a label, never invent a button role. */

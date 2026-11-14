@@ -19,7 +19,7 @@ try {
   for (const target of targets.filter(t => allowedTarget(t))) {
     if (!await verifyPageService(target.url, app)) continue;
     const cdp = new CDP(target.webSocketDebuggerUrl); await cdp.connect();
-    const tree = await cdp.send('Page.getFrameTree'); const context = await cdp.send('Page.createIsolatedWorld', { frameId: tree.frameTree.frame.id, worldName: 'AGZH-localization-v1' });
+    const tree = await cdp.send('Page.getFrameTree'); const context = await cdp.send('Page.createIsolatedWorld', { frameId: tree.frameTree.frame.id, worldName: 'GRAVITYBOX-localization-v1' });
     clients.push({ cdp, id: target.id, contextId: context.executionContextId });
   }
   if(!clients.length)throw new Error('无可验证页面，实机采样未完成；不能将空采样视为通过');
@@ -39,9 +39,9 @@ try {
         const settings=document.querySelector('[role="dialog"][aria-label="Settings"],[role="dialog"][aria-label="设置"]');
         const checkKeys=['Queued Messages','Permission Preset','Tool Permissions','Network Access Rules','Plan Review Policy','Configure agent execution, queued message delivery, and permissions.'];
         const visibleUntranslatedKeys=settings?[...settings.querySelectorAll('div,span,h2')].filter(e=>!e.childElementCount&&e.getClientRects().length&&checkKeys.includes(e.textContent.trim())).length:null;
-        return { protectedHashes: hashes, visibleSettings:!!settings, visibleUntranslatedKeys, validationLabels: labels.filter(v => v === '设置（验收）').length, chineseButtons: Array.from(document.querySelectorAll('button')).filter(e => /[\\u3400-\\u9fff]/.test(e.textContent)).length, style: !!document.getElementById('__agzh_micro_patch__') };
+        return { protectedHashes: hashes, visibleSettings:!!settings, visibleUntranslatedKeys, validationLabels: labels.filter(v => v === '设置（验收）').length, chineseButtons: Array.from(document.querySelectorAll('button')).filter(e => /[\\u3400-\\u9fff]/.test(e.textContent)).length, style: !!document.getElementById('__gravitybox_micro_patch__') };
       })()`);
-      const engine = await cdp.evaluate('globalThis.__AGZH_ENGINE_V1__?.state() ?? null', contextId);
+      const engine = await cdp.evaluate('globalThis.__GRAVITYBOX_ENGINE_V1__?.state() ?? null', contextId);
       pages.push({ id, ...values, engine });
     }
     snapshots.push({ at: new Date().toISOString(), pages });

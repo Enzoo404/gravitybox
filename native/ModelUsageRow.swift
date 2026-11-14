@@ -12,10 +12,10 @@ final class ModelUsageRow: NSView {
         costLabel = text(cost, size: 14, weight: .semibold, color: isUnpriced ? Design.secondary : .labelColor)
         tokensLabel = text("\(tokens) Token", size: 12, weight: .medium)
         super.init(frame: .zero)
+        enableTextCopy(nameLabel, value: name, title: "复制模型 ID")
         identifier = NSUserInterfaceItemIdentifier("model-usage-row")
         nameLabel.lineBreakMode = .byTruncatingMiddle
         nameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        nameLabel.toolTip = name
         nameLabel.setAccessibilityLabel(Self.displayName(name) + "，模型 ID：" + name)
         tokensLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
         costLabel.font = .monospacedDigitSystemFont(ofSize: isUnpriced ? 12.5 : 14, weight: .semibold)
@@ -65,7 +65,7 @@ final class ModelUsageRow: NSView {
     }
 
     static func displayName(_ id: String) -> String {
-        ModelDisplayName.name(id)
+        id
     }
 
     required init?(coder: NSCoder) { fatalError() }

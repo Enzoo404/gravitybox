@@ -20,3 +20,20 @@ test('备用账号按官方 hub 请求取得 Argon 独立周桶，不借 Gemini 
  const calls=[];const transport=async(url,o)=>{calls.push(url);assert.equal(o.headers['User-Agent'],'antigravity/hub/2.25.0');assert.equal(new URL(url).origin,origin);if(url.endsWith(':loadCodeAssist'))return Response.json({paidTier:{id:'g1-pro-tier'}});assert.deepEqual(JSON.parse(o.body),{});if(url.endsWith(':fetchAvailableModels'))return Response.json({models:{'gemini-4-argon-high':{displayName:'Gemini 4 Argon (High)',quotaInfo:{remainingFraction:.00803,resetTime:'2030-10-24T15:07:45Z'}},'gemini-3.8-flash':{quotaInfo:{remainingFraction:1}}}});return Response.json({groups:[{displayName:'Gemini Models',buckets:[{bucketId:'gemini-weekly',window:'weekly',remainingFraction:.36}]},{displayName:'Gemini 4 Argon',buckets:[{bucketId:'gemini-argon-wtu-weekly',window:'weekly',remainingFraction:.00803,resetTime:'2030-10-24T15:07:45Z'}]}]})};
  const fresh=await manager.refreshQuota(a.id,transport),overview=manager.getAccountQuotaOverview(fresh);assert.equal(overview.argonStatus.availability,'available');assert.equal(overview.argonStatus.period,'weekly');assert.equal(overview.argonStatus.remaining,.00803);assert.equal(overview.geminiWeeklyRemaining,36);assert.equal(overview.argonWeeklyRemaining,1);assert.equal(fresh.quota.refresh_state.carriedGroups,0);assert.equal(fresh.quota.refresh_state.providerUserAgent,ctx.userAgent);assert.ok(!calls.some(url=>url.endsWith(':retrieveUserQuota')));
 });
+
+test('Carbon 自身真实额度足以构成独立配额证据，不要求伪造分组桶', async t => {
+ const directory=await mkdtemp(join(tmpdir(),'gb-carbon-own-'));t.after(()=>rm(directory,{recursive:true,force:true}));
+ const context=cloudProviderContextFromCommand(`${exe} --cloud_code_endpoint ${origin} --subclient_type hub`,version);
+ const manager=new AccountsManager(directory,{providerContext:context});manager.probeLiveLanguageServer=async()=>null;
+ const account=await manager.upsertAccount({email:'carbon@example.invalid',accessToken:'synthetic-access',refreshToken:'synthetic-refresh',expiresIn:3600});
+ const transport=async url=>{
+  if(url.endsWith(':loadCodeAssist'))return Response.json({paidTier:{id:'ultra'}});
+  if(url.endsWith(':fetchAvailableModels'))return Response.json({models:{'gemini-4-carbon':{disabled:false,quotaInfo:{remainingFraction:.6,resetTime:'2030-10-24T15:07:45Z'}}}});
+  return Response.json({groups:[],buckets:[]});
+ };
+ const refreshed=await manager.refreshQuota(account.id,transport);
+ assert.equal(refreshed.quota_refresh_error,null);
+ assert.equal(refreshed.quota.refresh_state.complete,true);
+ const state=manager.getAccountQuotaOverview(refreshed).carbonStatus;
+ assert.equal(state.availability,'available');assert.equal(state.remaining,.6);assert.equal(state.period,'unspecified');
+});

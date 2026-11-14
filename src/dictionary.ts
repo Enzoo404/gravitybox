@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { atomicJson } from './files.js';
-import { SUPPORTED_BUNDLES } from './bundle.js';
+import { SUPPORTED_BUNDLES, normalizeText as normalize } from './bundle.js';
 
 export type Dictionary = { schema: 1; version: string; entries: Record<string, string> };
 export type LayerCounts = { builtin:number; incremental:number; personal:number };
@@ -18,14 +18,13 @@ export type LayeredDictionary = {
   files: string[];
   sources: Record<string, string>;
 };
-const normalize = (text: string) => text.replace(/\s+/g, ' ').trim();
 
 const LEGACY_LAYER_FILE = /^增量补全-(\d+\.\d+\.\d+)\.json$/;
 
 /**
  * 合并历史碎片层到统一增量层。
  *
- * B17：只压平“受支持版本”的碎片层。未知/未来版本的专用译文保留在原文件（加载器会按 targetVersion 过滤），
+ * 只压平“受支持版本”的碎片层。未知/未来版本的专用译文保留在原文件（加载器会按 targetVersion 过滤），
  * 避免把只对某个新版本有效的译文推广成全版本生效。非版本名（如 `增量补全-legacy.json`）仍按原行为合并。
  * 默认受支持版本取自 `SUPPORTED_BUNDLES`，测试/迁移工具可用 `supportedVersions` 覆盖。
  */
@@ -90,7 +89,7 @@ async function migrateLegacyLocked(userDir:string, options:{supportedVersions?:I
       throw new Error('迁移核对失败：写入内容哈希或条数与预期不一致');
     }
 
-    // 成功迁移的旧文件：保留在可恢复的 .migrated 备份中，若已存在同名恢复副本则使用唯一后缀禁止覆盖 (N07)
+    // 成功迁移的旧文件：保留在可恢复的 .migrated 备份中，若已存在同名恢复副本则使用唯一后缀禁止覆盖
     for (const file of successfullyValidatedFiles) {
       try {
         const defaultBackup = join(userDir, `${file}.migrated`);
@@ -104,7 +103,7 @@ async function migrateLegacyLocked(userDir:string, options:{supportedVersions?:I
   } catch {}
 }
 
-/* ------------------------------------------------------------------ 增量补全层：按 key / 按批次删除与撤销 (B18) */
+/* ------------------------------------------------------------------ 增量补全层：按 key / 按批次删除与撤销 */
 
 export const INCREMENTAL_DICTIONARY_FILE = '增量补全.json';
 export const incrementalDictionaryPath = (userDir: string) => join(userDir, INCREMENTAL_DICTIONARY_FILE);
@@ -182,7 +181,7 @@ export async function readIncrementalEntries(userDir: string): Promise<{ entries
 }
 
 /**
- * 从增量补译层删除指定词条（B18）。这是“错误自动译文只能覆盖不能删”问题的存储 API：
+ * 从增量补译层删除指定词条。这是“错误自动译文只能覆盖不能删”问题的存储 API：
  * 按 key 删除、按批次（传一组 key + batchId）删除、dryRun 预览、expectedDigest CAS、删除前撤销快照。
  * 写入使用原子写 + 写后核对；增量层损坏时抛错且不触碰原文件。
  */
@@ -296,7 +295,7 @@ function layerRank(name: string): [number, number[], string] {
   const version = name.match(/^(\d+(?:\.\d+)*)\.json$/);
   if (version) {
     const parts = version[1]!.split('.').map(Number);
-    // Date-stamped releases (e.g. 1.0.20261103010115 in Insiders / WCV-Hub) rank above 2.x.y semver layers
+    // Date-stamped releases (e.g. 1.0.20261103010115) rank above 2.x.y semver layers
     if (parts.length >= 3 && parts[0] === 1 && parts[1] === 0 && (version[1]!.split('.')[2]?.length ?? 0) >= 8) {
       return [1, [9999, ...parts], name];
     }
@@ -349,7 +348,17 @@ export function dictionaryFromEntries(entries: Record<string, string>): Dictiona
  * 整份词典加载失败、新词一条都不生效"。覆盖是预期行为，因此这里允许覆盖，
  * 但把每一次覆盖记进 `overrode`，让覆盖率报告与发布门禁能核对，而不是静默吞掉。
  */
+const MAX_LAYER_FILE_CACHE_ENTRIES = 32;
 const layerFileCache = new Map<string, { mtimeMs: number; size: number; validated: Record<string, string> }>();
+
+function setLayerFileCacheEntry(filePath: string, entry: { mtimeMs: number; size: number; validated: Record<string, string> }): void {
+  layerFileCache.delete(filePath);
+  if (layerFileCache.size >= MAX_LAYER_FILE_CACHE_ENTRIES) {
+    const oldest = layerFileCache.keys().next().value;
+    if (oldest !== undefined) layerFileCache.delete(oldest);
+  }
+  layerFileCache.set(filePath, entry);
+}
 
 export async function loadDictionaryLayers(baseDir: string, userDir?: string,targetVersion?:string): Promise<LayeredDictionary> {
   const entries: Record<string, string> = Object.create(null);
@@ -368,6 +377,7 @@ export async function loadDictionaryLayers(baseDir: string, userDir?: string,tar
       const cached = layerFileCache.get(filePath);
       let validated: Record<string, string>;
       if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) {
+        setLayerFileCacheEntry(filePath, cached);
         validated = cached.validated;
       } else {
         const content = await readFile(filePath, 'utf8');
@@ -383,7 +393,7 @@ export async function loadDictionaryLayers(baseDir: string, userDir?: string,tar
           if (seen.has(key)) throw new Error(`${file} 存在重复 JSON 键`);
           seen.add(key);
         }
-        layerFileCache.set(filePath, { mtimeMs: st.mtimeMs, size: st.size, validated });
+        setLayerFileCacheEntry(filePath, { mtimeMs: st.mtimeMs, size: st.size, validated });
       }
       if(dir===userDir&&file==='个人覆盖.json')for(const key of Object.keys(validated))if(!decodeScopedKey(key))personalGlobals.add(key.toLowerCase());
       for (const [key, value] of Object.entries(validated)) {
@@ -421,7 +431,7 @@ export class DictionaryStore extends EventEmitter {
   private closed = false;
   targetVersion?:string;
   /**
-   * 切换目标版本并重载词典（B19）。**尝试过重载但失败时抛错并回滚 targetVersion**：
+   * 切换目标版本并重载词典。**尝试过重载但失败时抛错并回滚 targetVersion**：
    * 调用方可以继续使用上一份有效词典，但不会把失败当成“已切换成功”，也不会静默拿到旧词典。
    * 版本未变化时不重载（启动时已用 fallback 降级的情况由 lastError + 'invalid' 事件上报，不在这里重复抛错，
    * 否则会破坏“损坏词典仍保持连接/最后有效词典”的既有恢复路径）。

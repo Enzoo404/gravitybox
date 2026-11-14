@@ -170,7 +170,7 @@ test('updateAcceptance --dry-run 不写盘、有差异时可读输出；写入�
 });
 
 test('update-acceptance CLI --dry-run 退出 0 且不写文档', async () => {
-  const { root, installedApp } = await makeFixture({ stale: true });
+  const { root } = await makeFixture({ stale: true });
   try {
     const summaryPath = join(root, '文档/当前版本验收摘要.json');
     const before = await readFile(summaryPath, 'utf8');

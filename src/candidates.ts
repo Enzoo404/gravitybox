@@ -12,7 +12,6 @@ export function safeRoute(value:unknown):string {
 export function scopedKey(key:string,kind:string,route:string){return `@ui:${safeRoute(route)}|${UI_KINDS.has(kind)?kind:'label'}|${key}`;}
 export function decodeScopedKey(value:string){const match=value.match(/^@ui:([^|]+)\|([^|]+)\|([\s\S]+)$/);return match&&safeRoute(match[1])===match[1]&&UI_KINDS.has(match[2]!)?{key:match[3]!,kind:match[2]!,route:match[1]!}:undefined;}
 export function pendingIdentity(item:PendingItem){return item.translationKey??item.key;}
-export function uniqueCandidates(items:PendingItem[]){return [...new Map(items.map(v=>[pendingIdentity(v),v])).values()];}
 
 export function describeContext(scope:{route:string;kind:string}){const routes:Record<string,string>={'/':'主页','/settings':'设置','/history':'对话历史','/customizations':'插件市场','/customizations/installed':'已安装插件','/sidecars':'自动化','/automations':'自动化','/other':'其他界面','/fixture':'测试界面'};const kinds:Record<string,string>={button:'按钮',heading:'标题',tooltip:'提示',placeholder:'输入提示',menuitem:'菜单项',tab:'标签页',label:'标签',description:'说明',attribute:'控件说明',option:'选项',toast:'通知'};return `${routes[scope.route]??'界面'} · ${kinds[scope.kind]??'文案'}`;}
 

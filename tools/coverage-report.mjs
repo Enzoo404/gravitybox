@@ -31,9 +31,11 @@ import { readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { loadDictionaryLayers, compareLayers } from '../dist/dictionary.js';
-import { SUPPORTED_BUNDLES, extractUiStrings } from '../dist/bundle.js';
+import { SUPPORTED_BUNDLES, extractUiStrings, normalizeText as normalized } from '../dist/bundle.js';
+import { verifyExtractionSnapshot } from './extraction-snapshot.mjs';
+import { extractUiStringsAst } from './extract-ui-ast.mjs';
 import { PROPER_NOUNS } from '../dist/coverage.js';
-import { appVersion as detectInstalledAppVersion, extractFromRunningApp } from './extract-ui-strings.mjs';
+import { appVersion as detectInstalledAppVersion } from './extract-ui-strings.mjs';
 export { PROPER_NOUNS };
 import { join, dirname, resolve, isAbsolute } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -64,7 +66,11 @@ const canonicalKinds = kinds => [...new Set(Array.isArray(kinds) ? kinds.map(Str
 export function reconcileExtraction(uiStrings, source) {
   const rows = Array.isArray(uiStrings?.strings) ? uiStrings.strings : undefined;
   if (!rows) return { ok: false, reason: '提取结果缺少 strings 数组，无法与界面包字节对账' };
-  const actual = extractUiStrings(source);
+  const actual = uiStrings.extractor === 'typescript-ast-v2'
+    ? extractUiStringsAst(source, { includeJsxRuntime: true })
+    : uiStrings.extractor === 'typescript-ast-v1'
+      ? extractUiStringsAst(source)
+      : extractUiStrings(source);
   if (rows.length !== actual.length) return { ok: false, reason: `提取结果条数 ${rows.length} 与按界面包字节重新提取的 ${actual.length} 不一致（可能伪造或过期）` };
   const committed = new Map();
   for (const [index, row] of rows.entries()) {
@@ -119,13 +125,18 @@ export async function verifyBundleSource(uiStrings, { bundlePath, expectSha256, 
   if (noVendor) {
     if (declared !== supported) return fail(`提取记录哈希 ${declared} 不是 ${appVersion} 的官方指纹 ${supported}`);
     if (!Array.isArray(uiStrings?.strings) || uiStrings.strings.length === 0) return fail('提取结果缺少有效的 strings 数组');
+    let snapshot;
+    try { snapshot = await verifyExtractionSnapshot(uiStrings); }
+    catch (error) { return fail(error.message); }
     return {
       verified: true,
       byteVerified: false,
+      verificationLevel: 'reviewed-snapshot',
+      extractor: snapshot.extractor,
       noVendor: true,
-      reason: `免 vendor 校验模式：已验证 appVersion 与 bundleSha256 匹配受支持官方指纹 (${supported.slice(0, 8)}...)，基于 ui-strings 结构完成词典对账`,
+      reason: `免 vendor 校验模式：快照结构、条目清单摘要与已审阅版本一致；本轮未重算官方界面包字节，提取器=${snapshot.extractor}`,
       expectedSha256: supported,
-      actualSha256: declared,
+      declaredBundleSha256: declared,
       extractedCount: uiStrings.strings.length,
     };
   }
@@ -162,8 +173,6 @@ export async function verifyBundleSource(uiStrings, { bundlePath, expectSha256, 
  *   - 中文里本就用缩写的（MCP/API 在中文句子中偶尔被完整展开，不算把专名译掉）
  */
 
-const normalized = text => text.replace(/\s+/g, ' ').trim();
-
 /** 读词典目录里所有层级（不含用户覆盖），供对账用。 */
 export async function loadDictLayers(dictDir = join(root, 'dict')) {
   const layered = await loadDictionaryLayers(dictDir);
@@ -197,20 +206,35 @@ export function properNounViolations(entries) {
  */
 export function reconcile(uiStrings, entries, bundleSource) {
   const covered = [], missing = [], caseOnly = [], templates = [], fragments = [];
+  const foldedEntries = new Map();
+  const scopedExact = new Set();
+  for (const candidate of entries.keys()) {
+    const lc = candidate.toLowerCase();
+    if (!foldedEntries.has(lc)) foldedEntries.set(lc, candidate);
+    if (candidate.startsWith('@ui:')) {
+      const parts = candidate.slice(4).split('|');
+      if (parts.length >= 3) {
+        const rawKey = parts.slice(2).join('|');
+        scopedExact.add(rawKey);
+        const rawLc = rawKey.toLowerCase();
+        if (!foldedEntries.has(rawLc)) foldedEntries.set(rawLc, candidate);
+      }
+    }
+  }
   for (const item of uiStrings.strings ?? []) {
     const key = normalized(item.text);
     if (item.kinds?.includes('template')) { templates.push({ text: item.text, count: item.count }); continue; }
     /* 拼接片段（"for " / " including "）：脱离上下文无法翻译，单列而不混进待补译，
        否则待译清单里永远躺着几条翻不了的半句话，门禁也就永远过不去。 */
     if (item.kinds?.includes('fragment')) { fragments.push({ text: item.text, count: item.count }); continue; }
-    if (entries.has(key)) { covered.push(key); continue; }
+    if (entries.has(key) || scopedExact.has(key)) { covered.push(key); continue; }
     // 大小写/结尾标点不同：引擎现在大小写不敏感，能命中，但键本身不规范
-    const folded = key.toLowerCase();
-    let matched = false;
-    for (const candidate of entries.keys()) {
-      if (candidate.toLowerCase() === folded) { caseOnly.push({ text: item.text, dictKey: candidate }); matched = true; break; }
+    const foldedHit = foldedEntries.get(key.toLowerCase());
+    if (foldedHit !== undefined) {
+      caseOnly.push({ text: item.text, dictKey: foldedHit });
+    } else {
+      missing.push({ text: item.text, kinds: item.kinds ?? [], count: item.count ?? 1 });
     }
-    if (!matched) missing.push({ text: item.text, kinds: item.kinds ?? [], count: item.count ?? 1 });
   }
   const uiSet = new Set((uiStrings.strings ?? []).map(s => normalized(s.text)));
   const uiFolded = new Set([...uiSet].map(s => s.toLowerCase()));
@@ -260,33 +284,10 @@ async function main() {
   let version = option('--version');
   let uiPath = option('--strings');
   if (!uiPath) {
-    /* 自动感知本机安装的最新 Antigravity 版本（如 2.29.x）：
-       若未指定 --version 且本机已安装更新版本，或指定了尚未提取的 --version，则自动尝试从运行中的实例提取并登记指纹。 */
     const dir = join(root, 'ui-strings');
-    let available = (await readdir(dir).catch(() => [])).filter(name => name.endsWith('.json')).sort(compareLayers);
+    const available = (await readdir(dir).catch(() => [])).filter(name => name.endsWith('.json')).sort(compareLayers);
     const installedVersion = await detectInstalledAppVersion().catch(() => undefined);
-    const latestExtracted = available.length ? available[available.length - 1].replace(/\.json$/, '') : undefined;
-    const targetToExtract = version && !available.includes(`${version}.json`)
-      ? version
-      : (!version && installedVersion && (!latestExtracted || compareLayers(`${latestExtracted}.json`, `${installedVersion}.json`) < 0) && !available.includes(`${installedVersion}.json`))
-        ? installedVersion
-        : undefined;
-    if (targetToExtract && !args.includes('--no-auto-extract') && !args.includes('--gate')) {
-      try {
-        const extracted = await extractFromRunningApp({ projectRoot: root, registerBundle: true });
-        if (extracted?.appVersion) {
-          SUPPORTED_BUNDLES.set(extracted.appVersion, extracted.bundleSha256);
-          available = (await readdir(dir).catch(() => [])).filter(name => name.endsWith('.json')).sort(compareLayers);
-          console.error(`[coverage-report] 已自动从运行中的 Antigravity ${extracted.appVersion} 提取界面串并纳入覆盖率门禁`);
-        }
-      } catch (err) {
-        if (version) {
-          console.error(`[coverage-report] 尝试自动提取 ${version} 失败（${err.message}）`);
-        } else {
-          console.error(`[coverage-report] 检测到本机 Antigravity ${targetToExtract} 尚未提取 ui-strings（${err.message}），当前回退验证已提取的最新版本 ${latestExtracted}`);
-        }
-      }
-    }
+    if (!version && installedVersion && available.includes(`${installedVersion}.json`)) version = installedVersion;
     if (!available.length) throw new Error(`ui-strings 目录里没有提取结果，请先运行 npm run i18n:extract`);
     const pick = version ? `${version}.json` : available[available.length - 1];
     if (!available.includes(pick)) throw new Error(`ui-strings/${pick} 不存在；现有：${available.join(', ')}`);

@@ -1,5 +1,25 @@
 import Cocoa
 
+private final class CopyTextMenuItem: NSMenuItem {
+    weak var label: NSTextField?
+    var rawValue: String?
+    init(label: NSTextField, value: String?, title: String) {
+        self.label = label; self.rawValue = value
+        super.init(title: title, action: #selector(copyText), keyEquivalent: "")
+        target = self
+    }
+    required init(coder: NSCoder) { fatalError() }
+    @objc func copyText() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(rawValue ?? label?.stringValue ?? "", forType: .string)
+    }
+}
+func enableTextCopy(_ label: NSTextField, value: String? = nil, title: String = "复制完整内容") {
+    let menu = NSMenu()
+    menu.addItem(CopyTextMenuItem(label: label, value: value, title: title))
+    label.menu = menu
+}
+
 func text(_ value: String, size: CGFloat = 13, weight: NSFont.Weight = .regular, color: NSColor = .labelColor, wrap: Bool = false) -> NSTextField {
     let label = wrap ? NSTextField(wrappingLabelWithString: value) : NSTextField(labelWithString: value)
     label.font = .systemFont(ofSize: size, weight: weight); label.textColor = color
@@ -98,6 +118,17 @@ class DesignCardBox: NSBox {
     }
 }
 
+final class SheetWindow: NSWindow {
+    var onCancelOperation: (() -> Void)?
+    override func cancelOperation(_ sender: Any?) {
+        if let onCancelOperation {
+            onCancelOperation()
+        } else {
+            super.cancelOperation(sender)
+        }
+    }
+}
+
 final class SheetVisualEffectView: NSVisualEffectView {
     override init(frame frameRect: NSRect = .zero) {
         super.init(frame: frameRect)
@@ -105,17 +136,17 @@ final class SheetVisualEffectView: NSVisualEffectView {
         blendingMode = .behindWindow
         state = .active
         wantsLayer = true
-        layer?.cornerRadius = 12
+        layer?.cornerRadius = Design.Radius.medium
         layer?.masksToBounds = true
     }
     required init?(coder: NSCoder) { fatalError() }
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        let path = NSBezierPath(roundedRect: bounds, xRadius: 12, yRadius: 12)
+        let path = NSBezierPath(roundedRect: bounds, xRadius: Design.Radius.medium, yRadius: Design.Radius.medium)
         (isDark ? NSColor(white: 0.14, alpha: 0.88) : NSColor(white: 0.98, alpha: 0.88)).setFill()
         path.fill()
-        Design.drawSpecularBevel(in: bounds, cornerRadius: 12, isDark: isDark)
+        Design.drawSpecularBevel(in: bounds, cornerRadius: Design.Radius.medium, isDark: isDark)
     }
 }
 
@@ -165,7 +196,7 @@ final class PillSelectionView: NSView {
 }
 
 func group(_ rows: [NSView], inset: CGFloat = 17, spacing: CGFloat = 0) -> NSBox {
-    let box = DesignCardBox(); box.boxType = .custom; box.cornerRadius = 12; box.borderWidth = 0.5
+    let box = DesignCardBox(); box.boxType = .custom; box.cornerRadius = Design.Radius.medium; box.borderWidth = 0.5
     box.borderColor = Design.border; box.fillColor = Design.card; box.contentViewMargins = .zero
     box.shadow = Design.cardShadow()
     let stack = vertical(rows, spacing: spacing); box.addSubview(stack); pin(stack, to: box, inset: inset)
@@ -421,7 +452,10 @@ final class SidebarLaunchButton: NSButton {
     override var allowsVibrancy: Bool { false }
     private var hoverTracking: NSTrackingArea?
     private let hoverMotion = DesignMotion()
+    private let pressMotion = DesignMotion()
     private var hoverProgress: CGFloat = 0
+    private var pressProgress: CGFloat = 0
+    private var lastHighlighted = false
     private var hovered = false {
         didSet {
             guard oldValue != hovered else { return }
@@ -431,6 +465,17 @@ final class SidebarLaunchButton: NSButton {
             }
         }
     }
+    override var isHighlighted: Bool {
+        didSet {
+            guard isHighlighted != lastHighlighted else { return }
+            lastHighlighted = isHighlighted
+            pressMotion.animate(in: self, from: pressProgress, to: isHighlighted ? 1.0 : 0.0, curve: .press, threshold: 0.02) { [weak self] val in
+                self?.pressProgress = val
+                self?.needsDisplay = true
+            }
+        }
+    }
+    deinit { hoverMotion.cancel(); pressMotion.cancel() }
     let iconView = NSImageView()
     let titleField: NSTextField
     let badgeLabel = text("", size: 11, weight: .semibold, color: Design.blue)
@@ -516,12 +561,19 @@ final class SidebarLaunchButton: NSButton {
     override func draw(_ dirtyRect: NSRect) {
         let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         let active = isHighlighted || hoverProgress > 0.5
+        let pp = isHighlighted ? max(pressProgress, 0.72) : pressProgress
+        let scale: CGFloat = 1.0 - 0.02 * pp
+        let gctx = NSGraphicsContext.current
+        gctx?.saveGraphicsState()
+        if abs(scale - 1.0) > 0.001, let cg = gctx?.cgContext {
+            cg.translateBy(x: bounds.midX, y: bounds.midY)
+            cg.scaleBy(x: scale, y: scale)
+            cg.translateBy(x: -bounds.midX, y: -bounds.midY)
+        }
         let rect = bounds.insetBy(dx: 0.5, dy: 1.5)
         let path = NSBezierPath(roundedRect: rect, xRadius: 9, yRadius: 9)
 
-        let accentTint = isDark
-            ? NSColor(srgbRed: 0.38, green: 0.68, blue: 1.0, alpha: 1.0)
-            : Design.blue
+        let accentTint = Design.activeBlue
 
         if isUpdatePrompt {
             if isHighlighted {
@@ -557,6 +609,7 @@ final class SidebarLaunchButton: NSButton {
             path.lineWidth = 2
             path.stroke()
         }
+        gctx?.restoreGraphicsState()
     }
 }
 
@@ -569,6 +622,7 @@ struct LiveStatus {
     var languageMode = "zh"
     var mode = "starting"
     var translationEnabled: Bool? = nil
+    var hudEnabled: Bool? = nil
     var appVersion = ""
     var entries = 0
     var windows = 0
@@ -592,6 +646,7 @@ struct LiveStatus {
         languageMode = raw["languageMode"] as? String ?? "zh"
         mode = raw["mode"] as? String ?? "starting"
         translationEnabled = raw["translationEnabled"] as? Bool
+        hudEnabled = raw["hudEnabled"] as? Bool
         appVersion = raw["appVersion"] as? String ?? ""
         entries = raw["entries"] as? Int ?? 0
         windows = raw["windows"] as? Int ?? 0
@@ -705,7 +760,7 @@ final class PillBadge: NSView {
     let label = text("", size: 11, weight: .semibold)
     var emphasized = false { didSet { updateLabelTextColor(); needsDisplay = true } }
     var tint: NSColor { didSet { updateLabelTextColor(); needsDisplay = true } }
-    var title: String { get { label.stringValue } set { label.stringValue = newValue; toolTip = newValue; setAccessibilityLabel(newValue); invalidateIntrinsicContentSize(); needsDisplay = true } }
+    var title: String { get { label.stringValue } set { label.stringValue = newValue; setAccessibilityLabel(newValue); invalidateIntrinsicContentSize(); needsDisplay = true } }
 
     static func isNeutralOrInactiveTint(_ color: NSColor, in appearance: NSAppearance) -> Bool {
         if color === Design.inactivePill || color === Design.secondary || color == .secondaryLabelColor || color == .systemGray {
@@ -767,28 +822,60 @@ final class PillBadge: NSView {
 }
 func pillBadge(_ title: String, color: NSColor) -> PillBadge { PillBadge(title, color: color) }
 
-// MARK: - Apple HIG Modern Avatar View (40pt Frosted Circular Badge)
-func iconBadge(_ name: String, tint: NSColor, size: CGFloat = 24) -> NSView {
+// MARK: - Apple HIG Modern Avatar View & Shared Tinted Icon Container
+func tintedIconBox(
+    size: CGFloat,
+    cornerRadius: CGFloat,
+    tint: NSColor,
+    neutral: Bool = false,
+    lightNeutralAlpha: CGFloat = 0.045,
+    darkFillAlpha: CGFloat = 0.18,
+    lightFillAlpha: CGFloat = 0.10,
+    darkBorderAlpha: CGFloat = 0.32,
+    lightBorderAlpha: CGFloat = 0.18
+) -> NSBox {
     let box = NSBox()
     box.boxType = .custom
-    box.cornerRadius = round(size * 0.26 * 2.0) / 2.0
+    box.cornerRadius = cornerRadius
     box.fillColor = NSColor(name: nil) { app in
         let isDark = app.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        return tint.withAlphaComponent(isDark ? 0.18 : 0.11)
+        if neutral {
+            return isDark ? NSColor.white.withAlphaComponent(0.07) : NSColor.black.withAlphaComponent(lightNeutralAlpha)
+        }
+        return tint.withAlphaComponent(isDark ? darkFillAlpha : lightFillAlpha)
     }
     box.borderWidth = 0.5
     box.borderColor = NSColor(name: nil) { app in
         let isDark = app.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        return tint.withAlphaComponent(isDark ? 0.34 : 0.20)
+        if neutral {
+            return isDark ? NSColor.white.withAlphaComponent(0.12) : NSColor.black.withAlphaComponent(0.08)
+        }
+        return tint.withAlphaComponent(isDark ? darkBorderAlpha : lightBorderAlpha)
     }
     box.translatesAutoresizingMaskIntoConstraints = false
-    NSLayoutConstraint.activate([box.widthAnchor.constraint(equalToConstant: size), box.heightAnchor.constraint(equalToConstant: size)])
+    NSLayoutConstraint.activate([
+        box.widthAnchor.constraint(equalToConstant: size),
+        box.heightAnchor.constraint(equalToConstant: size)
+    ])
+    box.setAccessibilityElement(false)
+    return box
+}
+
+func iconBadge(_ name: String, tint: NSColor, size: CGFloat = 24) -> NSView {
+    let box = tintedIconBox(
+        size: size,
+        cornerRadius: round(size * 0.26 * 2.0) / 2.0,
+        tint: tint,
+        darkFillAlpha: 0.18,
+        lightFillAlpha: 0.11,
+        darkBorderAlpha: 0.34,
+        lightBorderAlpha: 0.20
+    )
     let ptSize: CGFloat = size == 24 ? 13 : (size >= 36 ? 17.5 : 15)
     let image = symbol(name, size: ptSize, color: tint)
     image.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: ptSize, weight: .semibold)
     box.addSubview(image)
     NSLayoutConstraint.activate([image.centerXAnchor.constraint(equalTo: box.centerXAnchor), image.centerYAnchor.constraint(equalTo: box.centerYAnchor)])
-    box.setAccessibilityElement(false)
     return box
 }
 func settingRow(icon: String, tint: NSColor, title: String, badge: NSView? = nil, subtitle: String, control: NSView) -> NSView {
@@ -806,7 +893,6 @@ func settingRow(icon: String, tint: NSColor, title: String, badge: NSView? = nil
         let sub = text(subtitle, size: 11, color: Design.secondary, wrap: true)
         sub.maximumNumberOfLines = 1
         sub.lineBreakMode = .byTruncatingTail
-        sub.toolTip = subtitle
         labels.append(sub)
     }
     let captions = vertical(labels, spacing: 2)
@@ -814,29 +900,13 @@ func settingRow(icon: String, tint: NSColor, title: String, badge: NSView? = nil
     captions.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     control.setContentHuggingPriority(.required, for: .horizontal)
     control.setContentCompressionResistancePriority(.required, for: .horizontal)
-    let iconBox = NSBox()
-    iconBox.boxType = .custom
-    iconBox.cornerRadius = 7.5
-    iconBox.fillColor = NSColor(name: nil) { app in
-        let isDark = app.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        if icon == "app-icon" {
-            return isDark ? NSColor.white.withAlphaComponent(0.07) : NSColor.black.withAlphaComponent(0.04)
-        }
-        return tint.withAlphaComponent(isDark ? 0.18 : 0.10)
-    }
-    iconBox.borderWidth = 0.5
-    iconBox.borderColor = NSColor(name: nil) { app in
-        let isDark = app.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        if icon == "app-icon" {
-            return isDark ? NSColor.white.withAlphaComponent(0.12) : NSColor.black.withAlphaComponent(0.08)
-        }
-        return tint.withAlphaComponent(isDark ? 0.32 : 0.18)
-    }
-    iconBox.translatesAutoresizingMaskIntoConstraints = false
-    NSLayoutConstraint.activate([
-        iconBox.widthAnchor.constraint(equalToConstant: 28),
-        iconBox.heightAnchor.constraint(equalToConstant: 28)
-    ])
+    let iconBox = tintedIconBox(
+        size: 28,
+        cornerRadius: 7.5,
+        tint: tint,
+        neutral: icon == "app-icon",
+        lightNeutralAlpha: 0.04
+    )
     if icon == "app-icon", let markImg = Design.brandMarkImage() {
         let imgView = NSImageView(image: markImg)
         imgView.imageScaling = .scaleProportionallyUpOrDown
@@ -858,7 +928,6 @@ func settingRow(icon: String, tint: NSColor, title: String, badge: NSView? = nil
             iconView.centerYAnchor.constraint(equalTo: iconBox.centerYAnchor)
         ])
     }
-    iconBox.setAccessibilityElement(false)
     let row = horizontal([iconBox, captions, flexibleSpace(), control], spacing: 11)
     row.alignment = .centerY
     return row
@@ -1210,8 +1279,6 @@ final class QuotaBarView: NSView {
     }
 
     private func updateAccessibility() {
-        titleLabel.toolTip = titleLabel.stringValue
-        resetLabel.toolTip = resetLabel.stringValue
         var desc = titleLabel.stringValue.isEmpty ? "剩余配额" : titleLabel.stringValue
         desc += percentageKnown ? " 剩余 \(percentage)%" : " \(unknownPlaceholder)"
         if staleData { desc += " · 数据已过期" }
@@ -1717,15 +1784,14 @@ final class ModelDonutChartView: NSView {
         while cwFromTop < 0 { cwFromTop += 360.0 }
         while cwFromTop >= 360.0 { cwFromTop -= 360.0 }
 
-        var accum: CGFloat = 0
+        let layout = Self.computeSliceAngles(validSlices: validSlices, sumUsd: sumUsd)
+        let halfGap: CGFloat = validSlices.count > 1 ? 1.5 : 0.0
         var hitIndex: Int? = nil
-        for (idx, slice) in validSlices.enumerated() {
-            let sweep = CGFloat(slice.usd / sumUsd) * 360.0
-            if cwFromTop >= accum && cwFromTop <= accum + sweep {
+        for (idx, item) in layout.enumerated() {
+            if cwFromTop >= item.startCW - halfGap && cwFromTop <= item.startCW + item.sweep + halfGap {
                 hitIndex = idx
                 break
             }
-            accum += sweep
         }
         if let hitIndex {
             if hoveredSliceIndex != hitIndex {
@@ -1742,6 +1808,44 @@ final class ModelDonutChartView: NSView {
 
     override func mouseExited(with event: NSEvent) {
         clearHoveredSlice()
+    }
+
+    static func computeSliceAngles(validSlices: [Slice], sumUsd: Double) -> [(startCW: CGFloat, sweep: CGFloat)] {
+        guard !validSlices.isEmpty, sumUsd > 0 else { return [] }
+        if validSlices.count == 1 {
+            return [(startCW: 0, sweep: 360.0)]
+        }
+        let count = validSlices.count
+        let gap: CGFloat = 3.0
+        let minSweep: CGFloat = 2.0
+        let available = max(CGFloat(count) * minSweep, 360.0 - gap * CGFloat(count))
+        var sweeps = validSlices.map { CGFloat($0.usd / sumUsd) * available }
+        var fixed = Array(repeating: false, count: count)
+        while true {
+            var deficit: CGFloat = 0
+            var flexSum: CGFloat = 0
+            for i in 0..<count where !fixed[i] {
+                if sweeps[i] < minSweep {
+                    deficit += (minSweep - sweeps[i])
+                    sweeps[i] = minSweep
+                    fixed[i] = true
+                } else {
+                    flexSum += sweeps[i]
+                }
+            }
+            if deficit <= 0.0001 || flexSum <= 0.0001 { break }
+            let scale = max(0, (flexSum - deficit) / flexSum)
+            for i in 0..<count where !fixed[i] {
+                sweeps[i] *= scale
+            }
+        }
+        var out: [(startCW: CGFloat, sweep: CGFloat)] = []
+        var cursorCW: CGFloat = 0
+        for s in sweeps {
+            out.append((startCW: cursorCW, sweep: s))
+            cursorCW += s + gap
+        }
+        return out
     }
 
     private func clearHoveredSlice() {
@@ -1793,16 +1897,15 @@ final class ModelDonutChartView: NSView {
         Design.track.setStroke()
         track.stroke()
 
-        let sumUsd = slices.reduce(0.0) { $0 + $1.usd }
         let validSlices = slices.filter { $0.usd > 0 }
-        let gap: CGFloat = validSlices.count > 1 ? 3.0 : 0.0
+        let sumUsd = validSlices.reduce(0.0) { $0 + $1.usd }
+        let layout = Self.computeSliceAngles(validSlices: validSlices, sumUsd: sumUsd)
 
         if sumUsd > 0 {
-            var startAngle: CGFloat = 90
-            for (idx, slice) in validSlices.enumerated() {
+            for (idx, slice) in validSlices.enumerated() where idx < layout.count {
                 let isSliceHovered = (hoveredSliceIndex == idx)
-                let sweep = CGFloat(slice.usd / sumUsd) * 360.0 * revealProgress
-                let effectiveSweep = max(2.0 * revealProgress, sweep - gap)
+                let startAngle: CGFloat = 90.0 - layout[idx].startCW * revealProgress
+                let effectiveSweep = layout[idx].sweep * revealProgress
                 let endAngle = startAngle - effectiveSweep
                 let sliceRadius = isSliceHovered ? (radius + 1.2 * hoverEmphasis) : radius
                 let sliceWidth = isSliceHovered ? (lineWidth + 2.2 * hoverEmphasis) : lineWidth
@@ -1813,7 +1916,6 @@ final class ModelDonutChartView: NSView {
                 let alpha: CGFloat = (hoveredSliceIndex == nil || isSliceHovered) ? 1.0 : max(0.45, 1.0 - 0.50 * hoverEmphasis)
                 slice.color.withAlphaComponent(alpha).setStroke()
                 arc.stroke()
-                startAngle = endAngle - gap
             }
         }
 

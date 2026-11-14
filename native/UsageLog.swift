@@ -13,6 +13,7 @@ func saveUsageJSON(_ report: [String: Any], name: String, window: NSWindow, app:
             let result = Result {
                 let data = try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
                 try data.write(to: url, options: .atomic)
+                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
             }
             PerformanceSignpost.end("UsageExportWrite", state)
             DispatchQueue.main.async {
@@ -105,7 +106,7 @@ final class UsageLogController: NSObject, NSTableViewDataSource, NSTableViewDele
             pageNumber.widthAnchor.constraint(equalToConstant: 46),
             pageNumber.heightAnchor.constraint(equalToConstant: 28)
         ])
-        let close = button("完成", target: self, action: #selector(closeSheet)); close.keyEquivalent = "\u{1b}"
+        let close = button("完成", target: self, action: #selector(closeSheet)); close.bezelColor = Design.blue; close.keyEquivalent = "\u{1b}"
         searchSpinner.style = .spinning; searchSpinner.controlSize = .small; searchSpinner.isDisplayedWhenStopped = false
         searchSpinner.translatesAutoresizingMaskIntoConstraints = false; searchSpinner.isHidden = true
         NSLayoutConstraint.activate([searchSpinner.widthAnchor.constraint(equalToConstant: 16), searchSpinner.heightAnchor.constraint(equalToConstant: 16)])

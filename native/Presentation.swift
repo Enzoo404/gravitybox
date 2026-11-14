@@ -1,6 +1,10 @@
 import Foundation
 
 enum ModelDisplayName {
+    private static let standaloneGeminiRegex = try? NSRegularExpression(
+        pattern: "^gemini-([4-9](?:\\.[0-9]+)?)-([a-z][a-z0-9]*?)$",
+        options: [.caseInsensitive]
+    )
     private static let catalogNames: [String: String] = {
         var urls: [URL] = []
         if let resource = Bundle.main.resourceURL {
@@ -22,25 +26,56 @@ enum ModelDisplayName {
 
     static func name(_ identifier: String) -> String {
         let names = catalogNames
-        let value = identifier.lowercased()
+        let trimmed = identifier.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return identifier }
+        let value = trimmed.lowercased()
         if let name = names[value] { return name }
         if value.hasPrefix("google/"), let name = names[String(value.dropFirst(7))] { return name }
-        for (suffix, label) in [("-extra-low", "Extra Low"), ("-high", "High"), ("-medium", "Medium"), ("-low", "Low"), ("-thinking", "Thinking")] where value.hasSuffix(suffix) {
-            if let name = names[String(value.dropLast(suffix.count))] {
-                return name + " " + label
-            }
-        }
-        // Only normalize a known display-name qualifier. Opaque IDs stay exact.
-        for qualifier in ["High", "Medium", "Low", "Thinking"] {
-            for brackets in [(" (", ")"), ("（", "）")] {
-                let suffix = brackets.0 + qualifier + brackets.1
-                if identifier.hasSuffix(suffix) {
-                    let base = String(identifier.dropLast(suffix.count))
-                    if names.values.contains(base) { return base + " " + qualifier }
+
+        // Strip reasoning effort qualifiers in brackets (e.g. "(High)", "(Medium)", "(Low)", "(Extra Low)") while keeping non-effort qualifiers like "(Thinking)"
+        let effortSet: Set<String> = ["high", "medium", "low", "extra low", "extra-low"]
+        for brackets in [(" (", ")"), ("（", "）"), ("(", ")")] {
+            if trimmed.hasSuffix(brackets.1), let openRange = trimmed.range(of: brackets.0, options: .backwards) {
+                let baseRaw = String(trimmed[..<openRange.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+                let innerRaw = String(trimmed[openRange.upperBound..<trimmed.index(before: trimmed.endIndex)]).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !baseRaw.isEmpty && !innerRaw.isEmpty {
+                    let baseDisplay = names[baseRaw.lowercased()] ?? baseRaw
+                    if effortSet.contains(innerRaw.lowercased()) {
+                        return baseDisplay
+                    }
+                    return "\(baseDisplay) \(innerRaw)"
                 }
             }
         }
-        return identifier
+
+        // Strip preview/thinking suffixes from known models, while keeping raw response_model variant suffixes (such as -n, -exp-a, -tiered, -trial, -high, -medium, -low) verbatim
+        let suffixTable: [(String, String?)] = [
+            ("-extra-low-thinking", "Thinking"),
+            ("-high-thinking", "Thinking"),
+            ("-medium-thinking", "Thinking"),
+            ("-low-thinking", "Thinking"),
+            ("-thinking", "Thinking"),
+            ("-preview", "Preview")
+        ]
+        let strippedValue = value.hasPrefix("google/") ? String(value.dropFirst(7)) : value
+        for (suffix, label) in suffixTable where strippedValue.hasSuffix(suffix) {
+            let baseKey = String(strippedValue.dropLast(suffix.count))
+            if let baseName = names[baseKey] {
+                if let label = label, !label.isEmpty {
+                    return "\(baseName) \(label)"
+                }
+                return baseName
+            }
+        }
+
+        // Auto-format clean standalone Gemini 4+ codename models (e.g. gemini-4-carbon, gemini-4-neon)
+        if let match = standaloneGeminiRegex?.firstMatch(in: strippedValue, range: NSRange(location: 0, length: (strippedValue as NSString).length)) {
+            let ns = strippedValue as NSString
+            let ver = ns.substring(with: match.range(at: 1))
+            let code = ns.substring(with: match.range(at: 2)).capitalized
+            return "Gemini \(ver) \(code)"
+        }
+        return trimmed
     }
 }
 
@@ -56,8 +91,10 @@ enum InterfaceText {
         return formatter
     }()
 
+    private static let countdownUnitRegex = try! NSRegularExpression(pattern: "([0-9]+)\\s*(天|小时|分钟|分|秒)")
+
     static func countdown(_ raw: String) -> String {
-        let pattern = try! NSRegularExpression(pattern: "([0-9]+)\\s*(天|小时|分钟|分|秒)")
+        let pattern = countdownUnitRegex
         let value = NSMutableString(string: raw)
         let source = raw as NSString
         for match in pattern.matches(in: raw, range: NSRange(location: 0, length: source.length)).reversed() {
@@ -67,6 +104,10 @@ enum InterfaceText {
         return (value as String).replacingOccurrences(of: "(天|小时|分钟|秒)(?=[0-9])", with: "$1 ", options: .regularExpression)
     }
 
+    static func isMultiAccountSummary(_ raw: String) -> Bool {
+        raw.contains("详情见账号卡片") || raw.contains("部分刷新") || raw.contains("个账号")
+    }
+
     static func quotaMessage(_ raw: String) -> String {
         if raw.contains("3501") { return "许可校验失败 · 3501" }
         if raw.range(of: "HTTP\\s*403", options: .regularExpression) != nil { return "配额查询受限 · 403" }
@@ -74,6 +115,7 @@ enum InterfaceText {
         if raw.contains("凭据") { return "登录凭据待更新" }
         if raw.contains("超时") || raw.contains("timeout") { return "配额查询超时" }
         if raw.contains("未返回") || raw.contains("未取得") || raw.contains("沿用") { return "配额未更新" }
+        if isMultiAccountSummary(raw) { return "部分账号配额未更新" }
         return raw.isEmpty ? "" : "配额刷新失败"
     }
 
@@ -86,10 +128,20 @@ enum InterfaceText {
     }
 
     static func formatCompactTokens(_ count: Int, formatSmallWithLocale: Bool = false) -> String {
-        if count >= 1_000_000_000 { return String(format: "%.1fB", Double(count) / 1_000_000_000.0) }
-        if count >= 1_000_000 { return String(format: "%.1fM", Double(count) / 1_000_000.0) }
-        if count >= 1_000 { return String(format: "%.1fK", Double(count) / 1_000.0) }
-        return formatSmallWithLocale ? count.formatted() : "\(count)"
+        let value = max(0, count)
+        guard value >= 1_000 else { return formatSmallWithLocale ? value.formatted() : "\(value)" }
+        let scale = pow(10.0, floor(log10(Double(value))) - 2)
+        let rounded = (Double(value) / scale).rounded() * scale
+        let divisor = rounded >= 1e9 ? 1e9 : rounded >= 1e6 ? 1e6 : 1e3
+        let unit = divisor == 1e9 ? "B" : divisor == 1e6 ? "M" : "K"
+        let scaled = rounded / divisor
+        let decimals = max(0, 2 - Int(floor(log10(scaled))))
+        var number = String(format: "%.*f", locale: Locale(identifier: "en_US_POSIX"), decimals, scaled)
+        if number.contains(".") {
+            while number.hasSuffix("0") { number.removeLast() }
+            if number.hasSuffix(".") { number.removeLast() }
+        }
+        return number + unit
     }
 
     static func formatUsd(_ value: Double) -> String {

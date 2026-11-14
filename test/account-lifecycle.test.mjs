@@ -7,25 +7,23 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { AccountsManager, MockKeychainAdapter } from '../dist/accounts.js';
 import { AccountSwitchService, replaceTopicRow } from '../dist/account-switch.js';
-import { ProtobufReader as Reader, ProtobufWriter as Writer } from '../dist/usage.js';
+import { ProtobufReader as Reader, ProtobufWriter as Writer } from '../dist/protobuf.js';
 const run = promisify(execFile);
 const now = () => Math.floor(Date.now() / 1000);
 const quota = pct => ({ models: [{ name: 'gemini-test', percentage: pct, percentage_known: true, reset_time: '' }], quota_groups: [{ display_name: 'Gemini', buckets: [{ bucket_id: 'gemini-5h', window: '5h', remaining_fraction: pct / 100, remaining_fraction_known: true, reset_time: '' }] }], last_updated: now(), is_forbidden: false, model_forwarding_rules: {} });
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), 'gb-lifecycle-'));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const stateDir = join(root, 'state'), externalDir = join(root, 'external'), profile = join(root, 'profile');
-  await mkdir(join(externalDir, 'accounts'), { recursive: true });
+  const stateDir = join(root, 'state'), profile = join(root, 'profile');
   await mkdir(join(profile, 'User', 'globalStorage'), { recursive: true });
   const db = join(profile, 'User', 'globalStorage', 'state.vscdb');
   await run('/usr/bin/sqlite3', [db, "CREATE TABLE ItemTable(key TEXT PRIMARY KEY,value TEXT); INSERT INTO ItemTable VALUES('unrelated','keep'),('jetskiStateSync.agentManagerInitState','old-state');"]);
-  const manager = new AccountsManager(stateDir, { externalDir });
+  const manager = new AccountsManager(stateDir);
   manager.probeLiveLanguageServer = async () => null;
   const a = await manager.upsertAccount({ email: 'a@example.test', refreshToken: 'synthetic-a', accessToken: 'synthetic-access-a', expiresIn: 3600 });
   const b = await manager.upsertAccount({ email: 'b@example.test', refreshToken: 'synthetic-b', accessToken: 'synthetic-access-b', expiresIn: 3600 });
-  await writeFile(join(externalDir, 'accounts.json'), JSON.stringify({ version: '2.0', current_account_id: 'external-a', extra: 'preserve', accounts: [{ id: 'external-a', email: a.email }, { id: 'external-b', email: b.email }] }));
   const keychain = new MockKeychainAdapter(); await keychain.writePassword('gemini', 'antigravity', 'old-keychain');
-  return { root, stateDir, externalDir, profile, db, manager, a, b, keychain };
+  return { root, stateDir, profile, db, manager, a, b, keychain };
 }
 const rows = async f => JSON.parse((await run('/usr/bin/sqlite3', ['-json', f.db, 'SELECT key,value FROM ItemTable ORDER BY key;'])).stdout);
 
@@ -52,19 +50,6 @@ test('备用号刷新使用本账号凭据与账号范围；项目元信息可�
   assert.ok((await f.manager.getAccount(f.b.id)).quota_refresh_error);
 });
 
-test('Switch 增量同步保留当前账号、顺序与备注，并读取较新凭据和配额', async t => {
-  const f = await fixture(t); await f.manager.reorderAccounts([f.b.id, f.a.id]);
-  f.b.custom_label = '本机备注'; await f.manager.saveAccount(f.b);
-  const ext = { ...f.b, id: 'external-b', custom_label: '外部备注', quota: quota(37), token: { ...f.b.token, access_token: 'new-external', expiry_timestamp: now() + 7200 } };
-  await writeFile(join(f.externalDir, 'accounts', 'b.json'), JSON.stringify(ext));
-  await writeFile(join(f.externalDir, 'accounts', 'bad.json'), '{invalid-json');
-  const sync = await f.manager.syncFromExternalAgySwitch(); assert.equal(sync.updated, 1); assert.equal(sync.skipped, 1); assert.equal(sync.found, 1);
-  const index = await f.manager.loadIndex(); assert.equal(index.current_account_id, f.a.id); assert.deepEqual(index.accounts.map(a => a.id), [f.b.id, f.a.id]);
-  const saved = await f.manager.getAccount(f.b.id); assert.equal(saved.custom_label, '本机备注'); assert.equal(saved.token.access_token, 'new-external'); assert.equal(saved.quota.source, 'external');
-  const fallback = await f.manager.refreshQuota(f.b.id, async () => { throw new Error('offline'); });
-  assert.equal(fallback.quota.models[0].percentage, 37); assert.match(fallback.quota_refresh_error, /Switch/);
-});
-
 test('未知配额不会变成100%，Argon不覆盖Gemini，未知或过期配额不参与切换', async t => {
   const f = await fixture(t); assert.equal(f.manager.getAccountQuotaOverview(f.a).geminiFiveHourRemaining, null);
   const fused = f.manager.fuseQuota({ models: { 'gemini-flash': { quotaInfo: { remainingFraction: 1 } }, 'gemini-4-argon': { quotaInfo: { remainingFraction: 1 } } } }, { groups: [
@@ -85,9 +70,9 @@ test('添加凭据必须核实Google邮箱；未核实不落盘，失败不会�
   assert.equal(acc.email, 'new@example.test'); assert.equal((await f.manager.loadIndex()).current_account_id, f.a.id);
 });
 
-test('切号事务同步SQLite、钥匙串与两端索引，保留其他数据并可撤销', async t => {
+test('切号事务同步SQLite、钥匙串与本机索引，保留其他数据并可撤销', async t => {
   const f = await fixture(t), before = await rows(f);
-  const original = { index: await readFile(join(f.stateDir, 'accounts.json'), 'utf8'), external: await readFile(join(f.externalDir, 'accounts.json'), 'utf8') };
+  const original = { index: await readFile(join(f.stateDir, 'accounts.json'), 'utf8') };
   const unrelatedTopic = replaceTopicRow(undefined, 'other-sentinel', Writer.encodeString(1, 'keep-row'));
   await run('/usr/bin/sqlite3', [f.db, `INSERT INTO ItemTable VALUES('antigravityUnifiedStateSync.oauthToken','${unrelatedTopic}');`]);
   const service = new AccountSwitchService(f.manager, { ...f, isRunning: async () => false });
@@ -99,7 +84,6 @@ test('切号事务同步SQLite、钥匙串与两端索引，保留其他数据�
   const us = Reader.findField(Buffer.from(written['antigravityUnifiedStateSync.userStatus'], 'base64'), 1);
   const payload = Buffer.from(Reader.findString(Reader.findField(us, 2), 1), 'base64'); assert.equal(Reader.findString(payload, 7), f.b.email);
   assert.equal((await f.manager.loadIndex()).current_account_id, f.b.id);
-  const external = JSON.parse(await readFile(join(f.externalDir, 'accounts.json'), 'utf8')); assert.equal(external.current_account_id, 'external-b'); assert.equal(external.extra, 'preserve');
   const appSupportDir = join(f.root, 'ApplicationSupport'), currentDb = join(appSupportDir, 'Antigravity', 'User', 'globalStorage', 'state.vscdb');
   await mkdir(join(appSupportDir, 'Antigravity', 'User', 'globalStorage'), { recursive: true }); await copyFile(f.db, currentDb);
   const readback = new AccountsManager(join(f.root, 'readback'));
@@ -107,7 +91,7 @@ test('切号事务同步SQLite、钥匙串与两端索引，保留其他数据�
   assert.equal(saved.email, f.b.email); assert.equal(saved.token.refresh_token, f.b.token.refresh_token);
   const journal = join(f.stateDir, 'account-switch-journal-stable.json'); assert.equal((await stat(journal)).mode & 0o777, 0o600);
   await service.rollback();
-  assert.equal(await f.keychain.readPassword('gemini', 'antigravity'), 'old-keychain'); assert.equal(await readFile(join(f.stateDir, 'accounts.json'), 'utf8'), original.index); assert.equal(await readFile(join(f.externalDir, 'accounts.json'), 'utf8'), original.external);
+  assert.equal(await f.keychain.readPassword('gemini', 'antigravity'), 'old-keychain'); assert.equal(await readFile(join(f.stateDir, 'accounts.json'), 'utf8'), original.index);
   assert.deepEqual((await rows(f)).filter(r => r.key !== 'antigravityUnifiedStateSync.oauthToken'), before);
 });
 
@@ -126,16 +110,14 @@ test('Antigravity运行时切号零写入；钥匙串失败与写入期间重开
   assert.deepEqual(await rows(f), before); assert.equal(await readFile(join(f.stateDir, 'accounts.json'), 'utf8'), index); assert.equal(await f.keychain.readPassword('gemini', 'antigravity'), 'old-keychain');
 });
 
-test('外部文件变化时停止回滚，恢复记录保留；无对应Switch账号不进行切号', async t => {
+test('外部修改索引文件时停止回滚并保留恢复记录', async t => {
   const f = await fixture(t), before = await rows(f);
-  const externalPath = join(f.externalDir, 'accounts.json'); await writeFile(externalPath, JSON.stringify({ accounts: [] }));
+  const indexPath = join(f.stateDir, 'accounts.json');
   const service = new AccountSwitchService(f.manager, { ...f, isRunning: async () => false });
-  await assert.rejects(service.switchAccount(f.b.id), /唯一对应账号/); assert.deepEqual(await rows(f), before);
-  await writeFile(externalPath, JSON.stringify({ accounts: [{ id: 'external-b', email: f.b.email }] }));
   const write = f.keychain.writePassword.bind(f.keychain);
-  f.keychain.writePassword = async (...args) => { await writeFile(externalPath, '{"changed":"externally"}'); await write(...args); };
+  f.keychain.writePassword = async (...args) => { await writeFile(indexPath, '{"changed":"externally"}'); await write(...args); };
   await assert.rejects(service.switchAccount(f.b.id), /恢复被外部变化阻止/);
-  assert.equal(await readFile(externalPath, 'utf8'), '{"changed":"externally"}'); assert.deepEqual(await rows(f), before);
+  assert.equal(await readFile(indexPath, 'utf8'), '{"changed":"externally"}'); assert.deepEqual(await rows(f), before);
 });
 
 test('备用账号绝不串号继承Live Language Server配额，仅严格对齐邮箱才复用', async t => {
@@ -219,7 +201,7 @@ test('并发刷新单飞防重（Single Flight）、Token Rotation 与并发修�
   let delayedResolve;
   const tokenPromise = new Promise(res => { delayedResolve = res; });
 
-  const fetchImpl = async (url, options) => {
+  const fetchImpl = async (url) => {
     if (url.includes('/token')) {
       tokenRefreshes++;
       await tokenPromise; // 模拟网络延迟

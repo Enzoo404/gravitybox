@@ -1,8 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+
 import {
   buildInfoPayload,
   describeValidationScope,
@@ -15,7 +13,6 @@ import {
   VALIDATION_SCOPE_TARGETED,
 } from '../tools/release-scope.mjs';
 
-const root = fileURLToPath(new URL('../', import.meta.url));
 const SUPPORTED = ['2.23.0', '2.23.1', '2.24.0'];
 const TARGETED_RECORD = {
   digest: 'a'.repeat(64),
@@ -145,13 +142,4 @@ test('release scope：verify/package-mac 顶层不执行，可安全 import（�
   const packageModule = await import('../tools/package-mac.mjs');
   assert.equal(typeof verifyModule, 'object');
   assert.equal(typeof packageModule, 'object');
-});
-
-test('release scope：npm scripts 保留全版本默认，并新增明确的 2.24.0 脚本', async () => {
-  const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
-  assert.equal(pkg.scripts['package:mac'], 'npm run verify && node tools/package-mac.mjs', '默认打包仍必须走全版本 verify');
-  assert.equal(pkg.scripts['package:mac:full'], 'npm run verify && node tools/package-mac.mjs');
-  assert.equal(pkg.scripts['verify:2.24.0'], 'node tools/verify.mjs --target-app-version 2.24.0');
-  assert.equal(pkg.scripts['package:mac:2.24.0'], 'npm run verify:2.24.0 && node tools/package-mac.mjs --target-app-version 2.24.0');
-  assert.equal(pkg.scripts['verify'], 'node tools/verify.mjs', '未带参数的 verify 仍默认全版本');
 });

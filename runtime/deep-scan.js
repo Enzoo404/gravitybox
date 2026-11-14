@@ -1,13 +1,13 @@
 /* Explicit, version-gated inspection adapter. No arbitrary selector, route or command is accepted. */
 (function attachDeepScan() {
-  globalThis.__AGZH_ATTACH_DEEP_SCAN__=attachDeepScan;
-  const engine=globalThis.__AGZH_ENGINE_V1__,boot=globalThis.__AGZH_BOOT__;
+  globalThis.__GRAVITYBOX_ATTACH_DEEP_SCAN__=attachDeepScan;
+  const engine=globalThis.__GRAVITYBOX_ENGINE_V1__,boot=globalThis.__GRAVITYBOX_BOOT__;
   if(!engine||engine.deepScan)return;
   const fixture=boot?.path==='/fixture';let current;
-  const blocked='script,style,[data-agzh-protect],[data-message-id],[data-message-author-role],[data-testid*="conversation-row"],[data-testid*="message"],[data-testid="project-header"],.agzh-project-name,.markdown,.prose,pre,code,.monaco-editor,.xterm';
+  const blocked='script,style,[data-gravitybox-protect],[data-message-id],[data-message-author-role],[data-testid*="conversation-row"],[data-testid*="message"],[data-testid="project-header"],.gravitybox-project-name,.markdown,.prose,pre,code,.monaco-editor,.xterm';
   const ids=['history','marketplace','installed','settings-open','settings-general','settings-app','settings-appearance','settings-models','settings-shortcuts','settings-close','automations','model-open','model-usage','model-close'];
   const text=e=>(e?.getAttribute('aria-label')||e?.textContent||'').replace(/\s+/g,' ').trim();
-  const namesFor=names=>[...new Set(names.flatMap(name=>[name,globalThis.__AGZH_BOOT__?.dictionary?.entries?.[name]]).filter(name=>typeof name==='string'))];
+  const namesFor=names=>[...new Set(names.flatMap(name=>[name,globalThis.__GRAVITYBOX_BOOT__?.dictionary?.entries?.[name]]).filter(name=>typeof name==='string'))];
   const visible=e=>!!e?.getClientRects().length&&getComputedStyle(e).visibility!=='hidden';
   const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
   function hasDraft(){return engine.draftState().busy;}
@@ -75,7 +75,7 @@
   }
   function catalog(){
     if(!fixture)return engine.pluginCatalog?.()??[];
-    const entries=[];const root=document.querySelector('[data-agzh-deep-catalog]');
+    const entries=[];const root=document.querySelector('[data-gravitybox-deep-catalog]');
     if(!root)return entries;
     for(const anchor of root.querySelectorAll('a[href]')){
       const url=new URL(anchor.href,location.href);if(url.origin!==location.origin||!/^\/customizations\/(?:plugins\/[\w.-]+|marketplaces\/[\w.-]+\/plugins\/[\w.-]+)$/.test(url.pathname)||anchor.closest(blocked))continue;
@@ -108,7 +108,7 @@
     async step(id){
       if(!ids.includes(id))return{ok:false,message:'入口未在适配清单中'};
       if(!guard())return{ok:false,userIntervened:true,message:'用户已接管界面'};
-      const test=fixture?document.querySelector(`[data-agzh-deep-step="${id}"]`):null;
+      const test=fixture?document.querySelector(`[data-gravitybox-deep-step="${id}"]`):null;
       let element;
       if(test)element=test;
       else if(['history','marketplace','installed'].includes(id)){
@@ -133,7 +133,7 @@
       await wait(250);
       for(let n=0;n<8&&!reached(id)&&!current.intervened;n++)await wait(150);
       if(!current)return{ok:false,message:'页面上下文已变化'};
-      const catalogue=['marketplace','installed'].includes(id)&&(!fixture||document.querySelector('[data-agzh-deep-catalog]'));
+      const catalogue=['marketplace','installed'].includes(id)&&(!fixture||document.querySelector('[data-gravitybox-deep-catalog]'));
       if(catalogue)for(let n=0;n<30&&!catalog().length&&!current.intervened;n++)await wait(150);
       current.lastURL=location.href;current.lastStep=id;
       const ok=reached(id),limited=ok&&catalogue&&!catalog().length;return{ok,limited,userIntervened:current.intervened,message:limited?'目录展示说明未就绪或为空，已标记待检查':ok?'已打开并检查，未执行安装、发送或账号操作':'入口触发后未确认目标界面，已标记受限'};
@@ -161,5 +161,5 @@
       return{routeRestored,editorsMatch,modelMatch,scrollRestored:restored,scrollExpected:saved.scroll.length,userIntervened:false,message:routeRestored&&editorsMatch&&modelMatch?'已恢复原页面，编辑区哈希和模型选择一致。':'页面、编辑区或模型选择恢复未完全确认，请检查当前窗口；没有强制改写内容。'};
     }
   };
-  const dispose=engine.dispose.bind(engine);engine.dispose=()=>{for(const type of ['pointerdown','keydown','input','compositionstart','wheel'])document.removeEventListener(type,intercept,true);current=null;delete globalThis.__AGZH_ATTACH_DEEP_SCAN__;return dispose();};
+  const dispose=engine.dispose.bind(engine);engine.dispose=()=>{for(const type of ['pointerdown','keydown','input','compositionstart','wheel'])document.removeEventListener(type,intercept,true);current=null;delete globalThis.__GRAVITYBOX_ATTACH_DEEP_SCAN__;return dispose();};
 })();

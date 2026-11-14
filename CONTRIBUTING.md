@@ -45,11 +45,11 @@ cd gravitybox
 npm ci
 npm run setup:dev
 
-# 3. 编译 TypeScript 与静态资源
-npm run build
-
-# 4. 运行全量单元与集成测试
+# 3. 运行常规编译与单元/集成测试
 npm test
+
+# 4. 运行完整发布门禁（含浏览器回归、Swift -O 检查与全版本词典门禁）
+npm run verify
 ```
 
 ---
@@ -60,7 +60,7 @@ npm test
 
 1. **隐私安全底线**：
    - 严禁加入任何未经用户明确授权的外部遥测、埋点或数据回传代码。
-   - 所有登录凭据与敏感 Token 必须通过系统级钥匙串（macOS Keychain）免密安全隔离存储，历史归档必须经过深度不可逆脱敏。
+   - 本机账号库凭据与原子写入临时文件必须严格锁定 `0600` 当前用户私有权限，macOS Keychain 读写严格限定于官方登录态同步，切号归档与账号移除快照必须对敏感 Token 作不可逆脱敏。
 2. **数据零硬删除（Non-destructive Safety）**：
    - 缓存维护与账号切号事务严禁执行物理硬删除操作，必须走四阶段原子恢复引擎与隔离废纸篓快照（Displaced Storage）。
 3. **版权与上游隔离**：
@@ -77,9 +77,13 @@ npm test
 
 ### 单元与集成测试 (Unit & Integration Tests)
 ```bash
-npm test
+npm run test:unit
 ```
-包含 300+ 个核心测试用例，覆盖账号并发事务、双周期额度熔合、Protobuf/SQLite 解码与用量计费算法。
+覆盖账号并发事务、双周期额度熔合、Protobuf/SQLite 解码、用量计费算法与小型原生行为测试。仅检查非原生测试可用 `npm run test:fast`，仅检查小型原生行为测试可用 `npm run test:native`；这些局部检查不生成发布通过记录。
+
+历史审计和按日期分散的混合用例按生产领域归并在 `*-contracts.test.mjs`。必要的失败路径和数据保全断言继续执行；各夹具组保持独立作用域并串行运行子用例，隔离时钟与文件系统替换。固定外观、源码实现拼写和手写算法副本已裁剪，随机几何压力测试改为确定性边界。原生快照合并及总览时效中尚无独立轻量夹具的两项守卫继续保留在状态契约测试中。
+
+完整原生 UI 夹具不纳入默认测试枚举、CI 或打包前门禁。修改原生界面需要合成夹具辅助检查时，可按需运行 `npm run test:native-ui`，该命令不生成发布通过记录；安装后的实际界面及操作仍由人工验收。
 
 ### 浏览器端回归测试 (Browser Regression)
 ```bash
@@ -94,7 +98,7 @@ macOS ARM64 开发环境与 CI 使用固定版本的 Chrome Headless Shell，下
 ```bash
 npm run verify
 ```
-运行完整的流水线门禁：编译 TypeScript、单元测试、浏览器测试、Swift 原生编译检查、以及免 vendor 模式的词典覆盖率门禁（`tools/coverage-report.mjs --gate`）。
+完整发布门禁流水线包含：清理孤儿构建产物、编译 TypeScript、合并运行时、核对价格资产、单元/集成及小型原生行为测试（`npm test` 聚焦这部分日常开发验证）、无头浏览器测试（`npm run test:browser`）、发行版 Swift 原生编译（`-O`）以及全部受支持版本的词典覆盖率门禁。可通过 `node tools/verify.mjs --target-app-version <x.y.z>` 做单版本定向验证，或默认自动对历史冻结版本启用免 vendor 校验。通过后可直接运行 `node tools/package-mac.mjs`（或 `npm run package:mac`），打包器会再次核对源码与产物指纹。
 
 ---
 
@@ -118,7 +122,7 @@ npm run verify
 1. Fork 官方仓库至个人账号。
 2. 基于 `main` 分支拉取开发分支（例如 `feat/your-feature-name`）。
 3. 编写代码并增加对应的单元测试或浏览器测试。
-4. 运行 `npm test` 与 `npm run verify`，确保所有门禁 100% 绿色通过。
+4. 运行 `npm test`（日常单测）与 `npm run verify`（提交发布相关改动时），确保完整门禁通过。
 5. 推送至个人分支并向 `Enzoo404/gravitybox:main` 发起 Pull Request。
 6. CI 自动化检查通过后，核心维护者将对 PR 进行 Review 并合并。
 

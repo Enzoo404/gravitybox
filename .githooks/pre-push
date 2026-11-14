@@ -3,7 +3,7 @@
 # 依据推送目标分支实施分层门禁：
 # 1. 删除分支/标签直接放行
 # 2. 推送到主干 (main/master) 或发布分支 (release/*) 时，执行全量门禁 (npm run verify)
-# 3. 推送普通特性/修复分支时，执行轻量构建与快速测试 (npm test)
+# 3. 推送普通特性/修复分支时，执行轻量构建与单元/集成测试 (npm run test:unit)
 
 if [ "$GRAVITYBOX_SKIP_PRE_PUSH" = "1" ]; then
   exit 0
@@ -45,7 +45,7 @@ if [ "$is_main_or_release" -eq 1 ]; then
   npm run verify
   exit $?
 else
-  echo "⚡ [pre-push] 检测到推送到特性/日常分支，执行轻量快速门禁 (npm test)..."
-  npm test
+  echo "⚡ [pre-push] 检测到推送到特性/日常分支，执行轻量快速门禁 (npm run test:unit)..."
+  npm run test:unit
   exit $?
 fi

@@ -7,7 +7,7 @@ import { fetchBundleFromOrigin, computeBundleSha256, SUPPORTED_BUNDLES } from '.
 import { rendererSources, nativeSources, createCoverage, coverageMarkdown } from '../dist/coverage.js';
 import { loadDictionary } from '../dist/dictionary.js';
 const root=fileURLToPath(new URL('../',import.meta.url));const app='/Applications/Antigravity.app';
-if(!process.argv.includes('--resources-only'))throw new Error('此工具只扫描已验证应用的静态资源，请指定 --resources-only；实机逐页采样请使用应用内入口');
+if(!process.argv.includes('--resources-only'))throw new Error('此工具只扫描已验证应用的静态资源，请指定 --resources-only；当前可见界面取证请使用 node tools/real-acceptance.mjs；自动遍历仅保留为开发API，暂无原生入口');
 const endpoint=await discover(app,join(homedir(),'Library/Application Support/Antigravity'));
 if(!endpoint)throw new Error('应用未运行');
 const targets=await(await fetch(`http://127.0.0.1:${endpoint.port}/json/list`,{signal:AbortSignal.timeout(3000),redirect:'error'})).json();

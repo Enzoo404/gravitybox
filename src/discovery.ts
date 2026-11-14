@@ -1,10 +1,12 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { readFile, open, stat as fsStat } from 'node:fs/promises';
+import { readFile, stat as fsStat } from 'node:fs/promises';
 import { join } from 'node:path';
+import { openAsarArchive } from './asar.js';
 import { assertLoopback } from './cdp.js';
-import { allApplicationTargets, targetForApp } from './application-target.js';
-const execute = promisify(execFile);
+import { targetForApp } from './application-target.js';
+const execFileRaw = promisify(execFile);
+const execute = (file: string, args: string[], timeout = 3000) => execFileRaw(file, args, { timeout });
 export type Endpoint = { port: number; pid: number; browserURL: string; appVersion: string; legacyPatch: boolean; appPath?: string; profile?: string };
 
 export function parseListeners(stdout: string, port: number): { pid: number; names: string[] }[] {
@@ -46,31 +48,24 @@ export async function inspectBundle(appPath: string): Promise<{ version: string;
   if (!signature.stderr.includes('TeamIdentifier=EQHXZ8M8AV')) throw new Error('Antigravity 签名身份未通过 Google TeamID 检查');
   await execute('/usr/bin/codesign', ['--verify', '--deep', '--strict', appPath]);
   const plistStat = await fsStat(plist);
-  const file = await open(asarPath, 'r');
+  const archive = await openAsarArchive(asarPath, 16_000_000);
   try {
-    const prefix = Buffer.alloc(16); await file.read(prefix, 0, 16, 0);
-    const headerLength = prefix.readUInt32LE(12);
-    if (headerLength > 16_000_000) throw new Error('应用资源头超出限制');
-    const headerBytes = Buffer.alloc(headerLength); await file.read(headerBytes, 0, headerLength, 16);
-    const header = JSON.parse(headerBytes.toString());
     let legacyPatch = false;
-    const stat = await file.stat();
     for (const name of ['preload.js', 'main.js', 'utils.js']) {
-      const entry = header.files?.dist?.files?.[name];
+      const entry = archive.header.files?.dist?.files?.[name];
       if (!entry || entry.unpacked) continue;
-      const size = Number(entry.size), offset = Number(entry.offset);
-      if (!Number.isSafeInteger(size) || size <= 0 || size > 3_000_000) throw new Error('应用脚本超出检查范围');
-      if (!Number.isSafeInteger(offset) || offset < 0 || 8 + prefix.readUInt32LE(4) + offset + size > stat.size) throw new Error('应用资源位置无效');
-      const bytes = Buffer.alloc(size);
-      const { bytesRead } = await file.read(bytes, 0, size, 8 + prefix.readUInt32LE(4) + offset);
-      if (bytesRead !== size) throw new Error('应用脚本读取不完整');
+      const bytes = await archive.readEntryBuffer(entry, 3_000_000, 1);
+      if (!bytes) continue;
       const text = bytes.toString();
       legacyPatch ||= /ANTIGRAVITY CHINESE LOCALIZATION START|injectAntigravityI18n|__ANTIGRAVITY_I18N_DATA__|createI18nEngine|__ag_hanhua_engine__/.test(text);
     }
+    const asarStat = await fsStat(asarPath);
     const val = { version, legacyPatch };
-    bundleCache.set(appPath, { value: val, expiresAt: now + 60_000, hardExpiresAt: now + 600_000, plistMtimeMs: plistStat.mtimeMs, asarMtimeMs: stat.mtimeMs, asarSize: stat.size });
+    bundleCache.set(appPath, { value: val, expiresAt: now + 60_000, hardExpiresAt: now + 600_000, plistMtimeMs: plistStat.mtimeMs, asarMtimeMs: asarStat.mtimeMs, asarSize: archive.fileSize });
     return val;
-  } finally { await file.close(); }
+  } finally {
+    await archive.close();
+  }
 }
 
 async function discoverSingle(appPath: string, profile: string): Promise<Endpoint | undefined> {
@@ -101,19 +96,7 @@ async function discoverSingle(appPath: string, profile: string): Promise<Endpoin
 }
 
 export async function discover(appPath: string, profile: string): Promise<Endpoint | undefined> {
-  const primary = await discoverSingle(appPath, profile);
-  if (primary) return primary;
-  const knownTargets = allApplicationTargets();
-  const isDefaultTarget = knownTargets.some(t => t.appPath === appPath && t.profile === profile);
-  if (!isDefaultTarget) return undefined;
-  for (const candidate of knownTargets) {
-    if (candidate.appPath === appPath && candidate.profile === profile) continue;
-    try {
-      const found = await discoverSingle(candidate.appPath, candidate.profile);
-      if (found) return found;
-    } catch {}
-  }
-  return undefined;
+  return discoverSingle(appPath, profile);
 }
 
 export function allowedTarget(target: { type: string; url: string }, fixtureOrigin?: string): boolean {
@@ -146,38 +129,41 @@ export async function verifyPageService(url: string, appPath: string): Promise<b
     const listeners = (await execute('/usr/sbin/lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-Fpfn'])).stdout;
     const owners = parseListeners(listeners, port);
     if (owners.length !== 1) {
-      verifiedPortCache.set(cacheKey, { valid: false, expiresAt: now + 10_000 });
+      verifiedPortCache.delete(cacheKey);
       return false;
     }
     const executable = (await execute('/usr/sbin/lsof', ['-nP', '-a', '-p', String(owners[0]!.pid), '-d', 'txt', '-Fn'])).stdout;
     const lines = executable.split('\n');
-    const candidateApps = allApplicationTargets().some(t => t.appPath === appPath)
-      ? allApplicationTargets().map(t => t.appPath)
-      : [appPath];
     const valid = lines.some(line => {
       if (!line.startsWith('n')) return false;
       const binPath = line.slice(1);
-      return candidateApps.some(candidateApp =>
-        binPath === join(candidateApp, 'Contents', 'Resources', 'bin', 'language_server') ||
-        binPath.startsWith(candidateApp + '/Contents/')
-      );
+      return binPath === join(appPath, 'Contents', 'Resources', 'bin', 'language_server') ||
+        binPath.startsWith(appPath + '/Contents/');
     });
-    verifiedPortCache.set(cacheKey, { valid, expiresAt: now + 60_000 });
+    if (valid) verifiedPortCache.set(cacheKey, { valid: true, expiresAt: now + 60_000 });
+    else verifiedPortCache.delete(cacheKey);
     return valid;
   } catch {
-    verifiedPortCache.set(cacheKey, { valid: false, expiresAt: now + 10_000 });
+    verifiedPortCache.delete(cacheKey);
     return false;
   }
 }
 
-/** Verify the real executable and official bundle before trusting a language-server listener. */
-export async function verifyLanguageServerIdentity(pid: number, appPath = '/Applications/Antigravity.app'): Promise<boolean> {
-  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+/** Verify the real executable and official bundle before trusting a language-server listener, returning verified loopback IPv4 ports. */
+export async function resolveVerifiedLanguageServerPorts(pid: number, appPath = '/Applications/Antigravity.app'): Promise<number[] | null> {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return null;
   try {
     await inspectBundle(appPath);
-    const executable = (await execute('/usr/sbin/lsof', ['-nP','-a','-p',String(pid),'-d','txt','-Fn'])).stdout;
-    if (!executable.split('\n').includes('n'+join(appPath,'Contents/Resources/bin/language_server'))) return false;
-    const listeners = (await execute('/usr/sbin/lsof',['-nP','-a','-p',String(pid),'-iTCP','-sTCP:LISTEN','-Fn'])).stdout.split('\n').filter(line=>line.startsWith('n'));
-    return listeners.length > 0 && listeners.every(line=>/^n(?:127\.0\.0\.1|\[::1\]):\d+$/.test(line));
-  } catch { return false; }
+    const executable = (await execute('/usr/sbin/lsof', ['-nP', '-a', '-p', String(pid), '-d', 'txt', '-Fn'])).stdout;
+    if (!executable.split('\n').includes('n' + join(appPath, 'Contents/Resources/bin/language_server'))) return null;
+    const listenerOut = (await execute('/usr/sbin/lsof', ['-nP', '-a', '-p', String(pid), '-iTCP', '-sTCP:LISTEN', '-Fn'])).stdout;
+    const listeners = listenerOut.split('\n').filter(line => line.startsWith('n'));
+    if (listeners.length === 0 || !listeners.every(line => /^n(?:127\.0\.0\.1|\[::1\]):\d+$/.test(line))) return null;
+    const portMatches = Array.from(listenerOut.matchAll(/n127\.0\.0\.1:(\d+)/g)).map(m => parseInt(m[1]!, 10));
+    return Array.from(new Set(portMatches));
+  } catch {
+    return null;
+  }
 }
+
+

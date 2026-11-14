@@ -14,7 +14,7 @@ test('插件扫描仅读取展示字段，拒绝符号链接和凭据形状，�
 });
 test('深度遍历只执行登记步骤，取消或失败也尝试恢复并记录恢复状态',async()=>{
  let restored=false;const abort=new AbortController();let restoration;
- const page={async invoke(method,id){if(method==='begin')return{ok:true};if(method==='step')return{ok:true};if(method==='sample')return{audit:{observations:[]}};if(method==='scroll')return{more:false};if(method==='finish'){restored=true;return{routeRestored:true,editorsMatch:true}}throw new Error('unexpected')}};
+ const page={async invoke(method){if(method==='begin')return{ok:true};if(method==='step')return{ok:true};if(method==='sample')return{audit:{observations:[]}};if(method==='scroll')return{more:false};if(method==='finish'){restored=true;return{routeRestored:true,editorsMatch:true}}throw new Error('unexpected')}};
  await assert.rejects(traverseDeep(page,abort.signal,async()=>{},(step,index)=>{assert.ok(DEEP_STEPS.some(s=>s.id===step.id));if(index===2)abort.abort()},value=>restoration=value));assert.equal(restored,true);assert.equal(restoration.routeRestored,true);
 });
 test('遍历开始前被草稿阻止时不操作页面，不把未恢复伪装为成功',async()=>{

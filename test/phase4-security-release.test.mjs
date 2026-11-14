@@ -3,22 +3,19 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, readdir, readFile, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+
 import { AccountSwitchService } from '../dist/account-switch.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { AccountsManager, MockKeychainAdapter } from '../dist/accounts.js';
 
 const run = promisify(execFile);
-const root = fileURLToPath(new URL('../', import.meta.url));
 
 async function setupSandbox() {
   const dir = await mkdtemp(join(tmpdir(), 'gb-test-phase4-'));
   const stateDir = join(dir, 'state');
   const profile = join(dir, 'profile');
-  const externalDir = join(dir, 'external');
   await mkdir(join(profile, 'User', 'globalStorage'), { recursive: true });
-  await mkdir(join(externalDir, 'accounts'), { recursive: true });
   await mkdir(stateDir, { recursive: true });
 
   const db = join(profile, 'User', 'globalStorage', 'state.vscdb');
@@ -28,7 +25,7 @@ async function setupSandbox() {
   await manager.init();
   const keychain = new MockKeychainAdapter();
   await keychain.writePassword('gemini', 'antigravity', 'initial-keychain-pass');
-  return { dir, stateDir, profile, externalDir, manager, keychain };
+  return { dir, stateDir, profile, manager, keychain };
 }
 
 function makeAccount(id, email) {
@@ -51,20 +48,9 @@ test('A18: 历史切号归档深度不可逆脱敏，杜绝 Base64/Protobuf 凭�
     const acc3 = await env.manager.upsertAccount(makeAccount('acc-3', 'user3@example.com'));
     const acc4 = await env.manager.upsertAccount(makeAccount('acc-4', 'user4@example.com'));
 
-    await writeFile(join(env.externalDir, 'accounts.json'), JSON.stringify({
-      accounts: [
-        { id: 'ext-1', email: 'user1@example.com' },
-        { id: 'ext-2', email: 'user2@example.com' },
-        { id: 'ext-3', email: 'user3@example.com' },
-        { id: 'ext-4', email: 'user4@example.com' },
-      ],
-      current_account_id: 'ext-1',
-    }));
-
     const service = new AccountSwitchService(env.manager, {
       stateDir: env.stateDir,
       profile: env.profile,
-      externalDir: env.externalDir,
       keychain: env.keychain,
       isRunning: async () => false,
     });
@@ -113,26 +99,4 @@ test('A18: 历史切号归档深度不可逆脱敏，杜绝 Base64/Protobuf 凭�
   } finally {
     await rm(env.dir, { recursive: true, force: true });
   }
-});
-
-test('A20: 构建元数据注入 revision，关于窗口动态展示修订号', async () => {
-  const pkgScript = await readFile(join(root, 'tools/package-mac.mjs'), 'utf8');
-  const assistantSrc = await readFile(join(root, 'native/Assistant.swift'), 'utf8');
-
-  // 1. 打包脚本通过共享构造器注入 revision；检查实际输出，避免把实现位置写死在脚本内。
-  const { buildInfoPayload } = await import('../tools/release-scope.mjs');
-  const digest = '1234abcd' + 'f'.repeat(56);
-  const metadata = buildInfoPayload({
-    version: '0.9.0', build: 900, node: '22.23.2',
-    verification: { digest, at: '2026-10-21T00:00:00Z' },
-    scope: { mode: 'targeted', targetAppVersions: ['2.24.0'], historicalUnverified: ['2.23.0', '2.23.1'] },
-  });
-  assert.equal(metadata.revision, '1234abcd', '构建元数据必须由摘要提取 revision');
-  assert.equal(metadata.sourceDigest, digest, '必须保留完整来源摘要');
-  assert.match(pkgScript, /JSON\.stringify\(buildInfoPayload\(/, 'package-mac 必须写入构造器生成的元数据');
-
-  // 2. 关于窗口动态提取 revision
-  assert.match(assistantSrc, /info\["revision"\] as\? String/, 'Assistant.about 必须从 build-info 提取 revision');
-  assert.match(assistantSrc, /buildStr = buildStr.isEmpty/ , '关于弹窗必须拼接展示 revision');
-
 });

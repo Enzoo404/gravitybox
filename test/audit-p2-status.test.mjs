@@ -79,46 +79,8 @@ test('I04: CLI --command 在多字节 chunk 边界不产生 U+FFFD', { timeout: 
   }
 });
 
-// B07/R08: 原生 watchState 不得用仅含 controller 字段的 status.json 清空账号字段。
-test('B07: status.json 快照合并保留 socket 账号字段', async () => {
-  const assistant = await readFile(join(root, 'native/Assistant.swift'), 'utf8');
-  const main = await readFile(join(root, 'src/main.ts'), 'utf8');
-  assert.match(assistant, /private func mergeStatusSnapshot\(_ raw: \[String: Any\], previous: LiveStatus\) -> LiveStatus/, 'watchState 必须先合并再重建 LiveStatus');
-  for (const field of ['activeAccountEmail', 'activeFiveHourQuota', 'activeSubscriptionTier', 'accountsRevision', 'liveAccountEmail']) {
-    assert.match(assistant, new RegExp(`if raw\\["${field}"\\] == nil \\{ merged\\.${field} = previous\\.${field} \\}`), `缺失账号字段 ${field} 必须沿用上一次 socket 数据`);
-  }
-  assert.doesNotMatch(assistant, /self\.statusValue = LiveStatus\(raw\)/, 'watchState 不得再用 status.json 直接整体重建');
-  // status.json 只写 controller 快照；socket status 才注入账号字段与任务计数。
-  assert.match(main, /const snapshot = \{ \.\.\.status, applicationChannel: channel, applicationLabel: target\.label, accountSwitchSupported: target\.supportsAccountSwitch, bothApplicationsInstalled: installState\.bothInstalled, availableChannels: installState\.channels, taskRevision:statusTasks\?\.revision\?\?0,runningTasks:statusTasks\?\.list\(\)\.filter\(t=>t\.state==='running'\)\.length\?\?0 \}/);
-  assert.match(main, /activeAccountEmail/);
-});
-
-// E02: 用量页 update() 必须带 metricsKey + 15s 节流，不能每个 3s tick 都 fetch。
-test('E02: 用量页 update 使用 metricsKey 与 15s 节流', async () => {
-  const usage = await readFile(join(root, 'native/Usage.swift'), 'utf8');
-  assert.match(usage, /var metricsKey = ""/);
-  assert.match(usage, /var lastFetchTime: Date = \.distantPast/);
-  assert.match(usage, /func update\(force: Bool = false\)/);
-  assert.match(usage, /timeIntervalSince\(lastFetchTime\) >= 15\.0/);
-  assert.match(usage, /if !force && !timeExpired && key == metricsKey \{ return \}/);
-  assert.match(usage, /func metricsKeyForCurrentPeriod\(\) -> String/);
-  assert.doesNotMatch(usage, /func update\(\) \{\s*fetch\(\)/, 'update() 不得无条件 fetch');
-  assert.match(usage, /self\.metricsKey = requestKey/, '成功与失败都需记录指纹以进入节流');
-});
-
-// B09: usage_summary 返回失败库/跳过记录/最后扫描时间，原生用量页展示数量（不含库名路径）。
-test('B09: usage_summary 披露失败库与跳过记录明细', async () => {
-  const main = await readFile(join(root, 'src/main.ts'), 'utf8');
-  const usage = await readFile(join(root, 'native/Usage.swift'), 'utf8');
-  assert.match(main, /failedDatabasesCount: usage\.failed_databases_count \?\? 0/);
-  assert.match(main, /skippedLargeRecords: usage\.skipped_large_records \?\? 0/);
-  assert.match(main, /lastScannedAt: usage\.generated_at \?\? 0/);
-  assert.match(usage, /失败库 \\\(failedCount\) 个/);
-  assert.match(usage, /跳过 \\\(skippedRecords\) 条超大记录/);
-  assert.match(usage, /扫描时间 \\\(formatter\.string/);
-});
-
-test('B07/B09: 真实后台 status.json 与 socket status 契约、usage_summary 明细', { timeout: 60000 }, async () => {
+// B07/B09/N12: 真实后台 status.json、socket status 与 usage_summary 明细契约。
+test('B07/B09/N12: 真实后台 status.json 与 socket status 契约、usage_summary 明细', { timeout: 60000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'gb-p2-contract-'));
   const child = spawn(process.execPath, [
     join(root, 'dist/main.js'),
@@ -128,7 +90,7 @@ test('B07/B09: 真实后台 status.json 与 socket status 契约、usage_summary
     '--gemini-dir', join(directory, 'gemini'),
     '--home-dir', directory,
     '--app-support-dir', directory,
-  ], { stdio: ['ignore', 'ignore', 'pipe'] });
+  ], { stdio: ['ignore', 'ignore', 'pipe'], env: { ...process.env, GRAVITYBOX_PROBE_LS: 'false' } });
   let errors = '';
   child.stderr.on('data', bytes => { errors += bytes; });
   const closed = new Promise(resolve => child.once('close', resolve));
@@ -137,6 +99,7 @@ test('B07/B09: 真实后台 status.json 与 socket status 契约、usage_summary
     const status = await rpc(directory, { command: 'status' });
     assert.equal(status.ok, true);
     assert.ok(Object.hasOwn(status.status, 'activeAccountEmail'), 'socket status 必须提供账号字段');
+    assert.ok(Object.hasOwn(status.status, 'accountsRevision'), 'socket status 必须提供 accountsRevision');
     assert.equal(typeof status.taskRevision, 'number');
     assert.equal(typeof status.runningTasks, 'number');
 

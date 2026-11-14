@@ -1,8 +1,17 @@
-import { ALLOWED_DATA_DIRECTORY_NAMES, allApplicationTargets, applicationChannel, savedApplicationChannel, applicationTarget, channelStateDirectory, detectInstalledChannels, type ApplicationChannel, type ApplicationTarget } from './application-target.js';
+import { ALLOWED_DATA_DIRECTORY_NAMES, applicationChannel, savedApplicationChannel, applicationTarget, detectInstalledChannels, type ApplicationChannel, type ApplicationTarget } from './application-target.js';
 import { GoogleAccountLogin } from './account-oauth.js';
 import { AccountSwitchService } from './account-switch.js';
-import { AccountsManager, computeAccountRevision, projectAccountForIpc } from './accounts.js';
-import { UsageStatsManager, priceStatus } from './usage.js';
+import { AccountsManager, computeAccountRevision, projectAccountForIpc, type QuotaData } from './accounts.js';
+import { UsageStatsManager } from './usage.js';
+import { priceStatus } from './pricing.js';
+import {
+  normalizeSubscriptionTier,
+  projectAccountForIpcNormalized as projectAccountNormalizedWithManager,
+  projectQuotaContract,
+  projectUsagePeriodSummary,
+} from './ipc-projections.js';
+export { normalizeSubscriptionTier, projectQuotaContract };
+import { FEED_MODEL_KEYS } from './model-catalog.js';
 import { CacheMaintenance } from './maintenance.js';
 import { mkdir, lstat, chmod, unlink, readFile, readdir, writeFile } from 'node:fs/promises';
 import { realpathSync, readFileSync } from 'node:fs';
@@ -16,7 +25,7 @@ import { fileURLToPath } from 'node:url';
 import { DictionaryStore, loadDictionary, dictionaryFromEntries, validateEntries } from './dictionary.js';
 import { Controller, type AssistantStatus } from './controller.js';
 import { coverageMetricSnapshot } from './coverage.js';
-import { atomicJson, sanitizeError } from './files.js';
+import { atomicJson, readOptionalJson, sanitizeError } from './files.js';
 import { discover } from './discovery.js';
 import { Tasks } from './tasks.js';
 import { acquireProcessLease, type ProcessLease } from './process-lock.js';
@@ -26,63 +35,10 @@ export { canonicalPayload } from './ipc-idempotency.js';
 
 const execFileAsync = promisify(execFile);
 
-try {
-  process.loadEnvFile?.();
-} catch (error: any) {
-  if (error?.code !== 'ENOENT') {
-    // ignore
-  }
+function cliOption(argv: string[], name: string, fallback?: string) {
+  const index = argv.indexOf(name);
+  return index < 0 ? fallback : argv[index + 1];
 }
-
-const args = process.argv.slice(2);
-const option = (name: string, fallback?: string) => { const index = args.indexOf(name); return index < 0 ? fallback : args[index + 1]; };
-const stateDir = resolve(option('--state-dir', join(homedir(), 'Library', 'Application Support', 'GravityBox'))!);
-try {
-  process.loadEnvFile?.(join(stateDir, '.env'));
-} catch (error: any) {
-  if (error?.code !== 'ENOENT') {
-    // ignore
-  }
-}
-const socketPath = join(stateDir, 'control.sock');
-let configuredChannel: unknown;
-try { configuredChannel = JSON.parse(readFileSync(join(stateDir, 'config.json'), 'utf8')).applicationChannel; }
-catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error('应用版本配置无法读取，原文件已保留'); }
-const explicitChannelArg = option('--channel');
-const explicitAppArg = option('--app');
-const explicitProfileArg = option('--profile');
-const requestedChannel = explicitChannelArg !== undefined ? applicationChannel(explicitChannelArg) : savedApplicationChannel(configuredChannel);
-const initialInstallInfo = detectInstalledChannels(requestedChannel);
-let channel: ApplicationChannel = (explicitChannelArg || explicitAppArg || explicitProfileArg)
-  ? requestedChannel
-  : initialInstallInfo.effectiveChannel;
-let selectedTarget = applicationTarget(channel);
-let appPath = explicitAppArg ?? selectedTarget.appPath;
-let profile = explicitProfileArg ?? selectedTarget.profile;
-let target: ApplicationTarget = applicationTarget(channel, undefined, { appPath, profile });
-let channelStateDir = channelStateDirectory(stateDir, channel);
-const geminiDir = option('--gemini-dir', process.env.GRAVITYBOX_GEMINI_DIR || process.env.GEMINI_DIR || join(homedir(), '.gemini'))!;
-const cacheMaintenance = new CacheMaintenance(profile, join(homedir(), '.Trash'), undefined, { stateDir: channelStateDir, geminiDir, appPath });
-const accountsManager = new AccountsManager(stateDir, { target });
-let liveProbeInFlight: Promise<any> | null = null;
-let liveProbeCachedAt = 0;
-let liveProbeCachedValue: any = null;
-function probeLiveCached() {
-  const now = Date.now();
-  if (now - liveProbeCachedAt < 4500) return Promise.resolve(liveProbeCachedValue);
-  if (liveProbeInFlight) return liveProbeInFlight;
-  liveProbeInFlight = accountsManager.probeLiveLanguageServer()
-    .then(val => { liveProbeCachedValue = val; liveProbeCachedAt = Date.now(); return val; })
-    .finally(() => { liveProbeInFlight = null; });
-  return liveProbeInFlight;
-}
-const accountLogin = new GoogleAccountLogin((token, signal) => accountsManager.addAccountFromOAuth(token, signal));
-const homeDir = option('--home-dir', process.env.GRAVITYBOX_HOME_DIR || homedir())!;
-const appSupportDir = option('--app-support-dir', process.env.GRAVITYBOX_APP_SUPPORT_DIR || join(homedir(), 'Library', 'Application Support'))!;
-const switchService = new AccountSwitchService(accountsManager, { stateDir, profile, channel, externalDir: join(homeDir, '.antigravity_tools') });
-const usageManager = new UsageStatsManager({ stateDir, geminiDir });
-const idempotencyStore = new IdempotencyStore();
-let backendLease: ProcessLease | undefined;
 
 function sanitizeErrorMessage(err: unknown): string {
   if (!(err instanceof Error)) return '操作未完成';
@@ -99,62 +55,32 @@ function formatResetTime(resetTime: number | null | undefined): string {
   return !isNaN(date.getTime()) ? `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}` : String(resetTime);
 }
 
-/** B13: 套餐枚举统一收口；空值/未知值一律回落到“待确认”，空串不得穿透 IPC。 */
-export function normalizeSubscriptionTier(value: unknown): 'FREE' | 'PRO' | 'ULTRA' | '待确认' {
-  if (typeof value !== 'string') return '待确认';
-  const raw = value.trim();
-  if (!raw) return '待确认';
-  const upper = raw.toUpperCase();
-  if (upper === 'FREE') return 'FREE';
-  if (upper === 'PRO') return 'PRO';
-  if (upper === 'ULTRA') return 'ULTRA';
-  // 兼容 live 语言服务返回的描述型套餐名（如 "Google AI Pro" / "Gemini Ultra"）。
-  if (/\bULTRA\b/i.test(raw)) return 'ULTRA';
-  if (/\bPRO\b/i.test(raw)) return 'PRO';
-  if (/\bFREE\b/i.test(raw) || /starter/i.test(raw)) return 'FREE';
-  return '待确认';
-}
-
-/** 合并本机实时语言服务配额与已保存账号配额：当实时探测未返回分组或套餐回退 FREE 时，保留已存分组与真实高级套餐。 */
-function mergeLiveQuotaWithSaved(savedQuota: any, liveQuota: any): any {
+/** 合并本机实时语言服务配额与已保存账号配额：当实时探测未返回分组/已知配额（如企业 Vertex AI）或套餐回退 FREE 时，保留已存分组、模型配额与真实高级套餐。 */
+function mergeLiveQuotaWithSaved(
+  savedQuota: QuotaData | null | undefined,
+  liveQuota: QuotaData | null | undefined
+): QuotaData | null | undefined {
   if (!liveQuota) return savedQuota;
   if (!savedQuota) return liveQuota;
   const hasLiveGroups = Array.isArray(liveQuota.quota_groups) && liveQuota.quota_groups.length > 0;
-  return {
+  const hasKnownLiveModels = Array.isArray(liveQuota.models) && liveQuota.models.some(m => m?.percentage_known || m?.own_percentage_known);
+  const hasSavedModels = Array.isArray(savedQuota.models) && savedQuota.models.length > 0;
+  const liveComplete = liveQuota.refresh_state?.complete === true;
+  const mergedStaleGroups = liveQuota.stale_groups?.length
+    ? liveQuota.stale_groups
+    : (hasLiveGroups && liveComplete ? undefined : savedQuota.stale_groups);
+  const merged: QuotaData = {
     ...savedQuota,
     ...liveQuota,
     quota_groups: hasLiveGroups ? liveQuota.quota_groups : (savedQuota.quota_groups ?? []),
-    stale_groups: liveQuota.stale_groups?.length ? liveQuota.stale_groups : savedQuota.stale_groups,
+    models: (hasLiveGroups || hasKnownLiveModels || !hasSavedModels) ? liveQuota.models : savedQuota.models,
     subscription_tier: (liveQuota.subscription_tier && liveQuota.subscription_tier !== 'FREE')
       ? liveQuota.subscription_tier
       : (savedQuota.subscription_tier || liveQuota.subscription_tier),
   };
-}
-
-/** 账号 IPC 投影后统一套餐字段，避免 accounts.ts 的空串/未知值穿透到 UI。 */
-function projectAccountForIpcNormalized(account: any): Record<string, any> | null {
-  const projected = projectAccountForIpc(account);
-  if (!projected) return projected;
-  const normalized: Record<string, any> = { ...projected, subscription_tier: normalizeSubscriptionTier(projected.subscription_tier) };
-  if (projected.quota && typeof projected.quota === 'object') {
-    normalized.quota = { ...projected.quota, subscription_tier: normalizeSubscriptionTier((projected.quota as any).subscription_tier) };
-  }
-  const contract = projectQuotaContract(accountsManager.getAccountQuotaOverview(account));
-  Object.assign(normalized, contract);
-  if (normalized.quota) Object.assign(normalized.quota, contract);
-  return normalized;
-}
-
-/** Single contract for dashboard, account cards, menu and refresh replies. No credentials. */
-export function projectQuotaContract(overview: any): Record<string, any> {
-  return {
-    familyWindows: overview.familyWindows,
-    familyModelQuota: overview.familyModelQuota,
-    argonStatus: overview.argonStatus,
-    refreshState: overview.refreshState,
-    quotaWarnings: overview.quotaWarnings,
-    quotaWarningCodes: overview.quotaWarningCodes,
-  };
+  if (mergedStaleGroups?.length) merged.stale_groups = mergedStaleGroups;
+  else delete merged.stale_groups;
+  return merged;
 }
 
 export type DashboardAggregateDeps = {
@@ -169,7 +95,7 @@ export type DashboardAggregateDeps = {
 export type DashboardAggregate = { accounts: any; usage: any; accountsError: string; usageError: string };
 
 /**
- * B12: 总览聚合不再静默吞异常。accounts / usage 两段各自降级：
+ * 总览聚合降级处理：accounts / usage 两段各自独立降级，
  * 失败段返回 null + 脱敏短错误，成功段照常返回可用数据；整体仍由调用方回 ok:true。
  */
 export async function buildDashboardAggregate(deps: DashboardAggregateDeps): Promise<DashboardAggregate> {
@@ -223,7 +149,7 @@ export async function buildDashboardAggregate(deps: DashboardAggregateDeps): Pro
         // 同一载荷的顶层/模型/分组/英文描述倒计时统一由 reset_time 按同一参考时刻现算。
         const dashboardNowMs = Date.now();
         const quotaOverview = sourceAcc ? deps.getAccountQuotaOverview(sourceAcc, { nowMs: dashboardNowMs }) : null;
-        // B13: 有账号但套餐缺失/空串时回落到“待确认”；完全无账号时才保留 FREE 的既有语义。
+        // 有账号但套餐缺失/空串时回落到“待确认”；完全无账号时才保留 FREE 的既有语义。
         const activeTier = (!isLiveVerified && liveAccountEmail && !currentAccountId)
           ? normalizeSubscriptionTier((liveLs?.tier && !/starter|free/i.test(liveLs.tier)) ? liveLs.tier : (quotaOverview?.subscriptionTier || '待确认'))
           : (quotaOverview ? normalizeSubscriptionTier(quotaOverview.subscriptionTier) : 'FREE');
@@ -259,6 +185,9 @@ export async function buildDashboardAggregate(deps: DashboardAggregateDeps): Pro
           argonWeeklyRemaining: quotaOverview?.argonWeeklyRemaining ?? null,
           argonWeeklyResetCountdown: quotaOverview?.argonWeeklyResetCountdown ?? '',
           argonResetCountdown: quotaOverview?.argonResetCountdown ?? '',
+          carbonWeeklyRemaining: quotaOverview?.carbonWeeklyRemaining ?? null,
+          carbonWeeklyResetCountdown: quotaOverview?.carbonWeeklyResetCountdown ?? '',
+          carbonResetCountdown: quotaOverview?.carbonResetCountdown ?? '',
           resetTime: resetTimeStr,
           resetCountdown: quotaOverview?.resetCountdown ?? '',
           quotaGroups: quotaOverview?.quotaGroups ?? [],
@@ -269,7 +198,7 @@ export async function buildDashboardAggregate(deps: DashboardAggregateDeps): Pro
           isStale: quotaOverview?.isStale ?? false,
           staleHours: quotaOverview?.staleHours ?? 0,
           quotaRefreshError,
-          ...projectQuotaContract(quotaOverview ?? { familyWindows: null, argonStatus: null,
+          ...projectQuotaContract(quotaOverview ?? { familyWindows: null, argonStatus: null, carbonStatus: null, standaloneModels: [],
             refreshState: { complete: false }, quotaWarnings: [], quotaWarningCodes: [] }),
         };
       } catch (error) { accountsError = sanitizeErrorMessage(error); }
@@ -280,6 +209,10 @@ export async function buildDashboardAggregate(deps: DashboardAggregateDeps): Pro
           deps.getUsageSummary(),
           deps.getPricingTable(),
         ]);
+        const todayProjected =
+          Array.isArray(summary?.today?.by_model) && Array.isArray(summary?.today_hourly)
+            ? projectUsagePeriodSummary(summary, 'today')
+            : undefined;
         usage = {
           todayTokens: summary.today.totals.total_tokens,
           totalTokens: summary.all_time.totals.total_tokens,
@@ -302,6 +235,10 @@ export async function buildDashboardAggregate(deps: DashboardAggregateDeps): Pro
           unknownTimeRecords: (summary as any).unknown_time_records ?? 0,
           unknownTimeTokens: (summary as any).unknown_time_tokens ?? 0,
           databaseDiagnostics: (summary as any).database_diagnostics ?? [],
+          ...(todayProjected ? {
+            todayHourly: todayProjected.todayHourly,
+            todayByModel: todayProjected.byModel,
+          } : {}),
         };
       } catch (error) { usageError = sanitizeErrorMessage(error); }
     })(),
@@ -310,8 +247,11 @@ export async function buildDashboardAggregate(deps: DashboardAggregateDeps): Pro
 }
 
 export async function request(command: string): Promise<any> {
+  const argv = process.argv.slice(2);
+  const targetStateDir = resolve(cliOption(argv, '--state-dir', join(homedir(), 'Library', 'Application Support', 'GravityBox'))!);
+  const targetSocketPath = join(targetStateDir, 'control.sock');
   return new Promise((resolveReply, reject) => {
-    const client = createConnection(socketPath); let buffer = ''; let received = 0;
+    const client = createConnection(targetSocketPath); let buffer = ''; let received = 0;
     const decoder = new StringDecoder('utf8');
     client.setTimeout(['status', 'ping', 'task_list'].includes(command) ? 8000 : 120000, () => { client.destroy(); reject(new Error('等待响应超时，后台结果尚未确认；请查询任务状态，勿直接重试写入操作')); });
     client.on('connect', () => client.write(JSON.stringify({ command }) + '\n'));
@@ -327,13 +267,139 @@ export async function request(command: string): Promise<any> {
   });
 }
 async function run() {
+  try {
+    process.loadEnvFile?.();
+  } catch (error: any) {
+    if (error?.code !== 'ENOENT') {
+      // ignore
+    }
+  }
+  const args = process.argv.slice(2);
+  const option = (name: string, fallback?: string) => cliOption(args, name, fallback);
   const command = option('--command');
   if (command) { console.log(JSON.stringify(await request(command))); return; }
-  if (args.includes('--heal')) throw new Error('在线补译请在应用内预览词条与目的地址后确认发送');
+  if (args.includes('--heal')) throw new Error('当前版本不提供在线补译；可编辑个人词典或使用开发工具生成本地候选');
+  const stateDir = resolve(option('--state-dir', join(homedir(), 'Library', 'Application Support', 'GravityBox'))!);
+  try {
+    process.loadEnvFile?.(join(stateDir, '.env'));
+  } catch (error: any) {
+    if (error?.code !== 'ENOENT') {
+      // ignore
+    }
+  }
+  const socketPath = join(stateDir, 'control.sock');
+  let configuredChannel: unknown;
+  let configuredHudEnabled: unknown;
+  try {
+    const parsedCfg = JSON.parse(readFileSync(join(stateDir, 'config.json'), 'utf8'));
+    configuredChannel = parsedCfg.applicationChannel;
+    configuredHudEnabled = parsedCfg.hudEnabled;
+  }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error('应用版本配置无法读取，原文件已保留'); }
+  const explicitChannelArg = option('--channel');
+  const explicitAppArg = option('--app');
+  const explicitProfileArg = option('--profile');
+  const requestedChannel = explicitChannelArg !== undefined ? applicationChannel(explicitChannelArg) : savedApplicationChannel(configuredChannel);
+  const initialInstallInfo = detectInstalledChannels(requestedChannel);
+  let channel: ApplicationChannel = (explicitChannelArg || explicitAppArg || explicitProfileArg)
+    ? requestedChannel
+    : initialInstallInfo.effectiveChannel;
+  let selectedTarget = applicationTarget(channel);
+  let appPath = explicitAppArg ?? selectedTarget.appPath;
+  let profile = explicitProfileArg ?? selectedTarget.profile;
+  let target: ApplicationTarget = applicationTarget(channel, undefined, { appPath, profile });
+  let channelStateDir = stateDir;
   if (args.includes('--diagnose')) {
     const endpoint = await discover(appPath, profile);
     console.log(JSON.stringify(endpoint ? { found: true, pid: endpoint.pid, appVersion: endpoint.appVersion, legacyPatch: endpoint.legacyPatch, loopback: true } : { found: false })); return;
   }
+  const geminiDir = option('--gemini-dir', process.env.GRAVITYBOX_GEMINI_DIR || process.env.GEMINI_DIR || join(homedir(), '.gemini'))!;
+  const cacheMaintenance = new CacheMaintenance(profile, join(homedir(), '.Trash'), undefined, { stateDir: channelStateDir, geminiDir, appPath });
+  const accountsManager = new AccountsManager(stateDir, { target });
+  function probeLiveCached() {
+    return accountsManager.probeLiveLanguageServer();
+  }
+  const accountLogin = new GoogleAccountLogin((token, signal) => accountsManager.addAccountFromOAuth(token, signal));
+  const homeDir = option('--home-dir', process.env.GRAVITYBOX_HOME_DIR || homedir())!;
+  const appSupportDir = option('--app-support-dir', process.env.GRAVITYBOX_APP_SUPPORT_DIR || join(homedir(), 'Library', 'Application Support'))!;
+  const switchService = new AccountSwitchService(accountsManager, { stateDir, profile, channel });
+  const usageManager = new UsageStatsManager({ stateDir, geminiDir });
+  cacheMaintenance.setHooks({
+    archiveDatabases: dbPaths => usageManager.archiveDatabasesBeforeClear(dbPaths),
+    onMutated: () => usageManager.invalidateCache(),
+  });
+  let accountSyncInFlight: Promise<void> | null = null;
+  let accountSyncedAt = 0;
+  async function syncActiveAccountToUsageManager(forceSync = false): Promise<void> {
+    const now = Date.now();
+    if (!forceSync && now - accountSyncedAt < 4500) return;
+    if (accountSyncInFlight) return accountSyncInFlight;
+    accountSyncInFlight = (async () => {
+      try {
+        const live = await probeLiveCached().catch(() => null);
+        const listRes = await accountsManager.listAccounts({ liveEmailHint: live?.email ?? null }).catch(() => null);
+        if (listRes?.accounts) {
+          usageManager.setKnownAccounts(listRes.accounts.map(a => ({
+            id: a.id,
+            email: a.email,
+            name: a.name ?? null,
+          })));
+        }
+        const observedEmail = typeof live?.email === 'string' && /^[^\s@]+@[^\s@]+$/.test(live.email) ? live.email : null;
+        if (observedEmail) {
+          const matched = listRes?.accounts.find(account => account.email.toLowerCase() === observedEmail.toLowerCase());
+          usageManager.setCurrentAccountContext({
+            id: matched?.id ?? observedEmail,
+            email: observedEmail,
+          });
+        } else {
+          usageManager.setCurrentAccountContext(undefined);
+        }
+        accountSyncedAt = Date.now();
+      } catch {}
+    })().finally(() => { accountSyncInFlight = null; });
+    return accountSyncInFlight;
+  }
+  async function syncActiveOfficialModelsToUsageManager(): Promise<void> {
+    try {
+      const extractModelIds = (models: any): string[] => {
+        if (!Array.isArray(models)) return [];
+        return models
+          .filter(m => m && typeof m === 'object')
+          .map(m => String(m.model_id ?? m.name ?? '').trim())
+          .filter(Boolean);
+      };
+      const union = new Set<string>(FEED_MODEL_KEYS);
+      const live = await probeLiveCached().catch(() => null);
+      for (const id of extractModelIds(live?.quota?.models)) {
+        union.add(id);
+      }
+      if (union.size === FEED_MODEL_KEYS.length) {
+        const listRes = await accountsManager.listAccounts().catch(() => null);
+        if (listRes?.accounts?.length) {
+          const preferred = listRes.active_account
+            ?? [...listRes.accounts].sort((a, b) => (b.quota_last_updated ?? 0) - (a.quota_last_updated ?? 0))[0];
+          const saved = preferred ? await accountsManager.getAccount(preferred.id).catch(() => null) : null;
+          const savedQuota = saved?.quota ?? preferred?.quota;
+          if (savedQuota?.source === 'live') {
+            for (const id of extractModelIds(savedQuota.models)) {
+              union.add(id);
+            }
+          }
+        }
+      }
+      usageManager.setActiveOfficialModels([...union]);
+    } catch {}
+  }
+  const pricePrefs = await readOptionalJson<{ enabled?: boolean }>(join(stateDir, 'pricing-preferences.json'), 'pricing-preferences.json');
+  if (pricePrefs) usageManager.setAutoRemotePricingSync(pricePrefs.enabled === true);
+  const idempotencyStore = new IdempotencyStore();
+  let backendLease: ProcessLease | undefined;
+
+  function projectAccountForIpcNormalized(account: Parameters<typeof projectAccountNormalizedWithManager>[0]): Record<string, unknown> | null {
+    return projectAccountNormalizedWithManager(account, accountsManager);
+  }
+
   await mkdir(stateDir, { recursive: true, mode: 0o700 });
   const stateInfo = await lstat(stateDir);
   if (!stateInfo.isDirectory() || stateInfo.isSymbolicLink() || stateInfo.uid !== process.getuid?.()) throw new Error('助手数据目录身份不匹配');
@@ -343,6 +409,7 @@ async function run() {
   process.once('exit', () => backendLease?.releaseSync());
   process.once('SIGTERM', earlySignalExit);
   process.once('SIGINT', earlySignalExit);
+  try {
   // Preserve the original config once before migrating the retired channel.
   if (configuredChannel === 'insiders') {
     const configPath = join(stateDir, 'config.json');
@@ -403,8 +470,31 @@ async function run() {
   }
   let applyChain = Promise.resolve();
   const shortcutEnabled = !!fixture;
-  let initiallyPaused=false;try { initiallyPaused=JSON.parse(await readFile(join(stateDir,'runtime-preferences.json'),'utf8')).translationEnabled===false; } catch {}
-  const controller = new Controller({ initiallyPaused, shortcutEnabled, appPath, profile, fixture, dictionary: store.current!, stateDir: channelStateDir, selectDictionary:async version=>{const dictionary=await store.selectVersion(version);await applyChain;return dictionary;}, reloadDictionary: async () => { await store.reload(); await applyChain; if (store.lastError) throw new Error(store.lastError); }, onStatus });
+  let initiallyPaused = false;
+  let hudEnabled = typeof configuredHudEnabled === 'boolean' ? configuredHudEnabled : true;
+  const runtimePrefs = await readOptionalJson<{ translationEnabled?: boolean; hudEnabled?: boolean }>(join(stateDir, 'runtime-preferences.json'), 'runtime-preferences.json');
+  if (runtimePrefs) {
+    initiallyPaused = runtimePrefs.translationEnabled === false;
+    if (typeof configuredHudEnabled !== 'boolean' && typeof runtimePrefs.hudEnabled === 'boolean') {
+      hudEnabled = runtimePrefs.hudEnabled;
+    }
+  }
+  const saveRuntimePreferences = async (patch: { translationEnabled?: boolean; hudEnabled?: boolean }) => {
+    const currentPrefs = (await readOptionalJson<Record<string, unknown>>(join(stateDir, 'runtime-preferences.json'), 'runtime-preferences.json')) ?? {};
+    const nextPrefs = { ...currentPrefs, translationEnabled: controller.snapshot().translationEnabled !== false, hudEnabled, ...patch };
+    if (typeof patch.hudEnabled === 'boolean') {
+      hudEnabled = patch.hudEnabled;
+      const configPath = join(stateDir, 'config.json');
+      try {
+        const cfg = JSON.parse(await readFile(configPath, 'utf8'));
+        if (cfg && typeof cfg === 'object' && !Array.isArray(cfg) && (cfg.schema === undefined || cfg.schema === 2)) {
+          await atomicJson(configPath, { ...cfg, hudEnabled });
+        }
+      } catch {}
+    }
+    await atomicJson(join(stateDir, 'runtime-preferences.json'), nextPrefs);
+  };
+  const controller = new Controller({ initiallyPaused, shortcutEnabled, hudEnabled, appPath, profile, fixture, geminiDir, dictionary: store.current!, stateDir: channelStateDir, selectDictionary:async version=>{const dictionary=await store.selectVersion(version);await applyChain;return dictionary;}, reloadDictionary: async () => { await store.reload(); await applyChain; if (store.lastError) throw new Error(store.lastError); }, onStatus });
   const tasks = new Tasks(stateDir, () => onStatus(controller.snapshot()));statusTasks=tasks; await tasks.start();
   let cacheChain = Promise.resolve();
   const cache = () => { const value = store.current; cacheChain = cacheChain.catch(() => {}).then(() => atomicJson(join(channelStateDir, 'last-valid-dictionary.json'), value)); cacheChain.catch(() => {}); };
@@ -416,7 +506,7 @@ async function run() {
   let commandChain = Promise.resolve(); let stopping = false; const ipcMetrics = { statusRequests: 0, taskPayloadReplies: 0 };
   async function recommendationPreview(config: any, cached: boolean) {
     const live = await (cached ? probeLiveCached() : accountsManager.probeLiveLanguageServer()).catch(() => null);
-    const detectedEmail = live?.email ?? await accountsManager.detectCurrentAntigravityEmail().catch(() => null);
+    const detectedEmail = live?.email ?? await accountsManager.detectCurrentAntigravityEmail({ liveEmailHint: null }).catch(() => null);
     const index = await accountsManager.loadIndex();
     const currentId = detectedEmail ? index.accounts.find(a => a.email.toLowerCase() === detectedEmail.toLowerCase())?.id : undefined;
     if (live?.email && !currentId) return null;
@@ -472,35 +562,44 @@ async function run() {
           let activeSubscriptionTier = 'FREE';
           let liveAccountEmail: string | null = null;
           let accountsRevision = '';
-          try {
-            if (parsed.includeAccounts === false) throw new Error('lightweight status');
-            const listRes = await accountsManager.listAccounts();
-            accountsRevision = listRes.revision;
-            const liveLs = await probeLiveCached().catch(() => null);
-            const detectedEmail = liveLs?.email ?? await accountsManager.detectCurrentAntigravityEmail().catch(() => null);
-            if (detectedEmail) {
-              liveAccountEmail = liveLs?.email ?? null;
-              const matchedSummary = listRes.accounts.find(a => a.email.toLowerCase() === detectedEmail.toLowerCase());
-              const matchedSaved = matchedSummary ? await accountsManager.getAccount(matchedSummary.id) : null;
-              if (matchedSaved) {
-                activeAccountEmail = matchedSaved.email;
-                const liveQuotaForMatched = liveLs?.email?.toLowerCase() === detectedEmail.toLowerCase() ? liveLs.quota : null;
-                const q = accountsManager.getAccountQuotaOverview({ ...matchedSaved, quota: mergeLiveQuotaWithSaved(matchedSaved.quota, liveQuotaForMatched) });
+          if (parsed.includeAccounts !== false) {
+            try {
+              const liveLs = await probeLiveCached().catch(() => null);
+              const listRes = await accountsManager.listAccounts({ liveEmailHint: liveLs?.email ?? null });
+              accountsRevision = listRes.revision;
+              usageManager.setKnownAccounts(listRes.accounts.map(a => ({ id: a.id, email: a.email, name: a.name ?? null })));
+              const detectedEmail = liveLs?.email ?? await accountsManager.detectCurrentAntigravityEmail({ liveEmailHint: null }).catch(() => null);
+              if (detectedEmail) {
+                liveAccountEmail = liveLs?.email ?? null;
+                const matchedSummary = listRes.accounts.find(a => a.email.toLowerCase() === detectedEmail.toLowerCase());
+                if (liveLs?.email) {
+                  usageManager.setCurrentAccountContext({
+                    id: matchedSummary?.id ?? liveLs.email,
+                    email: liveLs.email,
+                  });
+                }
+                const matchedSaved = matchedSummary ? await accountsManager.getAccount(matchedSummary.id) : null;
+                if (matchedSaved) {
+                  activeAccountEmail = matchedSaved.email;
+                  const liveQuotaForMatched = liveLs?.email?.toLowerCase() === detectedEmail.toLowerCase() ? liveLs.quota : null;
+                  const q = accountsManager.getAccountQuotaOverview({ ...matchedSaved, quota: mergeLiveQuotaWithSaved(matchedSaved.quota, liveQuotaForMatched) });
+                  activeFiveHourQuota = q.fiveHourRemaining;
+                  activeSubscriptionTier = normalizeSubscriptionTier(q.subscriptionTier);
+                } else if (liveLs?.email) {
+                  activeAccountEmail = liveLs.email;
+                  const q = accountsManager.getAccountQuotaOverview({ quota: liveLs.quota });
+                  activeFiveHourQuota = q.fiveHourRemaining;
+                  activeSubscriptionTier = normalizeSubscriptionTier((liveLs.tier && !/starter|free/i.test(liveLs.tier)) ? liveLs.tier : (q.subscriptionTier !== 'FREE' ? q.subscriptionTier : '待确认'));
+                }
+              } else if (listRes.active_account) {
+                usageManager.setCurrentAccountContext(undefined);
+                activeAccountEmail = listRes.active_account.email;
+                const q = accountsManager.getAccountQuotaOverview(listRes.active_account);
                 activeFiveHourQuota = q.fiveHourRemaining;
                 activeSubscriptionTier = normalizeSubscriptionTier(q.subscriptionTier);
-              } else if (liveLs?.email) {
-                activeAccountEmail = liveLs.email;
-                const q = accountsManager.getAccountQuotaOverview({ quota: liveLs.quota });
-                activeFiveHourQuota = q.fiveHourRemaining;
-                activeSubscriptionTier = normalizeSubscriptionTier((liveLs.tier && !/starter|free/i.test(liveLs.tier)) ? liveLs.tier : (q.subscriptionTier !== 'FREE' ? q.subscriptionTier : '待确认'));
               }
-            } else if (listRes.active_account) {
-              activeAccountEmail = listRes.active_account.email;
-              const q = accountsManager.getAccountQuotaOverview(listRes.active_account);
-              activeFiveHourQuota = q.fiveHourRemaining;
-              activeSubscriptionTier = normalizeSubscriptionTier(q.subscriptionTier);
-            }
-          } catch {}
+            } catch {}
+          }
           const all = tasks.list(), revision = tasks.revision;
           const installState = detectInstalledChannels(channel);
           if (parsed.includeTasks !== false && parsed.tasksSince !== revision) ipcMetrics.taskPayloadReplies++;
@@ -527,19 +626,21 @@ async function run() {
         (async () => {
         const counts = store.layerCounts;
         const dictTotal = (counts?.builtin ?? 0) + (counts?.incremental ?? 0) + (counts?.personal ?? 0);
+        await syncActiveOfficialModelsToUsageManager();
+        const liveForDashboard = await probeLiveCached().catch(() => null);
         const [report, aggregate] = await Promise.all([
           controller.coverageReport(),
           buildDashboardAggregate({
-            listAccounts: () => accountsManager.listAccounts(),
+            listAccounts: () => accountsManager.listAccounts({ liveEmailHint: liveForDashboard?.email ?? null }),
             getAutoSwitchConfig: () => accountsManager.getAutoSwitchConfig(),
-            probeLiveLanguageServer: () => probeLiveCached(),
+            probeLiveLanguageServer: () => Promise.resolve(liveForDashboard),
             getAccount: (id: string) => accountsManager.getAccount(id),
             getAccountQuotaOverview: (account: any, options?: any) => accountsManager.getAccountQuotaOverview(account, options),
             getUsageSummary: () => usageManager.getUsageSummary(),
-            getPricingTable: () => usageManager.getPricingTable(),
+            getPricingTable: () => usageManager.getActivePricingTable(),
           }),
         ]);
-        /* B15：总览“已覆盖”与覆盖页同源（translated / 已抽取），并带上应用版本与生成时间。 */
+        /* 总览“已覆盖”与覆盖页同源（translated / 已抽取），并带上应用版本与生成时间。 */
         const coverageMetrics = coverageMetricSnapshot(report);
 
         reply({
@@ -563,7 +664,7 @@ async function run() {
           coverage: report ? coverageMetrics : null,
           accounts: aggregate.accounts,
           usage: aggregate.usage,
-          /* B12: 局部失败不再静默为 null；错误已脱敏，成功段仍返回可用数据，整体保持 ok:true。 */
+          /* 局部失败时错误已脱敏，成功段仍返回可用数据，整体保持 ok:true。 */
           accountsError: aggregate.accountsError,
           usageError: aggregate.usageError,
           revision: aggregate.accounts?.revision ?? '',
@@ -578,7 +679,7 @@ async function run() {
             const index = await accountsManager.loadIndex();
             const listNowMs = Date.now();
             const live = await probeLiveCached().catch(() => null);
-            const detectedEmail = live?.email ?? await accountsManager.detectCurrentAntigravityEmail().catch(() => null);
+            const detectedEmail = live?.email ?? await accountsManager.detectCurrentAntigravityEmail({ liveEmailHint: null }).catch(() => null);
             let effectiveActiveId = index.current_account_id;
             if (detectedEmail) {
               const matched = index.accounts.find(a => a.email.toLowerCase() === detectedEmail.toLowerCase());
@@ -592,10 +693,11 @@ async function run() {
                 credentialReadiness: { state: 'needs_authorization', message: '请先核对账号数据文件' } }; }
               if (!saved) return { id: summary.id, email: summary.email, name: summary.name, disabled: true,
                 quota: null, quota_refresh_error: '账号文件不存在，请重新读取或保存当前账号' };
-              const projectedSaved = projectAccountForIpcNormalized(saved ?? summary);
+              const projectedSaved = projectAccountForIpc(saved ?? summary);
               const isLiveMatched = live?.email?.toLowerCase() === summary.email.toLowerCase() && live.quota;
               const acc = { ...summary, ...projectedSaved, ...(isLiveMatched ? { quota: mergeLiveQuotaWithSaved(projectedSaved?.quota ?? saved.quota, live.quota) } : {}) };
               const q = accountsManager.getAccountQuotaOverview(acc, { nowMs: listNowMs });
+              const contract = projectQuotaContract(q);
               const resetTimeStr = formatResetTime(q.resetTime);
               const rev = computeAccountRevision(acc);
               const lastUp = acc.quota_last_updated ?? acc.quota?.last_updated ?? 0;
@@ -622,6 +724,9 @@ async function run() {
                 argonWeeklyRemaining: q.argonWeeklyRemaining,
                 argonWeeklyResetCountdown: q.argonWeeklyResetCountdown ?? '',
                 argonResetCountdown: q.argonResetCountdown,
+                carbonWeeklyRemaining: q.carbonWeeklyRemaining,
+                carbonWeeklyResetCountdown: q.carbonWeeklyResetCountdown ?? '',
+                carbonResetCountdown: q.carbonResetCountdown,
                 staleGroups: q.staleGroups,
                 stale_groups: q.staleGroups,
                 subscription_tier: normalizeSubscriptionTier(q.subscriptionTier),
@@ -629,7 +734,7 @@ async function run() {
                 resetCountdown: q.resetCountdown,
                 quotaGroups: q.quotaGroups,
                 models: q.models,
-                ...projectQuotaContract(q),
+                ...contract,
                 quota: {
                   ...(acc.quota ?? {}),
                   five_hour_remaining: q.fiveHourRemaining,
@@ -640,7 +745,7 @@ async function run() {
                   quota_groups: q.quotaGroups,
                   stale_groups: q.staleGroups,
                   models: q.models,
-                  ...projectQuotaContract(q),
+                  ...contract,
                 },
               };
             }));
@@ -674,12 +779,14 @@ async function run() {
       if (command === 'account_switch_preflight') {
         (async () => {
           let appRunning = false;
+          let stableRunning = false;
+          let insidersRunning = false;
           let hasRunningTask = false;
           let taskReason = '';
+          const insidersAppPath = '/Applications/Antigravity - Insiders.app';
           const candidateTargets = [
             target,
-            ...allApplicationTargets().filter(t => t.appPath !== target.appPath),
-            { appPath: '/Applications/Antigravity - Insiders.app', executable: 'Electron' },
+            { appPath: insidersAppPath, executable: 'Electron' },
           ];
           try {
             const { stdout: psOut } = await execFileAsync('/bin/ps', ['-ax', '-ww', '-o', 'pid=,pcpu=,args='], { timeout: 3000 });
@@ -688,6 +795,11 @@ async function run() {
               if (matched) {
                 if (line.includes(`${matched.appPath}/Contents/MacOS/${matched.executable}`) && !line.includes('Helper')) {
                   appRunning = true;
+                  if (matched.appPath === insidersAppPath) {
+                    insidersRunning = true;
+                  } else {
+                    stableRunning = true;
+                  }
                 }
                 const m = line.trim().match(/^(\d+)\s+([\d.]+)\s+/);
                 const cpu = m ? parseFloat(m[2] || '0') : 0;
@@ -718,9 +830,9 @@ async function run() {
                 for (const sub of ['conversations', 'brain']) {
                   const subDir = join(geminiDir, entry.name, sub);
                   const files = await readdir(subDir).catch(() => [] as string[]);
-                  for (const f of files) {
-                    const st = await lstat(join(subDir, f)).catch(() => null);
-                    if (st && nowMs - st.mtimeMs < 15000) {
+                  for (let i = 0; i < files.length; i += 32) {
+                    const stats = await Promise.all(files.slice(i, i + 32).map(f => lstat(join(subDir, f)).catch(() => null)));
+                    if (stats.some(st => st && nowMs - st.mtimeMs < 15000)) {
                       hasRunningTask = true;
                       taskReason = '检测到活跃的 Agent 会话任务';
                       break;
@@ -735,6 +847,8 @@ async function run() {
           reply({
             ok: true,
             appRunning,
+            stableRunning,
+            insidersRunning,
             safe: !hasRunningTask,
             state: hasRunningTask ? 'busy' : 'safe',
             hasRunningTask,
@@ -743,11 +857,13 @@ async function run() {
         })().catch(error => reply({ ok: false, state: 'unknown', error: sanitizeErrorMessage(error) }));
         return;
       }
-      // P-01 / B-01: 只读 IPC 命令直接并发响应，不阻塞在写锁 commandChain 队列后
+      // 只读 IPC 命令直接并发响应，不阻塞在写锁 commandChain 队列后
       const isReadOnlyAutoSwitch = command === 'auto_switch_best' && parsed.execute !== true;
-      if (['maintenance_scan', 'maintenance_history', 'account_recovery_info', 'auto_switch_get', 'usage_snapshot_release', 'usage_events', 'usage_summary', 'api_pricing_get'].includes(command) || isReadOnlyAutoSwitch) {
+      if (['maintenance_scan', 'maintenance_history', 'account_recovery_info', 'auto_switch_get', 'usage_snapshot_release', 'usage_events', 'usage_summary', 'usage_ledger_review', 'api_pricing_get', 'pricing_sync_status'].includes(command) || isReadOnlyAutoSwitch) {
         (async () => {
-          if (command === 'maintenance_scan') { reply(await cacheMaintenance.scan()); return; }
+          if (command === 'pricing_sync_status') { await syncActiveOfficialModelsToUsageManager(); reply({ ok: true, status: await usageManager.getPricingSyncStatus() }); return; }
+          if (command === 'usage_ledger_review') { reply({ ok: true, review: await usageManager.ledgerReview() }); return; }
+          if (command === 'maintenance_scan') { reply(await cacheMaintenance.scan({ retentionDays: parsed.retentionDays })); return; }
           if (command === 'maintenance_history') { reply({ ok: true, snapshots: await cacheMaintenance.history() }); return; }
           if (command === 'account_recovery_info') { reply({ ok: true, ...await switchService.recoveryInfo() }); return; }
           if (command === 'auto_switch_get') { reply({ ok: true, config: await accountsManager.getAutoSwitchConfig() }); return; }
@@ -766,75 +882,22 @@ async function run() {
           if (command === 'usage_snapshot_release') { usageManager.releaseSnapshot(String(parsed.snapshotId ?? '')); reply({ ok: true }); return; }
           if (command === 'usage_events') {
             const period = ['today', '7d', '30d', 'all'].includes(String(parsed.period)) ? String(parsed.period) : 'today';
-            reply({ ok: true, ...await usageManager.getUsageEvents(period, String(parsed.query ?? ''), Number(parsed.offset), Number(parsed.limit), typeof parsed.snapshotId === 'string' ? parsed.snapshotId : undefined, parsed.pinSnapshot === true, Boolean(parsed.force)) });
+            const targetAccountId = typeof parsed.accountId === 'string' && parsed.accountId ? parsed.accountId : undefined;
+            if (targetAccountId) await syncActiveAccountToUsageManager().catch(() => {});
+            reply({ ok: true, ...await usageManager.getUsageEvents(period, String(parsed.query ?? ''), Number(parsed.offset), Number(parsed.limit), typeof parsed.snapshotId === 'string' ? parsed.snapshotId : undefined, parsed.pinSnapshot === true, Boolean(parsed.force), targetAccountId) });
             return;
           }
           if (command === 'usage_summary') {
             const force = Boolean(parsed.force);
-            const usage = await usageManager.getUsageSummary(force);
-            const periodKey = parsed.period === 'today' ? 'today' : parsed.period === '7d' ? 'last_7_days' : parsed.period === '30d' ? 'last_30_days' : 'all_time';
-            const p = (usage as any)[periodKey] ?? usage.all_time;
-            const byModel = p.by_model.map((m: any) => ({
-              model: m.model,
-              promptTokens: m.input_tokens,
-              candidatesTokens: m.output_tokens,
-              cachedTokens: m.cached_tokens,
-              cacheWriteTokens: m.cache_write_tokens ?? 0,
-              totalTokens: m.total_tokens,
-              requestCount: m.request_count,
-              estimatedUsd: m.estimated_usd,
-              priced: m.priced === true,
-              pricingKey: m.pricingKey, pricingStatus: m.pricingStatus, pricingProvenance: m.pricingProvenance,
-              input_tokens: m.input_tokens,
-              output_tokens: m.output_tokens,
-              cached_tokens: m.cached_tokens,
-              cache_write_tokens: m.cache_write_tokens ?? 0,
-              total_tokens: m.total_tokens,
-              request_count: m.request_count,
-              estimated_usd: m.estimated_usd,
-            }));
-            const cacheDenom = p.totals.input_tokens + p.totals.cached_tokens + (p.totals.cache_write_tokens ?? 0);
-            const cacheHitRate = cacheDenom > 0 ? Math.round((p.totals.cached_tokens / cacheDenom) * 1000) / 10 : 0;
-            const periodSummary = {
-              ...usage,
-              totalTokens: p.totals.total_tokens,
-              promptTokens: p.totals.input_tokens,
-              candidatesTokens: p.totals.output_tokens,
-              cachedTokens: p.totals.cached_tokens,
-              cacheWriteTokens: p.totals.cache_write_tokens ?? 0,
-              requestCount: p.totals.request_count,
-              estimatedUsd: p.estimated_usd,
-              cacheHitRate,
-              total_tokens: p.totals.total_tokens,
-              input_tokens: p.totals.input_tokens,
-              output_tokens: p.totals.output_tokens,
-              cached_tokens: p.totals.cached_tokens,
-              cache_write_tokens: p.totals.cache_write_tokens ?? 0,
-              request_count: p.totals.request_count,
-              estimated_usd: p.estimated_usd,
-              databasesScanned: usage.databases_scanned,
-              databasesDiscovered: usage.databases_discovered,
-              scanScopeDescription: usage.scan_scope_description,
-              pricedModels: p.priced_models ?? usage.priced_models ?? 0,
-              unpricedModels: p.unpriced_models ?? usage.unpriced_models ?? 0,
-              failedDatabasesCount: usage.failed_databases_count ?? 0,
-              skippedLargeRecords: usage.skipped_large_records ?? 0,
-              lastScannedAt: usage.generated_at ?? 0,
-              hasError: usage.has_error === true,
-              availability: usage.availability ?? 'complete',
-              unknownTimeRecords: usage.unknown_time_records ?? 0,
-              unknownTimeTokens: usage.unknown_time_tokens ?? 0,
-              databaseDiagnostics: usage.database_diagnostics ?? [],
-            };
-            const { today, last_7_days, last_30_days, all_time, daily_trends, today_hourly, ...selectedSummary } = periodSummary;
-            const days = parsed.period === 'today' ? 1 : parsed.period === '7d' ? 7 : parsed.period === '30d' ? 30 : null;
-            const selectedTrends = days ? usage.daily_trends.slice(-days) : usage.daily_trends;
-            reply({ ok: true, period: parsed.period ?? 'all', snapshotId: usage.snapshot_id,
-              summary: selectedSummary, byModel, models: byModel, dailyTrends: selectedTrends, todayHourly: parsed.period === 'today' ? usage.today_hourly : [] });
+            const targetAccountId = typeof parsed.accountId === 'string' && parsed.accountId ? parsed.accountId : undefined;
+            if (targetAccountId) await syncActiveAccountToUsageManager().catch(() => {});
+            const usage = await usageManager.getUsageSummary(force, targetAccountId);
+            reply(projectUsagePeriodSummary(usage, parsed.period));
             return;
           }
           if (command === 'api_pricing_get') {
-            const prices = await usageManager.getPricingTable();
+            await syncActiveOfficialModelsToUsageManager();
+            const prices = await usageManager.getActivePricingTable();
             reply({ ok: true, prices, pricingStatus: Object.fromEntries(Object.entries(prices).map(([k, v]) => [k, priceStatus(v)])) });
             return;
           }
@@ -844,9 +907,23 @@ async function run() {
       commandChain = commandChain.catch(() => {}).then(async () => {
         try {
           if(command==='shortcut_set'){if(!fixture)throw new Error('中英对照已移除');await controller.configureShortcut(parsed.enabled===true);reply({ok:true});return;}
-          if(command==='maintenance_clear'){reply(await cacheMaintenance.clear(parsed.token, parsed.selectedNames, { force: parsed.force === true }));return;}
+          if(command==='api_pricing_revalue_preview'){reply({ok:true,preview:await usageManager.previewRevalueHistory(parsed.mode === 'unpriced_only' ? 'unpriced_only' : 'force_all')});return;}
+          if(command==='api_pricing_revalue'){const mode = parsed.mode === 'unpriced_only' ? 'unpriced_only' : 'force_all';reply({ok:true,...await usageManager.revalueHistory(parsed.confirm===true, { mode, previewId: typeof parsed.previewId === 'string' ? parsed.previewId : undefined })});return;}
+          if(command==='api_pricing_revalue_rollback'){reply({ok:true,...await usageManager.restoreRevalueHistory(String(parsed.previewId ?? ''),parsed.confirm===true)});return;}
+          if(command==='pricing_sync_set'){await atomicJson(join(stateDir, 'pricing-preferences.json'), {enabled:parsed.enabled===true});usageManager.setAutoRemotePricingSync(parsed.enabled===true);reply({ok:true});return;}
+          if(command==='pricing_sync_check'){
+            if(parsed.feedUrl!==undefined&&typeof parsed.feedUrl!=='string')throw new Error('价格源地址无效');
+            await syncActiveOfficialModelsToUsageManager();
+            const res=await usageManager.syncRemotePricing(parsed.feedUrl,true);
+            const prices=await usageManager.getActivePricingTable();
+            const pricingStatus=Object.fromEntries(Object.entries(prices).map(([k,v])=>[k,priceStatus(v)]));
+            reply({ok:true,...res,prices,pricingStatus,status:await usageManager.getPricingSyncStatus()});
+            return;
+          }
+          if(command==='hud_set'){const nextHud=parsed.enabled!==false;await saveRuntimePreferences({hudEnabled:nextHud});await controller.configureHud(nextHud);await writeChain;reply({ok:true,status:controller.snapshot()});return;}
+          if(command==='maintenance_clear'){reply(await cacheMaintenance.clear(parsed.token, parsed.selectedNames));return;}
           if(command==='maintenance_restore'){reply(await cacheMaintenance.restore(parsed.snapshotId ?? parsed.id));return;}
-          if(command==='maintenance_preflight'){if(tasks.list().some(t=>t.state==='running'))throw new Error('请先等待当前任务完成，再执行维护');reply(await controller.maintenancePreflight());return;}
+          if(command==='maintenance_preflight'){if(tasks.list().some(t=>t.state==='running'))throw new Error('请先等待当前任务完成，再执行维护');if(await cacheMaintenance.hasRunningConversation())throw new Error('检测到正在执行的 Agent 会话任务，请先等待任务结束');reply(await controller.maintenancePreflight());return;}
           if(command==='metadata_scan_start'){const taskId=tasks.begin('deep-scan','读取插件与菜单',async(signal,_progress,commit)=>controller.metadataScan(signal,parsed.nativeMenus,commit));reply({ok:true,taskId});return;}
           if (command === 'account_save_current') {
             const acc = await accountsManager.saveCurrentAccount({ homeDir, appSupportDir });
@@ -877,21 +954,6 @@ async function run() {
             reply({ ok: true, accounts: reordered });
             return;
           }
-          if (command === 'account_export') {
-            // 默认脱敏；只有用户在原生端明确确认“包含长期凭据”后才导出 refresh_token。
-            const exp = await accountsManager.exportAccounts(parsed.ids, { confirm: parsed.confirm === true });
-            reply({ ok: true, export: exp, data: exp });
-            return;
-          }
-          if (command === 'account_import') {
-            const payload = parsed.data ?? parsed.export;
-            if (payload && typeof payload === 'object' && payload.tokens_included === false) {
-              throw new Error('该备份为脱敏摘要，不含登录凭据，无法恢复账号；请重新导出并选择“包含凭据导出”');
-            }
-            const res = await accountsManager.importAccounts(payload);
-            reply({ ok: true, ...res });
-            return;
-          }
           if (command === 'account_switch') {
             const targetId = String(parsed.id || '');
             if (parsed.autoRefreshToken === true && targetId) {
@@ -903,15 +965,18 @@ async function run() {
                 }
               }
             }
+            await usageManager.captureCurrentActiveSessions().catch(() => {});
             const result = await switchService.switchAccount(targetId, parsed.target || 'all');
+            await syncActiveAccountToUsageManager(true).catch(() => {});
+            usageManager.invalidateCache();
             reply({ ok: true, ...result }); return;
           }
           if(command==='account_recovery_clear'){if(parsed.confirm!==true)throw new Error('请先确认清除恢复凭据');reply({ok:true,...await switchService.clearRecovery(String(parsed.digest))});return;}
           if (command === 'account_switch_rollback') {
-            reply({ ok: true, ...await switchService.rollback() }); return;
-          }
-          if (command === 'account_sync_external') {
-            reply({ ok: true, ...await accountsManager.syncFromExternalAgySwitch() }); return;
+            const result = await switchService.rollback();
+            await syncActiveAccountToUsageManager(true).catch(() => {});
+            usageManager.invalidateCache();
+            reply({ ok: true, ...result }); return;
           }
           if (command === 'account_oauth_begin') { reply({ ok: true, ...await accountLogin.begin() }); return; }
           if (command === 'account_oauth_status') { reply({ ok: true, ...accountLogin.status(String(parsed.id || '')) }); return; }
@@ -941,7 +1006,7 @@ async function run() {
             });
             reply({ ok: true, taskId }); return;
           }
-          // ---- Phase 1 自动轮换与配额 IPC ----
+          // ---- 备用账号推荐与配额 IPC ----
           if (command === 'auto_switch_set') {
             reply({ ok: true, config: await accountsManager.setAutoSwitchConfig(parsed.config ?? {}) });
             return;
@@ -960,7 +1025,10 @@ async function run() {
               reason: best.reason,
             };
             if (wantsExecute && best.shouldSwitch && best.bestCandidate) {
+              await usageManager.captureCurrentActiveSessions().catch(() => {});
               const result = await switchService.switchAccount(best.bestCandidate.id, 'all');
+              await syncActiveAccountToUsageManager(true).catch(() => {});
+              usageManager.invalidateCache();
               reply({ ok: true, ...projected, account: projected.bestCandidate, executed: true, preview: false,
                 switchResult: { switchedTo: result.switchedTo, message: result.message }, message: best.reason });
               return;
@@ -988,8 +1056,8 @@ async function run() {
               staleAccounts: accounts.filter((account: any) => (account?.quota?.stale_groups?.length ?? 0) > 0).length });
             return;
           }
-          if (command === 'pause' || command === 'restore') { await atomicJson(join(stateDir,'runtime-preferences.json'),{translationEnabled:false});await tasks.stop();await controller.pause(); }
-          else if (command === 'resume' || command === 'reapply') {await atomicJson(join(stateDir,'runtime-preferences.json'),{translationEnabled:true});await controller.resume();}
+          if (command === 'pause' || command === 'restore') { await saveRuntimePreferences({translationEnabled:false});await tasks.stop();await controller.pause(); }
+          else if (command === 'resume' || command === 'reapply') {await saveRuntimePreferences({translationEnabled:true});await controller.resume();}
           else if (command === 'toggle') {if(!fixture)throw new Error('中英对照已移除');await controller.toggleLanguage();}
           else if (command === 'reload') await store.reload();
           else if (command === 'stop') { await accountLogin.close(); await tasks.stop();store.close(); await controller.stop(); stopping = true; }
@@ -1009,9 +1077,14 @@ async function run() {
   process.off('SIGTERM', earlySignalExit); process.off('SIGINT', earlySignalExit);
   process.on('SIGTERM', () => void stop()); process.on('SIGINT', () => void stop());
   // A single bad payload must not take the whole localisation helper down; log it and keep serving.
-  process.on('uncaughtException', error => { console.error(`[GravityBox] ${error.stack ?? error.message}`); if (stopping) void stop(1); });
-  process.on('unhandledRejection', reason => { console.error(`[GravityBox] ${reason instanceof Error ? reason.message : '后台任务异常'}`); });
+  process.on('uncaughtException', error => { console.error(`[GravityBox] ${sanitizeError(error?.stack ?? error?.message ?? '未捕获异常')}`); if (stopping) void stop(1); });
+  process.on('unhandledRejection', reason => { console.error(`[GravityBox] ${reason instanceof Error ? sanitizeError(reason.message) : '后台任务异常'}`); });
   await controller.start();
+  void syncActiveAccountToUsageManager(true).catch(() => {});
+  } catch (error) {
+    await backendLease?.release().catch(() => {});
+    throw error;
+  }
 }
 // 仅作为入口脚本直接运行时启动助手；被测试/工具 import 时只暴露纯函数，避免误启动真实 socket。
 // 同路径与 realpath 双判定：经由符号链接路径启动（npm start/打包安装目录）也必须正常运行。
@@ -1023,5 +1096,5 @@ function isDirectEntry(): boolean {
   try { return realpathSync(entry) === realpathSync(modulePath); } catch { return false; }
 }
 if (process.env.GRAVITYBOX_IMPORT_ONLY !== '1' && isDirectEntry()) {
-  run().catch(async error => { await backendLease?.release(); console.error(`[GravityBox] ${(error as Error).message}`); process.exitCode = 1; });
+  run().catch(error => { console.error(`[GravityBox] ${sanitizeError((error as Error)?.message ?? '启动失败')}`); process.exitCode = 1; });
 }

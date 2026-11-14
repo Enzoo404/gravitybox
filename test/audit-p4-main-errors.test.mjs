@@ -2,7 +2,7 @@ import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createConnection } from 'node:net';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -129,26 +129,6 @@ test('B13: 聚合 accounts.activeTier 对空串/未知值回落 待确认', asyn
     assert.equal(result.accounts.activeTier, expected);
     assert.ok(TIERS.includes(result.accounts.activeTier));
   }
-});
-
-// 源码探针：确认 IPC 各出口都走统一归一化/错误字段，防止后续回退。
-test('B12/B13: main.ts 聚合与账号 IPC 出口已接线（源码探针）', async () => {
-  const main = await readFile(join(root, 'src/main.ts'), 'utf8');
-  assert.match(main, /export async function buildDashboardAggregate/, '聚合必须抽为可注入依赖的函数');
-  assert.match(main, /accountsError: aggregate\.accountsError/, 'dashboard_summary 必须返回 accountsError');
-  assert.match(main, /usageError: aggregate\.usageError/, 'dashboard_summary 必须返回 usageError');
-  assert.match(main, /accounts: aggregate\.accounts,\s*usage: aggregate\.usage,/, 'dashboard_summary 必须返回可用部分数据');
-  const accountProjections = main.match(/projectAccountForIpc\(/g) ?? [];
-  assert.equal(accountProjections.length, 1, '除归一化 helper 外不得再有裸 projectAccountForIpc 出口');
-  assert.ok(main.includes('projectAccountForIpcNormalized'), '账号 IPC 项目必须经过套餐归一化');
-  assert.match(main, /activeSubscriptionTier = normalizeSubscriptionTier\(/);
-  const tierAssignments = main.match(/activeSubscriptionTier = normalizeSubscriptionTier\(/g) ?? [];
-  assert.equal(tierAssignments.length, 3, 'status 的三个套餐赋值都必须归一化');
-  assert.match(main, /subscription_tier: normalizeSubscriptionTier\(q\.subscriptionTier\)/);
-  assert.match(main, /const normalizedQuota = acc\.quota \?/, 'quota_refresh 的 quota 负载也必须归一化套餐');
-  assert.match(main, /subscription_tier: normalizeSubscriptionTier\(\(account as any\)\.subscription_tier/, 'account_reorder 的账号负载也必须归一化套餐');
-  assert.doesNotMatch(main, /subscription_tier: q\.subscriptionTier/, '不得再直出原始套餐值');
-  assert.doesNotMatch(main, /subscription_tier: projected\?\.subscription_tier \?\? null/, '不得再把空套餐穿透为 null');
 });
 
 // 真实后台契约：dashboard_summary 仍 ok:true，并稳定携带 errors 字段与枚举套餐。

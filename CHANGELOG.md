@@ -6,6 +6,25 @@
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-14
+
+### Added
+- **In-IDE Telemetry HUD**：上线 Antigravity 输入框下方三联遥测胶囊（会话概览 / Token 消耗 / 上下文水位）及独立悬浮弹层；支持实时区分模型思考（实心蓝）与工具执行（呼吸蓝）状态、TTFT / 真实 TPS / 本轮用时与模型及工具耗时拆分、高对比度进度条及一键中英文双语独立开关。
+- **HUD Popover Redesign**：会话统计卡片引入虚线分隔总平均与本轮实时数据，新增「最近一步 TTFT」与「最近一步 TPS」并统一「本轮用时」等字段为固定占位格式。
+- **Storage & Maintenance v2**：新增存储与维护 v2（三分类缓存扫描、废纸篓软删除、7 天恢复点管理及账本数据维护），默认隔离核心 `state.vscdb` 与凭据。
+- **Pricing / Usage**：新增模型定价同步明细弹窗（`PricingSyncSheetController`），支持查看各官方模型时序定价、执行公开定价表（GitHub Raw / jsDelivr）同步与历史用量账本重估预览/应用。
+- **i18n / Dictionary**：新增对 Google Antigravity `2.31.0`、`2.31.2` 与 `2.32.1` 官方版本的指纹登记、文案抽取与分层词典适配（现已覆盖 `2.23.0` ~ `2.32.1` 全系列受支持版本）。
+- **Packaging / Compliance**：DMG 安装包内补充随附项目根 `LICENSE` 副本并纳入构建完整性校验清单。
+
+### Changed
+- **About & Updater UI**：移除独立更新弹窗（`UpdateSheetController`），将自动更新开关、检查更新、安装提示与版本信息内联整合至「关于 (`⌘5`)」侧栏页面；主窗口侧栏统一精简为 5 页交互结构并同步深浅色实机截图资产。
+- **Usage / Model Normalization**：统一用量看板、账本聚合与账本重估（`revalueLedger`）对 `MODEL_PLACEHOLDER_M667/668/669`、推理强度后缀（`high` / `medium` / `low`）及双阶段 Orchestrator / Worker 模型的原始机器学习模型名解析。
+
+### Fixed
+- **HUD / Duration & Clocks**：使用物理时间区间并集去重并发工具与并行子智能体的耗时统计，隔离历史轮次未闭合步与 `status=6/7` 终止态步对 `inFlight` 时长与活跃计数的污染，并将前端走表速率严格封顶为 1x 物理时间，解决并发工具/子智能体期间计时倍速快进的问题；保留真实活跃长耗时工具的占位 `end` 兼容。
+- **HUD / State Recovery**：修复 HUD 在 `unavailable` / `loading` 状态恢复为 `ready` 后 `#val-tps-latest` 残留 `hidden` 导致永久不可见的缺陷，确保固定占位值正确重置为 `—`。
+- **Accounts / Switch & Quota**：修复切号时 LaunchServices 退出等待与 Antigravity 重启核验重试逻辑；隔离菜单栏配额警告展示状态；将 Node 后端最大老生代内存限制提升至 256MB 以避免超大历史账本分析发生 OOM。
+
 ## [1.0.5] - 2026-11-09
 
 ### Added
@@ -18,7 +37,7 @@
 - **Accounts / State Sync**：修复 `watchState()` 提前更新 `statusValue.accountsRevision` 与 `liveAccountEmail` 导致后续 `refresh()` 漏判账号变更的问题；修复运行未保存账号时清空已配置 `activeId` 导致主窗口与菜单栏状态分裂的问题；统一 `dashboard_summary`、`status` 与 `account_list` 对本机实时配额与已保存套餐/分组的合并逻辑。
 - **Accounts / Quota**：仅在存在未验证配额数据时归档 `quota-rejected` 快照并限制保留最近 20 份记录，避免定时的重复 403 错误导致目录无限堆积；在 `account_switch_preflight` 中同步检查 `Antigravity - Insiders.app` 运行态，与切号守卫保持一致。
 - **i18n / Controller**：修复后台界面包探测（`inspectBundleInBackground`）在用户暂停汉化后完成时把状态误覆写回 `connected` / `adaptive` 的竞态；为窗口本地服务尚未就绪的场景增加有界延迟重同步，并消除初次注入失败时的重复错误追加；为原生 `setTranslationEnabled` 增加请求代数保护，防止快速连续拨动开关时旧回调覆写新状态。
-- **i18n / Engine**：移除 `injectMicroPatch` 对 `[data-agzh-loc="1"], [data-agzh-ui]` 注入的硬编码 `font-family` 与 `-webkit-font-smoothing: antialiased` 覆盖规则，使所有汉化节点自然继承宿主的 `--font-family` 与 `--editor-font-family` 设置，并消除查看用量弹窗异步刷新前后因 GPU 合成图层切换导致的字体先粗后细跳变。
+- **i18n / Engine**：移除 `injectMicroPatch` 对 `[data-gravitybox-loc="1"], [data-gravitybox-ui]` 注入的硬编码 `font-family` 与 `-webkit-font-smoothing: antialiased` 覆盖规则，使所有汉化节点自然继承宿主的 `--font-family` 与 `--editor-font-family` 设置，并消除查看用量弹窗异步刷新前后因 GPU 合成图层切换导致的字体先粗后细跳变。
 - **SQLite / IPC**：为 `SqliteReadSnapshot` 空闲 Worker 池增加 `exit` 与 `error` 守护监听，并在 `close()` 时清理在途挂起请求与定时器，防止复用已退出 Worker 导致 8 秒超时或未捕获异常；完善 `IdempotencyStore` 超时回收与容量淘汰策略，补齐 `main.ts` 早期信号锁释放与 `dashboard_summary` 的 `skippedLargeRecords` 字段透传。
 - **UI / Layout**：修复菜单栏配额卡片将未标明周期的 Gemini 4 Argon 默认显示为“每周”的问题；统一主窗口账号页与菜单栏账号页中“已选记录”徽章为 `Design.inactivePill`；修复菜单栏配额空态按钮“前往账号页添加…”跳往总览页的问题；优化 880pt 最小窗口宽度下 `QuotaBarView` 间距与重置倒计时布局、弹窗头部副标题换行抗压缩及多级 Sheet 关闭顺序。
 
@@ -117,7 +136,8 @@
 ### Fixed
 - **Native UI**：保持菜单栏状态图标在不同翻译开关状态下的不透明度一致（`b9921e8`，已包含于 1.0.0）。
 
-[Unreleased]: https://github.com/Enzoo404/gravitybox/compare/v1.0.5...HEAD
+[Unreleased]: https://github.com/Enzoo404/gravitybox/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/Enzoo404/gravitybox/compare/v1.0.5...v1.1.0
 [1.0.5]: https://github.com/Enzoo404/gravitybox/compare/v1.0.4...v1.0.5
 [1.0.4]: https://github.com/Enzoo404/gravitybox/compare/v1.0.3...v1.0.4
 [1.0.3]: https://github.com/Enzoo404/gravitybox/compare/v1.0.2...v1.0.3

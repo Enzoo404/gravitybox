@@ -14,6 +14,19 @@ enum PerformanceSignpost {
 
 // The approved standalone preview is the visual contract. Native system surfaces keep OS behavior.
 enum Design {
+    /// Density roles, not a mandate to make menu cards and full pages equally spacious.
+    enum Spacing {
+        static let compact: CGFloat = 6
+        static let standard: CGFloat = 12
+        static let roomy: CGFloat = 14
+        static let page: CGFloat = 10
+    }
+    enum Radius {
+        static let card: CGFloat = 14
+        static let medium: CGFloat = 12
+        static let popover: CGFloat = 11
+        static let compact: CGFloat = 10
+    }
     static func shouldAnimate(in view: NSView?) -> Bool {
         #if NATIVE_UI_TEST
         return false
@@ -82,6 +95,11 @@ enum Design {
         ctx.restoreGState()
     }
     static let blue = color(0x0064DC, 0x0A84FF)
+    static let activeBlue = NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(srgbRed: 0.38, green: 0.68, blue: 1.0, alpha: 1.0)
+            : blue
+    }
     static let inactivePill = color(0x4A638C, 0x8CA6D6)
     static let inactivePillFill = NSColor(name: nil) {
         $0.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
@@ -225,6 +243,18 @@ enum Design {
         cachedBrandMark = result
         return result
     }
+    static func popUpOrigin(below anchor: NSView, spacing: CGFloat = 6) -> NSPoint {
+        let yOffset = anchor.isFlipped ? (anchor.bounds.maxY + spacing) : (anchor.bounds.minY - spacing)
+        return NSPoint(x: 0, y: yOffset)
+    }
+
+    static func popUpMenu(_ menu: NSMenu, below anchor: NSView, spacing: CGFloat = 6, matchAnchorWidth: Bool = false) {
+        if matchAnchorWidth {
+            menu.minimumWidth = max(menu.minimumWidth, anchor.bounds.width)
+        }
+        menu.popUp(positioning: nil, at: popUpOrigin(below: anchor, spacing: spacing), in: anchor)
+    }
+
     static func applyControls(_ view: NSView) {
         if let popup = view as? NSPopUpButton {
             if !(popup.cell is DesignPopUpCell) {
@@ -288,6 +318,7 @@ enum Design {
 final class DesignMotion: NSObject {
     enum Curve {
         case hover      // 130ms cubic-out
+        case press      // 140ms snappy critically-damped tactile press/release
         case slide      // 180ms spring-out
         case expand     // 200ms ease-in-out
         case sweep      // 260ms cubic-out
@@ -297,6 +328,7 @@ final class DesignMotion: NSObject {
         var duration: CFTimeInterval {
             switch self {
             case .hover: return 0.13
+            case .press: return 0.14
             case .slide: return 0.18
             case .expand: return 0.20
             case .sweep: return 0.26
@@ -308,7 +340,7 @@ final class DesignMotion: NSObject {
         func evaluate(_ t: Double) -> CGFloat {
             let p = min(1.0, max(0.0, t))
             switch self {
-            case .hover, .sweep:
+            case .hover, .press, .sweep:
                 return CGFloat(1.0 - pow(1.0 - p, 3.0))
             case .slide:
                 return CGFloat(1.0 - pow(1.0 - p, 3.4))
@@ -423,12 +455,21 @@ class DesignButton: NSButton {
     private(set) var hoverProgress: CGFloat = 0
     private(set) var pressProgress: CGFloat = 0
     private var lastHighlighted = false
+    var isQuietAccessory: Bool = false {
+        didSet {
+            guard oldValue != isQuietAccessory else { return }
+            invalidateIntrinsicContentSize()
+            needsDisplay = true
+        }
+    }
+
+    var isActivitySpinning: Bool { showsSpinner }
 
     var hovered = false {
         didSet {
             guard oldValue != hovered else { return }
             let target: CGFloat = hovered ? 1.0 : 0.0
-            hoverMotion.animate(in: self, from: hoverProgress, to: target, curve: .spring, threshold: 0.02) { [weak self] val in
+            hoverMotion.animate(in: self, from: hoverProgress, to: target, curve: .hover, threshold: 0.02) { [weak self] val in
                 guard let self else { return }
                 self.hoverProgress = val
                 self.needsDisplay = true
@@ -440,7 +481,7 @@ class DesignButton: NSButton {
             guard isHighlighted != lastHighlighted else { return }
             lastHighlighted = isHighlighted
             let target: CGFloat = isHighlighted ? 1.0 : 0.0
-            pressMotion.animate(in: self, from: pressProgress, to: target, curve: .spring, threshold: 0.01) { [weak self] val in
+            pressMotion.animate(in: self, from: pressProgress, to: target, curve: .press, threshold: 0.01) { [weak self] val in
                 guard let self else { return }
                 self.pressProgress = val
                 self.needsDisplay = true
@@ -544,11 +585,12 @@ class DesignButton: NSButton {
 
     override var intrinsicContentSize: NSSize {
         if title.isEmpty, image != nil {
-            return NSSize(width: 30, height: 28)
+            return NSSize(width: isQuietAccessory ? 26 : 30, height: isQuietAccessory ? 26 : 28)
         }
         let width = (title as NSString).size(withAttributes: [.font: font ?? NSFont.systemFont(ofSize: 12, weight: .medium)]).width
         let iconExtra: CGFloat = (image != nil || showsSpinner) ? 18 : 0
-        return NSSize(width: ceil(width) + 24 + iconExtra, height: 28)
+        let pad: CGFloat = isQuietAccessory ? 16 : 24
+        return NSSize(width: ceil(width) + pad + iconExtra, height: 28)
     }
 
     func drawButtonChromeAndLabel(spinnerLeftInset: CGFloat? = nil) {
@@ -556,10 +598,10 @@ class DesignButton: NSButton {
         let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         let inPopover = Design.isInPopover(self)
         let hp = isEnabled ? hoverProgress : 0
-        let pp = isEnabled ? (isHighlighted ? max(pressProgress, 0.85) : pressProgress) : 0
+        let pp = isHighlighted ? max(pressProgress, 0.72) : pressProgress
 
-        // Q弹缩放：悬停时微微浮起 (+1.5%)，按压时弹性内缩 (-4.5%)，松手时沿 .spring 阻尼过冲回弹
-        let scale: CGFloat = isEnabled ? (1.0 + 0.015 * hp - 0.048 * pp) : 1.0
+        // 统一轻快按压回弹：悬停不越界放大、按压优雅内缩 2.5%、松手沿 140ms 阻尼干脆回弹（异步禁用态亦不截断释放动画）
+        let scale: CGFloat = 1.0 - 0.025 * pp
         let gctx = NSGraphicsContext.current
         gctx?.saveGraphicsState()
         if abs(scale - 1.0) > 0.001, let cg = gctx?.cgContext {
@@ -575,7 +617,7 @@ class DesignButton: NSButton {
         let path = NSBezierPath(roundedRect: rect, xRadius: cornerR, yRadius: cornerR)
 
         if primary {
-            let activeLook = isEnabled || showsSpinner
+            let activeLook = isEnabled || isActivitySpinning
             let topBlue = activeLook
                 ? Design.color(0x1A82FF, 0x389BFF).withAlphaComponent(1.0 - 0.12 * pp + 0.04 * hp)
                 : Design.color(0x4CA0FF, 0x2B7AE0)
@@ -624,11 +666,20 @@ class DesignButton: NSButton {
             if isEnabled {
                 Design.drawSpecularBevel(in: rect, cornerRadius: cornerR, isDark: isDark)
             }
+        } else if isQuietAccessory {
+            let activeHighlight = max(hp, pp)
+            if isEnabled && activeHighlight > 0.01 {
+                let fill = isDark
+                    ? NSColor.white.withAlphaComponent(0.10 * hp + 0.06 * pp)
+                    : NSColor.black.withAlphaComponent(0.055 * hp + 0.04 * pp)
+                fill.setFill()
+                NSBezierPath(roundedRect: rect.insetBy(dx: 0.5, dy: 0.5), xRadius: 7, yRadius: 7).fill()
+            }
         } else {
             // 主窗口轻玻璃立体胶囊按钮（与左侧毛玻璃导航栏和菜单栏质感拉齐）
-            let enableScale: CGFloat = isEnabled ? 1.0 : 0.45
+            let enableScale: CGFloat = isEnabled ? 1.0 : (isActivitySpinning ? 0.88 : 0.45)
             NSGraphicsContext.saveGraphicsState()
-            if isEnabled {
+            if isEnabled || isActivitySpinning {
                 let btnShadow = NSShadow()
                 btnShadow.shadowColor = isDark
                     ? NSColor.black.withAlphaComponent(0.32 * (1.0 - 0.5 * pp))
@@ -675,8 +726,9 @@ class DesignButton: NSButton {
             }
         }
 
-        let fgAlpha: CGFloat = primary ? ((isEnabled || showsSpinner) ? 1.0 : 0.88) : (isEnabled ? 1.0 : 0.42)
-        let fgColor = (primary ? NSColor.white : Design.primary).withAlphaComponent(fgAlpha)
+        let fgAlpha: CGFloat = primary ? ((isEnabled || isActivitySpinning) ? 1.0 : 0.88) : (isEnabled ? 1.0 : (isActivitySpinning ? 0.86 : 0.42))
+        let baseFg: NSColor = primary ? .white : (isQuietAccessory ? (hp > 0.25 ? Design.primary : Design.secondary) : Design.primary)
+        let fgColor = baseFg.withAlphaComponent(fgAlpha)
         let attrs: [NSAttributedString.Key: Any] = [
             .font: font ?? NSFont.systemFont(ofSize: 12, weight: .medium),
             .foregroundColor: fgColor
@@ -857,7 +909,7 @@ final class MetricCardBox: NSBox {
     override var focusRingMaskBounds: NSRect { bounds }
 }
 
-// MARK: - A01: KPI detail line
+// MARK: - KPI detail line
 // A real-data detail string ("累计 Token 用量 1.1B（统计 30/331 库）· 部分库异常") must not
 // contribute to the window's minimum width. This label therefore has no intrinsic width:
 // it fills the card, truncates with an ellipsis, and keeps the full copy in its tooltip
@@ -870,7 +922,7 @@ final class MetricDetailField: NSTextField {
         get { super.stringValue }
         set {
             super.stringValue = newValue
-            toolTip = newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : newValue
+            toolTip = nil
         }
     }
     func configureAsMetricDetail() {
@@ -893,7 +945,7 @@ final class MetricDetailField: NSTextField {
 func metricDetail(_ value: String) -> MetricDetailField {
     let field = MetricDetailField(labelWithString: value)
     field.configureAsMetricDetail()
-    field.toolTip = value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : value
+    field.toolTip = nil
     return field
 }
 
@@ -901,15 +953,13 @@ func compactMetric(_ title: String, value: NSTextField, detail: NSTextField, act
     value.font = .monospacedDigitSystemFont(ofSize: 26, weight: .bold)
     detail.font = .systemFont(ofSize: 11)
     detail.textColor = Design.secondary
-    // A01: never let the detail copy drive the card/window width, even when a caller passes a
-    // plain NSTextField. Truncate with an ellipsis and keep the full copy as a tooltip.
     detail.maximumNumberOfLines = 2
     detail.lineBreakMode = .byWordWrapping
     detail.cell?.wraps = true
     detail.cell?.isScrollable = false
     detail.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     detail.setContentHuggingPriority(.defaultLow, for: .horizontal)
-    if detail.toolTip == nil || detail.toolTip?.isEmpty == true { detail.toolTip = detail.stringValue }
+    detail.toolTip = nil
 
     let (symbolName, badgeTint): (String, NSColor) = {
         if title.contains("Token") {
@@ -974,7 +1024,7 @@ func compactMetric(_ title: String, value: NSTextField, detail: NSTextField, act
     card.chevronView = chevron
     card.boxType = .custom
     card.borderWidth = 0.5
-    card.cornerRadius = 14
+    card.cornerRadius = Design.Radius.card
     card.fillColor = Design.card
     card.borderColor = Design.border
     card.shadow = Design.cardShadow()
@@ -1005,140 +1055,29 @@ func compactMetric(_ title: String, value: NSTextField, detail: NSTextField, act
     return card
 }
 
-// A quiet menu accessory: neutral icon, no persistent border, no blue capsule pill.
-final class MenuRefreshButton: NSButton {
-    let caption = text("刷新配额", size: 11, weight: .medium, color: Design.secondary)
-    let refreshIcon = symbol("arrow.clockwise", size: 12, color: Design.secondary)
-    let spinner = NSProgressIndicator()
-    private(set) var lastError: String = ""
-    private var hoverTracking: NSTrackingArea?
-    private var appliedState: (busy: Bool, available: Bool, error: String)?
-    private let hoverMotion = DesignMotion()
-    private var hoverProgress: CGFloat = 0
-    override var allowsVibrancy: Bool { false }
-    var hovered = false {
-        didSet {
-            guard oldValue != hovered else { return }
-            hoverMotion.animate(in: self, from: hoverProgress, to: hovered ? 1.0 : 0.0, curve: .hover, threshold: 0.05) { [weak self] val in
-                self?.hoverProgress = val
-                self?.needsDisplay = true
-            }
-        }
-    }
-    override var intrinsicContentSize: NSSize { NSSize(width: 26, height: 26) }
-    init(target: AnyObject?, action: Selector) {
-        super.init(frame: .zero)
-        title = "刷新配额"; self.target = target; self.action = action
-        bezelStyle = .inline; isBordered = false; focusRingType = .none; setButtonType(.momentaryChange)
-        setAccessibilityLabel("刷新配额"); toolTip = nil
-        caption.setAccessibilityElement(false); refreshIcon.setAccessibilityElement(false)
-        caption.isHidden = true
-        spinner.style = .spinning; spinner.controlSize = .small; spinner.isDisplayedWhenStopped = false
-        spinner.translatesAutoresizingMaskIntoConstraints = false; spinner.isHidden = true
-        NSLayoutConstraint.activate([spinner.widthAnchor.constraint(equalToConstant: 14), spinner.heightAnchor.constraint(equalToConstant: 14)])
-        let contents = horizontal([refreshIcon, spinner], spacing: 0)
-        addSubview(contents); contents.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([contents.centerXAnchor.constraint(equalTo: centerXAnchor), contents.centerYAnchor.constraint(equalTo: centerYAnchor)])
-    }
-    required init?(coder: NSCoder) { fatalError() }
-    override func hitTest(_ point: NSPoint) -> NSView? { super.hitTest(point) == nil ? nil : self }
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let area = hoverTracking { removeTrackingArea(area) }
-        let area = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self)
-        hoverTracking = area; addTrackingArea(area)
-    }
-    func setRefreshState(busy: Bool, available: Bool, error: String?) {
-        let failure = error?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if let prev = appliedState, prev.busy == busy && prev.available == available && prev.error == failure {
-            return
-        }
-        appliedState = (busy: busy, available: available, error: failure)
-        isEnabled = available && !busy
-        refreshIcon.isHidden = busy
-        if spinner.isHidden != !busy {
-            spinner.isHidden = !busy
-            if busy { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
-        }
-        lastError = failure
-        caption.stringValue = busy ? "刷新中…" : (failure.isEmpty ? "刷新配额" : "刷新失败")
-        toolTip = nil
-        setAccessibilityLabel(busy ? "刷新配额，刷新中" : (failure.isEmpty ? "刷新配额" : "刷新配额，上次刷新失败"))
-        setAccessibilityHelp(busy ? "正在刷新配额" : (failure.isEmpty ? "刷新所有账号的配额" : "刷新未完成：" + failure))
-        needsDisplay = true
-    }
-    override var wantsDefaultClipping: Bool { true }
-    override func mouseEntered(with event: NSEvent) { hovered = true }
-    override func mouseExited(with event: NSEvent) { hovered = false }
-    override func draw(_ dirtyRect: NSRect) {
-        let focused = window?.firstResponder === self
-        let hp = isEnabled ? max(hoverProgress, (isHighlighted || focused) ? 1.0 : 0.0) : 0.0
-        if hp > 0.02 {
-            let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            let fill = isDark ? NSColor.white.withAlphaComponent(0.12 * hp) : NSColor.black.withAlphaComponent(0.06 * hp)
-            fill.setFill()
-            NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: 6, yRadius: 6).fill()
-        }
-        let busy = !spinner.isHidden
-        let tint = busy ? Design.secondary : (isEnabled ? (hp > 0.5 ? Design.blue : Design.secondary) : Design.secondary.withAlphaComponent(0.4))
-        caption.textColor = tint; refreshIcon.contentTintColor = tint
-    }
-}
-
-final class MenuQuotaView: NSView {
-    let card: MenuStatusCard
-    let label: NSTextField
-    var refreshButton: MenuRefreshButton { card.refreshButton }
-    let textInset: CGFloat
-    weak var assistant: Assistant?
-
-    // Standard menu-item cells start inside the menu's 4pt content inset.
-    static func titleInset(alignmentItem: NSMenuItem?) -> CGFloat {
-        let cell = NSMenuItemCell(textCell: alignmentItem?.title ?? "界面汉化")
-        cell.menuItem = alignmentItem ?? NSMenuItem(title: "界面汉化", action: nil, keyEquivalent: "")
-        cell.calcSize()
-        return cell.titleRect(forBounds: NSRect(x: 4, y: 0, width: 422, height: 32)).minX
-    }
-
-    init(target: Assistant, account: [String: Any]?, placeholder: String = "尚未保存账号", enabled: Bool) {
-        self.assistant = target
-        self.card = MenuStatusCard(target: target, account: account, placeholder: placeholder, enabled: enabled)
-        let quota = QuotaPresentation.menuQuotaText(account ?? [:])
-        self.label = text(quota.isEmpty ? placeholder : quota, size: 12, color: Design.secondary)
-        self.textInset = Self.titleInset(alignmentItem: nil)
-        super.init(frame: NSRect(x: 0, y: 0, width: MenuStatusCard.cardWidth, height: card.frame.height))
-        autoresizingMask = [.width]
-        label.font = .menuFont(ofSize: 12); label.lineBreakMode = .byTruncatingTail
-        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        label.toolTip = nil
-        label.isHidden = true
-        addSubview(card); pin(card, to: self)
-        addSubview(label)
-    }
-
-    required init?(coder: NSCoder) { fatalError() }
-
-    override var intrinsicContentSize: NSSize {
-        card.intrinsicContentSize
-    }
-
-    func apply(account: [String: Any]?, placeholder: String = "尚未保存账号", available: Bool? = nil) {
-        card.apply(account: account, placeholder: placeholder)
-        if let available {
-            card.setRefreshState(busy: assistant?.quotaRefreshing == true, available: available, error: assistant?.quotaRefreshError)
-        }
-        let quota = QuotaPresentation.menuQuotaText(account ?? [:])
-        label.stringValue = quota.isEmpty ? placeholder : quota
-        frame.size.height = card.frame.height
-        invalidateIntrinsicContentSize()
-    }
-
-    @objc func refreshPressed() {
-        card.refreshPressed()
-    }
-}
+// Legacy NSMenu menu quota components retired in favor of MenuPanelController.
 
 final class DesignPopUpCell: NSPopUpButtonCell {
+    private func presentMenuBelow(_ controlView: NSView) {
+        guard isEnabled, let menu, !menu.items.isEmpty else { return }
+        synchronizeTitleAndSelectedItem()
+        isHighlighted = true
+        controlView.needsDisplay = true
+        Design.popUpMenu(menu, below: controlView, matchAnchorWidth: true)
+        isHighlighted = false
+        controlView.needsDisplay = true
+    }
+
+    override func trackMouse(with event: NSEvent, in cellFrame: NSRect, of controlView: NSView, untilMouseUp flag: Bool) -> Bool {
+        guard isEnabled else { return false }
+        presentMenuBelow(controlView)
+        return true
+    }
+
+    override func performClick(withFrame cellFrame: NSRect, in controlView: NSView) {
+        presentMenuBelow(controlView)
+    }
+
     override func draw(withFrame cellFrame: NSRect, in controlView: NSView) {
         let focused = controlView.window?.firstResponder === controlView
         let insetRect = cellFrame.insetBy(dx: 0.5, dy: 0.5)
@@ -1296,6 +1235,7 @@ final class QuotaRefreshButton: DesignButton {
     var localBusy = false
     var lastError: String?
     private var appliedDisplayState: (busy: Bool, available: Bool, error: String)?
+    override var isActivitySpinning: Bool { !spinner.isHidden }
     override var intrinsicContentSize: NSSize { NSSize(width: 88, height: 28) }
     init(target: AnyObject?, action: Selector) {
         super.init(frame: .zero); title = "刷新配额"; self.target = target; self.action = action
@@ -1330,14 +1270,7 @@ final class QuotaRefreshButton: DesignButton {
             spinner.isHidden = !busy
             if busy { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
         }
-        let isCardButton = !(identifier?.rawValue.isEmpty ?? true)
-        if !normalizedError.isEmpty {
-            toolTip = "刷新未完成：" + normalizedError
-        } else if isCardButton {
-            toolTip = "仅刷新此账号配额"
-        } else {
-            toolTip = nil
-        }
+        toolTip = nil
         setAccessibilityHelp(!normalizedError.isEmpty ? ("刷新未完成：" + normalizedError) : (busy ? "正在刷新配额" : "刷新账号配额"))
         needsDisplay = true
     }
@@ -1349,6 +1282,7 @@ final class InlineRefreshButton: DesignButton {
     let fixedWidth: CGFloat
     private(set) var isBusy = false
     private var appliedBusyState: (busy: Bool, available: Bool)?
+    override var isActivitySpinning: Bool { !spinner.isHidden }
     override var intrinsicContentSize: NSSize { NSSize(width: fixedWidth, height: 28) }
     init(_ buttonTitle: String = "刷新", width: CGFloat = 68, target: AnyObject? = nil, action: Selector) {
         self.fixedWidth = width
@@ -1407,9 +1341,9 @@ final class DesignSegmentedControl: NSControl {
         set { setSelected(newValue, animated: Design.shouldAnimate(in: self)) }
     }
 
-    var segmentCount: Int { labels.count }
-
     final class SegmentButton: NSButton {
+        override func becomeFirstResponder() -> Bool { let result = super.becomeFirstResponder(); needsDisplay = true; return result }
+        override func resignFirstResponder() -> Bool { let result = super.resignFirstResponder(); needsDisplay = true; return result }
         override var allowsVibrancy: Bool { false }
         let index: Int
         var isSelectedSegment = false { didSet { if oldValue != isSelectedSegment { needsDisplay = true } } }
@@ -1447,7 +1381,8 @@ final class DesignSegmentedControl: NSControl {
 
         override func draw(_ dirtyRect: NSRect) {
             let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            let rect = bounds.insetBy(dx: 0.5, dy: 0.5)
+            let rect = bounds.insetBy(dx: 1, dy: 1)
+            if window?.firstResponder === self { Design.blue.setStroke(); let ring = NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6); ring.lineWidth = 2; ring.stroke() }
             let path = NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6)
             if !isSelectedSegment && hovered {
                 (isDark ? NSColor.white.withAlphaComponent(0.055) : NSColor.black.withAlphaComponent(0.035)).setFill()
@@ -1597,6 +1532,174 @@ final class DesignSegmentedControl: NSControl {
         thumbPath.lineWidth = 0.6
         thumbPath.stroke()
         Design.drawSpecularBevel(in: thumbRect, cornerRadius: 6, isDark: isDark)
+    }
+}
+
+// Custom macOS pill switch that preserves active blue tint when enabled even when the window is unfocused/inactive.
+final class DesignSwitch: NSSwitch {
+        override func becomeFirstResponder() -> Bool { let result = super.becomeFirstResponder(); needsDisplay = true; return result }
+        override func resignFirstResponder() -> Bool { let result = super.resignFirstResponder(); needsDisplay = true; return result }
+    private let thumbMotion = DesignMotion()
+    private var thumbProgress: CGFloat = 0
+    private var isPressedState = false
+
+    override var wantsUpdateLayer: Bool { false }
+    override var allowsVibrancy: Bool { false }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: 34, height: 20)
+    }
+
+    override var state: NSControl.StateValue {
+        get { super.state }
+        set {
+            let changed = super.state != newValue
+            super.state = newValue
+            suppressNativeLayers()
+            let target: CGFloat = (newValue == .on) ? 1.0 : 0.0
+            if changed && Design.shouldAnimate(in: self) {
+                thumbMotion.animate(in: self, from: thumbProgress, to: target, curve: .spring, threshold: 0.01) { [weak self] val in
+                    self?.thumbProgress = val
+                    self?.needsDisplay = true
+                }
+            } else {
+                thumbMotion.cancel()
+                thumbProgress = target
+                needsDisplay = true
+            }
+        }
+    }
+
+    override var isEnabled: Bool {
+        didSet {
+            suppressNativeLayers()
+            needsDisplay = true
+        }
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        focusRingType = .none
+        thumbProgress = (super.state == .on) ? 1.0 : 0.0
+        suppressNativeLayers()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        focusRingType = .none
+        thumbProgress = (super.state == .on) ? 1.0 : 0.0
+        suppressNativeLayers()
+    }
+
+    deinit {
+        thumbMotion.cancel()
+    }
+
+    private func suppressNativeLayers() {
+        for sub in subviews {
+            sub.isHidden = true
+            sub.alphaValue = 0
+        }
+    }
+
+    override func didAddSubview(_ subview: NSView) {
+        super.didAddSubview(subview)
+        subview.isHidden = true
+        subview.alphaValue = 0
+    }
+
+    override func layout() {
+        super.layout()
+        suppressNativeLayers()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        suppressNativeLayers()
+        needsDisplay = true
+    }
+
+    override func performClick(_ sender: Any?) {
+        guard isEnabled else { return }
+        state = (state == .on) ? .off : .on
+        if let action {
+            NSApp.sendAction(action, to: target, from: self)
+        }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard isEnabled else { return }
+        isPressedState = true; needsDisplay = true
+        defer { isPressedState = false; needsDisplay = true }
+        // Let AppKit own event tracking, cancellation and action delivery.
+        super.mouseDown(with: event)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if isEnabled && (event.keyCode == 49 || event.keyCode == 36) {
+            performClick(self)
+            return
+        }
+        super.keyDown(with: event)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let trackW: CGFloat = 32
+        let trackH: CGFloat = 18
+        let trackRect = NSRect(
+            x: round((bounds.width - trackW) / 2),
+            y: round((bounds.height - trackH) / 2),
+            width: trackW,
+            height: trackH
+        )
+        if window?.firstResponder === self {
+            Design.blue.setStroke()
+            let ring = NSBezierPath(roundedRect: trackRect.insetBy(dx: -3, dy: -3), xRadius: 12, yRadius: 12)
+            ring.lineWidth = 2; ring.stroke()
+        }
+        let trackRadius = trackH / 2
+        let trackPath = NSBezierPath(roundedRect: trackRect, xRadius: trackRadius, yRadius: trackRadius)
+
+        let p = min(1.0, max(0.0, thumbProgress))
+        let enableAlpha: CGFloat = isEnabled ? 1.0 : 0.45
+
+        let offFill = isDark
+            ? NSColor.white.withAlphaComponent(0.16 * enableAlpha)
+            : NSColor.black.withAlphaComponent(0.12 * enableAlpha)
+        let onFill = Design.blue.withAlphaComponent(enableAlpha)
+        let trackFill = offFill.blended(withFraction: p, of: onFill) ?? (p >= 0.5 ? onFill : offFill)
+        trackFill.setFill()
+        trackPath.fill()
+
+        let borderColor = p >= 0.5
+            ? NSColor.white.withAlphaComponent((isDark ? 0.14 : 0.18) * enableAlpha)
+            : (isDark ? NSColor.white.withAlphaComponent(0.10 * enableAlpha) : NSColor.black.withAlphaComponent(0.08 * enableAlpha))
+        borderColor.setStroke()
+        trackPath.lineWidth = 0.5
+        trackPath.stroke()
+
+        let thumbD: CGFloat = 14
+        let stretch: CGFloat = (isEnabled && isPressedState) ? 2.0 : 0.0
+        let thumbW = thumbD + stretch
+        let minX = trackRect.minX + 2.0
+        let maxX = trackRect.maxX - 2.0 - thumbW
+        let thumbX = minX + (maxX - minX) * p
+        let thumbRect = NSRect(x: thumbX, y: trackRect.midY - thumbD / 2, width: thumbW, height: thumbD)
+        let thumbPath = NSBezierPath(roundedRect: thumbRect, xRadius: thumbD / 2, yRadius: thumbD / 2)
+
+        NSGraphicsContext.saveGraphicsState()
+        if isEnabled {
+            let shadow = NSShadow()
+            shadow.shadowColor = NSColor.black.withAlphaComponent(isDark ? 0.36 : 0.20)
+            shadow.shadowOffset = NSSize(width: 0, height: -0.8)
+            shadow.shadowBlurRadius = 1.8
+            shadow.set()
+        }
+        NSColor.white.withAlphaComponent(isEnabled ? 1.0 : 0.78).setFill()
+        thumbPath.fill()
+        NSGraphicsContext.restoreGraphicsState()
     }
 }
 

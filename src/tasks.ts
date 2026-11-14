@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { readFile, open } from 'node:fs/promises';
+import { readFile, open, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { atomicJson } from './files.js';
+import { atomicJson, atomicText, sanitizeError } from './files.js';
 export type Task = { id: string; kind: string; state: 'running' | 'succeeded' | 'partial' | 'failed' | 'cancelled' | 'interrupted'; title: string; createdAt: string; updatedAt: string; done?: number; total?: number; message?: string; cancellable?: boolean; result?: any; preset?: string };
 export class Tasks {
   private rows: Task[] = [];
@@ -25,7 +25,19 @@ export class Tasks {
     if (!this.writing) {
       this.writing=true;
       this.chain=this.chain.catch(()=>{}).then(async()=>{try { while(this.pendingSnapshot) { const snapshot=this.pendingSnapshot;this.pendingSnapshot=undefined;
-          if(this.retired.length) { const rows=this.retired.slice();const archive=await open(join(this.stateDir,'activity-history.jsonl'),'a',0o600);try{await archive.writeFile(rows.map(row=>JSON.stringify({archivedAt:new Date().toISOString(),task:row})).join('\n')+'\n');await archive.sync();}finally{await archive.close();}this.retired.splice(0,rows.length); }
+          if(this.retired.length) {
+            const rows=this.retired.slice();
+            const historyPath=join(this.stateDir,'activity-history.jsonl');
+            const archive=await open(historyPath,'a',0o600);
+            try{await archive.writeFile(rows.map(row=>JSON.stringify({archivedAt:new Date().toISOString(),task:row})).join('\n')+'\n');await archive.sync();}finally{await archive.close();}
+            this.retired.splice(0,rows.length);
+            const info=await stat(historyPath).catch(()=>null);
+            if(info&&info.size>2*1024*1024){
+              const raw=await readFile(historyPath,'utf8').catch(()=>'');
+              const lines=raw.trim().split('\n');
+              await atomicText(historyPath,lines.slice(-Math.max(200,Math.floor(lines.length/2))).join('\n')+'\n').catch(()=>{});
+            }
+          }
           await atomicJson(join(this.stateDir,'activity.json'),snapshot); } } finally {this.writing=false;} });
       this.chain.catch(()=>{});
     }
@@ -50,7 +62,7 @@ export class Tasks {
       } catch (error) {
         const cancelled=current.abort.signal.aborted||(kind==='deep-scan'&&(error as Error).name==='UserIntervention');
         task.state = cancelled ? 'cancelled' : 'failed';
-        task.message = cancelled ? (kind==='deep-scan'?'已取消。若已进入界面遍历，恢复结果会在报告中说明。':'已取消；未继续提交结果') : (error as Error).message;
+        task.message = cancelled ? (kind==='deep-scan'?'已取消。若已进入界面遍历，恢复结果会在报告中说明。':'已取消；未继续提交结果') : sanitizeError((error as Error)?.message || '操作未完成').slice(0, 240);
       } finally { task.updatedAt = new Date().toISOString(); this.current = undefined; this.notify(); }
     })();
     return task.id;

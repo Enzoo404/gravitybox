@@ -1,13 +1,17 @@
 import Cocoa
 
-/// Shared presentation layer for the backend quota contract (task-39).
+/// Shared presentation layer for the backend quota contract.
 ///
-/// The backend passes `familyWindows` / `argonStatus` / `quotaWarnings` / `refreshState` at the
-/// top level of account cards and dashboard accounts. Fractions are 0...1 and are converted to
-/// percent only here. Legacy percent fields remain a fallback for older fixtures, but a legacy
-/// weekly value is never relabelled as a 5-hour value.
+/// The backend passes `familyWindows` / `argonStatus` / `carbonStatus` / `standaloneModels` /
+/// `quotaWarnings` / `refreshState` at the top level of account cards and dashboard accounts.
+/// Fractions are 0...1 and are converted to percent only here. Legacy percent fields remain a
+/// fallback for older fixtures, but a legacy weekly value is never relabelled as a 5-hour value.
 enum QuotaPresentation {
     static let staleResetText = "数据已过期"
+    private static let extraStandaloneGeminiRegex = try? NSRegularExpression(
+        pattern: "^gemini-[4-9](?:\\.[0-9]+)?-([a-z][a-z0-9]*?)(?:-(?:trial|preview|exp|disabled))?$",
+        options: [.caseInsensitive]
+    )
 
     struct Window {
         var percentage: Int?
@@ -33,6 +37,8 @@ enum QuotaPresentation {
     }
 
     struct Argon {
+        var key: String = "argon"
+        var modelName: String = "Gemini 4 Argon"
         var availability: String   // available | disabled | unknown
         var quotaState: String     // known | not_reported | stale
         var period: String?        // 5h | weekly | unspecified | nil
@@ -58,13 +64,13 @@ enum QuotaPresentation {
         var title: String {
             if (quotaState == "known" || quotaState == "stale") && percentage != nil {
                 switch period {
-                case "weekly": return "Gemini 4 Argon · 每周"
-                case "5h": return "Gemini 4 Argon · 5 小时"
-                case "unspecified": return "Gemini 4 Argon"
-                default: return "Gemini 4 Argon"
+                case "weekly": return "\(modelName) · 每周"
+                case "5h": return "\(modelName) · 5 小时"
+                case "unspecified": return modelName
+                default: return modelName
                 }
             }
-            return "Gemini 4 Argon"
+            return modelName
         }
         var placeholder: String {
             if stale { return "已过期" }
@@ -90,8 +96,14 @@ enum QuotaPresentation {
             }
         }
         var compactText: String {
-            if stale { return "Gemini 4 Argon · 数据已过期" }
-            if quotaState == "known" { return "Gemini 4 Argon" }
+            if stale { return "\(modelName) · 数据已过期" }
+            if quotaState == "known" { return modelName }
+            if key != "argon" {
+                switch availability {
+                case "disabled": return "\(modelName) · 不可用"
+                default: return "\(modelName) · 配额未知"
+                }
+            }
             switch availability {
             case "disabled": return "Gemini 4 Argon · 不可用"
             case "available": return "Gemini 4 Argon · 配额未知"
@@ -109,12 +121,18 @@ enum QuotaPresentation {
         var geminiModel: Window?
         var claudeModel: Window?
         var argon: Argon?
+        var carbon: Argon?
+        var standaloneModels: [Argon] = []
         var quotaWarnings: [String] = []
         var quotaWarningCodes: [String] = []
         var refreshComplete: Bool?
         var refreshMessage = ""
         var geminiPrimary: PrimaryWindow { primaryWindow(gemini5h, model: geminiModel) }
         var claudePrimary: PrimaryWindow { primaryWindow(claude5h, model: claudeModel) }
+        /// Extra standalone models beyond Argon and Carbon (automatically detected new models/groups)
+        var extraStandaloneModels: [Argon] {
+            standaloneModels.filter { $0.key != "argon" && $0.key != "carbon" }
+        }
     }
 
     struct PrimaryWindow {
@@ -187,12 +205,24 @@ enum QuotaPresentation {
                       unknownReason: knownFlag ? "接口未返回可用数值" : unknownReason)
     }
 
-    private static func argon(_ raw: [String: Any]?) -> Argon? {
+    private static func argon(_ raw: [String: Any]?, defaultKey: String = "argon", defaultModelName: String = "Gemini 4 Argon") -> Argon? {
         guard let raw else { return nil }
+        let key = text(raw["key"]).isEmpty ? defaultKey : text(raw["key"])
+        let rawDisplay = !text(raw["displayName"]).isEmpty ? text(raw["displayName"]) : text(raw["modelName"])
+        let resolvedName: String
+        if key == "argon" {
+            resolvedName = "Gemini 4 Argon"
+        } else if key == "carbon" {
+            resolvedName = "Gemini 4 Carbon"
+        } else if !rawDisplay.isEmpty {
+            resolvedName = ModelDisplayName.name(rawDisplay)
+        } else {
+            resolvedName = ModelDisplayName.name(defaultModelName)
+        }
         let availability = text(raw["availability"]).isEmpty ? "unknown" : text(raw["availability"])
         let remaining = fraction(raw["remaining"])
         let state = text(raw["quotaState"]).isEmpty ? (remaining != nil ? "known" : "not_reported") : text(raw["quotaState"])
-        return Argon(availability: availability, quotaState: state,
+        return Argon(key: key, modelName: resolvedName, availability: availability, quotaState: state,
                      period: raw["period"] as? String, remaining: remaining,
                      resetCountdown: text(raw["resetCountdown"]), message: text(raw["message"]),
                      observedAt: number(raw["observedAt"]), source: raw["source"] as? String)
@@ -211,7 +241,9 @@ enum QuotaPresentation {
         let familyWindows = dict(raw["familyWindows"]) ?? nested.flatMap { dict($0["familyWindows"]) }
         let modelQuota = dict(raw["familyModelQuota"]) ?? nested.flatMap { dict($0["familyModelQuota"]) }
         let argonRaw = dict(raw["argonStatus"]) ?? nested.flatMap { dict($0["argonStatus"]) }
-        result.hasContract = familyWindows != nil || argonRaw != nil || modelQuota != nil
+        let carbonRaw = dict(raw["carbonStatus"]) ?? nested.flatMap { dict($0["carbonStatus"]) }
+        let standaloneRaw = (raw["standaloneModels"] as? [[String: Any]]) ?? nested.flatMap { $0["standaloneModels"] as? [[String: Any]] }
+        result.hasContract = familyWindows != nil || argonRaw != nil || carbonRaw != nil || modelQuota != nil
         result.geminiModel = window(modelQuota?["gemini"], unknownReason: "接口未返回模型配额")
         result.claudeModel = window(modelQuota?["claude"], unknownReason: "接口未返回模型配额")
         result.quotaWarnings = (raw["quotaWarnings"] as? [String]) ?? nested.flatMap { $0["quotaWarnings"] as? [String] } ?? []
@@ -228,10 +260,10 @@ enum QuotaPresentation {
             result.claude5h = familyWindow(familyWindows, family: "claude", key: "fiveHour", label: "Claude/GPT 5 小时")
             result.claudeWeekly = familyWindow(familyWindows, family: "claude", key: "weekly", label: "Claude/GPT 每周")
         }
+        let rawModels = (raw["models"] as? [[String: Any]]) ?? (nested?["models"] as? [[String: Any]]) ?? []
         if let argonRaw {
-            result.argon = argon(argonRaw)
+            result.argon = argon(argonRaw, defaultKey: "argon", defaultModelName: "Gemini 4 Argon")
         } else if !result.hasContract {
-            let rawModels = (raw["models"] as? [[String: Any]]) ?? (nested?["models"] as? [[String: Any]]) ?? []
             let argonModels = rawModels.filter { m in
                 let name = (m["name"] as? String ?? (m["model_id"] as? String ?? "")).lowercased()
                 let display = (m["display_name"] as? String ?? "").lowercased()
@@ -245,22 +277,122 @@ enum QuotaPresentation {
             // as an unspecified-period value instead of fabricating "每周".
             let legacyArgon = (raw["argonWeeklyRemaining"] as? Int)
             if allArgonDisabled {
-                result.argon = Argon(availability: "disabled", quotaState: "not_reported", period: nil,
+                result.argon = Argon(key: "argon", modelName: "Gemini 4 Argon", availability: "disabled", quotaState: "not_reported", period: nil,
                                      remaining: nil, resetCountdown: "",
                                      message: "当前账号无 Gemini 4 Argon 权限",
                                      observedAt: nil, source: "legacy")
             } else if let legacyArgon {
-                result.argon = Argon(availability: "unknown", quotaState: "known", period: "unspecified",
+                result.argon = Argon(key: "argon", modelName: "Gemini 4 Argon", availability: "unknown", quotaState: "known", period: "unspecified",
                                      remaining: Double(max(0, min(100, legacyArgon))) / 100.0,
                                      resetCountdown: text(raw["argonWeeklyResetCountdown"]),
                                      message: "旧版接口返回的 Argon 额度未标明周期",
                                      observedAt: nil, source: "legacy")
             } else {
-                result.argon = Argon(availability: "unknown", quotaState: "not_reported", period: nil,
+                result.argon = Argon(key: "argon", modelName: "Gemini 4 Argon", availability: "unknown", quotaState: "not_reported", period: nil,
                                      remaining: nil, resetCountdown: "",
                                      message: "本轮接口未返回 Argon 模型记录，无法判断权限或额度 · 不代表无权限",
                                      observedAt: nil, source: nil)
             }
+        }
+
+        if let carbonRaw {
+            result.carbon = argon(carbonRaw, defaultKey: "carbon", defaultModelName: "Gemini 4 Carbon")
+        } else if !result.hasContract {
+            let carbonModels = rawModels.filter { m in
+                let name = (m["name"] as? String ?? (m["model_id"] as? String ?? "")).lowercased()
+                let display = (m["display_name"] as? String ?? "").lowercased()
+                return (m["is_carbon"] as? Bool == true) || name.contains("carbon") || display.contains("carbon")
+            }
+            let allCarbonDisabled = !carbonModels.isEmpty && carbonModels.allSatisfy { m in
+                let name = (m["name"] as? String ?? (m["model_id"] as? String ?? "")).lowercased()
+                return (m["disabled"] as? Bool == true) || name.contains("disabled")
+            }
+            let legacyCarbon = (raw["carbonWeeklyRemaining"] as? Int)
+            if allCarbonDisabled {
+                result.carbon = Argon(key: "carbon", modelName: "Gemini 4 Carbon", availability: "disabled", quotaState: "not_reported", period: nil,
+                                      remaining: nil, resetCountdown: "",
+                                      message: "当前账号无 Gemini 4 Carbon 权限（不可用）",
+                                      observedAt: nil, source: "legacy")
+            } else if let legacyCarbon {
+                result.carbon = Argon(key: "carbon", modelName: "Gemini 4 Carbon", availability: "unknown", quotaState: "known", period: "unspecified",
+                                      remaining: Double(max(0, min(100, legacyCarbon))) / 100.0,
+                                      resetCountdown: text(raw["carbonWeeklyResetCountdown"]),
+                                      message: "Carbon 旧版额度未标明周期（剩余 \(legacyCarbon)%）",
+                                      observedAt: nil, source: "legacy")
+            } else if let enabledCarbon = carbonModels.first(where: { ($0["disabled"] as? Bool) != true }) {
+                let ownPct = (enabledCarbon["own_percentage"] as? Int) ?? ((enabledCarbon["percentage_known"] as? Bool == true) ? (enabledCarbon["percentage"] as? Int) : nil)
+                let cd = text(enabledCarbon["reset_countdown"])
+                if let ownPct {
+                    result.carbon = Argon(key: "carbon", modelName: "Gemini 4 Carbon", availability: "available", quotaState: "known", period: "unspecified",
+                                          remaining: Double(max(0, min(100, ownPct))) / 100.0,
+                                          resetCountdown: cd,
+                                          message: "Carbon 模型记录存在，已取得未标明窗口的额度（剩余 \(ownPct)%）",
+                                          observedAt: nil, source: "legacy")
+                } else {
+                    result.carbon = Argon(key: "carbon", modelName: "Gemini 4 Carbon", availability: "available", quotaState: "not_reported", period: nil,
+                                          remaining: nil, resetCountdown: "",
+                                          message: "存在 Carbon 模型记录，但本轮未返回可用配额数值",
+                                          observedAt: nil, source: "legacy")
+                }
+            } else {
+                result.carbon = Argon(key: "carbon", modelName: "Gemini 4 Carbon", availability: "unknown", quotaState: "not_reported", period: nil,
+                                      remaining: nil, resetCountdown: "",
+                                      message: "本轮接口未返回 Carbon 模型记录，无法判断权限或额度 · 不代表无权限",
+                                      observedAt: nil, source: nil)
+            }
+        }
+
+        if result.carbon == nil {
+            result.carbon = Argon(key: "carbon", modelName: "Gemini 4 Carbon", availability: "unknown", quotaState: "not_reported", period: nil,
+                remaining: nil, resetCountdown: "", message: "本轮未返回 Carbon 配额或权限", observedAt: nil, source: nil)
+        }
+
+        if let standaloneRaw, !standaloneRaw.isEmpty {
+            result.standaloneModels = standaloneRaw.compactMap { item in
+                let k = text(item["key"]).isEmpty ? "other" : text(item["key"])
+                let name = text(item["displayName"]).isEmpty ? k : text(item["displayName"])
+                return argon(item, defaultKey: k, defaultModelName: name)
+            }
+            if let firstArgon = result.standaloneModels.first(where: { $0.key == "argon" }) {
+                result.argon = firstArgon
+            }
+            if let firstCarbon = result.standaloneModels.first(where: { $0.key == "carbon" }) {
+                result.carbon = firstCarbon
+            }
+        } else {
+            var list: [Argon] = []
+            if let a = result.argon { list.append(a) }
+            if let c = result.carbon { list.append(c) }
+            // Auto-detect any extra standalone Gemini 4+ models from rawModels when standaloneModels array is absent
+            var seenKeys: Set<String> = ["argon", "carbon", "gemini-4-argon", "gemini-4-carbon"]
+            for m in rawModels {
+                let rawId = (m["model_id"] as? String ?? (m["name"] as? String ?? "")).lowercased()
+                let family = (m["family"] as? String ?? "").lowercased()
+                let isExtraGemini4: Bool = {
+                    guard let match = extraStandaloneGeminiRegex?.firstMatch(in: rawId, range: NSRange(location: 0, length: (rawId as NSString).length)) else { return false }
+                    let code = (rawId as NSString).substring(with: match.range(at: 1)).lowercased()
+                    return !["argon", "carbon", "hydrogen", "pro", "flash", "ultra", "nano", "lite", "default"].contains(code)
+                }()
+                guard family == "other" || isExtraGemini4 else { continue }
+                let baseKey = rawId.replacingOccurrences(of: "-(?:trial|preview|exp|disabled|tiered|latest)$", with: "", options: .regularExpression)
+                guard !baseKey.isEmpty, !seenKeys.contains(baseKey) else { continue }
+                seenKeys.insert(baseKey)
+                let title = (m["display_name"] as? String)?.replacingOccurrences(of: "\\s+(?:Trial|Preview|Exp)$", with: "", options: .regularExpression) ?? ModelDisplayName.name(baseKey)
+                let isDisabled = (m["disabled"] as? Bool == true) || rawId.contains("disabled")
+                let pct = (m["own_percentage"] as? Int) ?? ((m["percentage_known"] as? Bool == true) ? (m["percentage"] as? Int) : nil)
+                let cd = text(m["reset_countdown"])
+                if isDisabled {
+                    list.append(Argon(key: baseKey, modelName: title, availability: "disabled", quotaState: "not_reported", period: nil,
+                                      remaining: nil, resetCountdown: "", message: "当前账号无 \(title) 权限（不可用）", observedAt: nil, source: "legacy"))
+                } else if let pct {
+                    list.append(Argon(key: baseKey, modelName: title, availability: "available", quotaState: "known", period: "unspecified",
+                                      remaining: Double(max(0, min(100, pct))) / 100.0, resetCountdown: cd, message: "\(title) 配额已取得", observedAt: nil, source: "legacy"))
+                } else {
+                    list.append(Argon(key: baseKey, modelName: title, availability: "available", quotaState: "not_reported", period: nil,
+                                      remaining: nil, resetCountdown: "", message: "存在 \(title) 模型记录，但本轮未返回可用配额数值", observedAt: nil, source: "legacy"))
+                }
+            }
+            result.standaloneModels = list
         }
 
         if !result.hasContract {
@@ -332,8 +464,9 @@ enum QuotaPresentation {
         if !contract.quotaWarnings.isEmpty {
             var seen = Set<String>()
             let messages = contract.quotaWarnings.filter { warning in
-                // Argon already carries this explanation beside its own quota bar.
-                !warning.hasPrefix("ARGON_") && warning != contract.argon?.message
+                // Argon / Carbon already carry this explanation beside their own quota bars.
+                !warning.hasPrefix("ARGON_") && !warning.hasPrefix("CARBON_")
+                    && warning != contract.argon?.message && warning != contract.carbon?.message
             }.map { warning -> String in
                 if let range = warning.range(of: ": ") { return String(warning[range.upperBound...]) }
                 return warning
@@ -348,7 +481,7 @@ enum QuotaPresentation {
     }
 
     static func fingerprint(_ raw: [String: Any]) -> String {
-        let fields = ["familyWindows", "familyModelQuota", "argonStatus", "refreshState", "quotaWarnings"].reduce(into: [String: Any]()) {
+        let fields = ["familyWindows", "familyModelQuota", "argonStatus", "carbonStatus", "standaloneModels", "refreshState", "quotaWarnings"].reduce(into: [String: Any]()) {
             if let value = raw[$1] { $0[$1] = value }
         }
         guard let data = try? JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys]),

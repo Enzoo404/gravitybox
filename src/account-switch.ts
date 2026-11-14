@@ -1,12 +1,13 @@
-import { type ApplicationChannel, type ApplicationTarget, allApplicationTargets, applicationTarget, channelStateDirectory } from './application-target.js';
+import { type ApplicationChannel, type ApplicationTarget, applicationTarget } from './application-target.js';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { readFile, mkdir, lstat, open, unlink, readdir } from 'node:fs/promises';
+import { readFile, mkdir, lstat, unlink, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { atomicJson, atomicText } from './files.js';
+import { withProcessLease } from './process-lock.js';
 import { AccountsManager, SystemKeychainAdapter, syncAccountToKeychain, type KeychainAdapter, type Account } from './accounts.js';
-import { ProtobufWriter as Writer } from './usage.js';
+import { ProtobufWriter as Writer } from './protobuf.js';
 import { replaceTopicRow } from './account-state.js';
 export { replaceTopicRow } from './account-state.js';
 
@@ -158,23 +159,22 @@ export class AccountSwitchService {
   private journalPath: string;
   private target: ApplicationTarget;
   constructor(private manager: AccountsManager, private options: {
-    stateDir: string; profile: string; externalDir: string; keychain?: KeychainAdapter; channel?: ApplicationChannel; target?: ApplicationTarget;
+    stateDir: string; profile: string; keychain?: KeychainAdapter; channel?: ApplicationChannel; target?: ApplicationTarget;
     isRunning?: () => Promise<boolean>; // Isolated tests only; never accepted over IPC.
     databaseFactory?: (path: string) => DatabaseTransaction; // Fault injection, never accepted over IPC.
   }) {
     this.keychain = options.keychain ?? new SystemKeychainAdapter();
     this.target = options.target ?? applicationTarget(options.channel ?? 'stable', undefined, { profile: options.profile });
-    this.journalPath = join(channelStateDirectory(options.stateDir, this.target.channel), 'account-switch-journal-stable.json');
+    this.journalPath = join(options.stateDir, 'account-switch-journal-stable.json');
   }
 
   setTarget(target: ApplicationTarget) {
     this.target = target;
     this.options.channel = target.channel;
     this.options.profile = target.profile;
-    this.journalPath = join(channelStateDirectory(this.options.stateDir, target.channel), 'account-switch-journal-stable.json');
+    this.journalPath = join(this.options.stateDir, 'account-switch-journal-stable.json');
   }
 
-  private assertSupported() {}
   private get rollbackPath() { return this.journalPath + '.rollback.json'; }
   private database(path: string) { return this.options.databaseFactory?.(path) ?? new DatabaseTransaction(path); }
 
@@ -193,7 +193,7 @@ export class AccountSwitchService {
     try { await this.regular(this.rollbackPath); record = JSON.parse(await readFile(this.rollbackPath, 'utf8')); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'none'; throw error; }
     const dbPath = join(this.options.profile, 'User', 'globalStorage', 'state.vscdb');
-    const allowed = new Set([join(this.options.stateDir, 'accounts.json'), join(this.options.externalDir, 'accounts.json')]);
+    const allowed = new Set([join(this.options.stateDir, 'accounts.json')]);
     if (record.version !== 1 || !['prepared', 'committed'].includes(record.phase) || record.databasePath !== dbPath ||
         !Array.isArray(record.files) || record.files.some(f => !allowed.has(f.path) &&
           !(f.path.startsWith(join(this.options.stateDir, 'accounts') + '/') && /^[a-zA-Z0-9_-]+\.json$/.test(f.path.slice(join(this.options.stateDir, 'accounts').length + 1))))) {
@@ -231,13 +231,14 @@ export class AccountSwitchService {
       await tx?.finish(false);
       await atomicJson(this.journalPath, committed ? this.completedRollback(original) : original);
       await unlink(this.rollbackPath);
+      this.manager.invalidateRuntimeCaches?.();
       return committed ? 'rolled-back' : 'restored';
     } finally { await tx?.close(); }
   }
   private async guardStopped() {
     const candidatePrefixes = Array.from(
       // Insiders shares official credentials: block switching while it runs, without managing it.
-      new Set([this.target.appPath, ...allApplicationTargets().map(t => t.appPath), '/Applications/Antigravity - Insiders.app']),
+      new Set([this.target.appPath, '/Applications/Antigravity.app', '/Applications/Antigravity - Insiders.app']),
     ).map(p => p + '/Contents/');
     const running = this.options.isRunning ? await this.options.isRunning() :
       (await run('/bin/ps', ['-ax', '-o', 'args='])).stdout.split('\n').some(line => {
@@ -291,18 +292,11 @@ export class AccountSwitchService {
   private async locked<T>(operation: () => Promise<T>): Promise<T> {
     await mkdir(this.options.stateDir, { recursive: true, mode: 0o700 });
     const path = join(this.options.stateDir, 'account-switch.lock');
-    let handle;
-    try { handle = await open(path, 'wx', 0o600); }
-    catch {
-      await this.regular(path);
-      const owner = Number(await readFile(path, 'utf8'));
-      if (!Number.isSafeInteger(owner) || owner <= 0) throw new Error('切换锁无法识别，请检查数据目录');
-      try { process.kill(owner, 0); throw new Error('已有账号切换或恢复操作，请等待完成'); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
-      await unlink(path); handle = await open(path, 'wx', 0o600);
-    }
-    await handle.writeFile(String(process.pid));
-    try { return await this.manager.runExclusive(operation); } finally { await handle.close(); await unlink(path); }
+    return withProcessLease(
+      path,
+      () => this.manager.runExclusive(operation),
+      { timeoutMs: 0, busyMessage: '已有账号切换或恢复操作，请等待完成' }
+    );
   }
   private async restoreFiles(files: SavedFile[], keychainBefore: string | null, keychainAfter: string, keychainAfterDigest?: string) {
     for (const file of files) {
@@ -320,7 +314,6 @@ export class AccountSwitchService {
     else await this.keychain.writePassword('gemini', 'antigravity', keychainBefore);
   }
   async switchAccount(id: string, target = 'all') {
-    this.assertSupported();
     if (!['all', 'app'].includes(target)) throw new Error('目前仅支持切换 Antigravity 桌面账号');
     return this.locked(async () => {
       await this.guardStopped();
@@ -350,14 +343,6 @@ export class AccountSwitchService {
         const snapshot = async (path: string, value: unknown) => { await this.regular(path); files.push({ path, before: await readFile(path, 'utf8'), after: JSON.stringify(value, null, 2) + '\n' }); };
         await snapshot(join(this.options.stateDir, 'accounts', `${id}.json`), accountNext);
         await snapshot(join(this.options.stateDir, 'accounts.json'), indexNext);
-        const externalIndex = join(this.options.externalDir, 'accounts.json');
-        try {
-          await this.regular(externalIndex);
-          const ext = JSON.parse(await readFile(externalIndex, 'utf8'));
-          const matching = ext.accounts?.filter((a: any) => String(a.email).toLowerCase() === acc.email.toLowerCase()) ?? [];
-          if (matching.length !== 1) throw new Error('AntiGravity Switch 中未找到唯一对应账号，请先同步账号');
-          await snapshot(externalIndex, { ...ext, current_account_id: matching[0].id });
-        } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
         const keychainBefore = await this.keychain.readPassword('gemini', 'antigravity');
         // Build the exact intended value with an in-memory adapter; no system write yet.
         let keychainAfter = '';
@@ -378,6 +363,7 @@ export class AccountSwitchService {
         await this.guardStopped();
         if (transaction) await transaction.finish(true);
         committed = true;
+        this.manager.invalidateRuntimeCaches?.();
         await this.manager.recordAutoSwitchChoice(acc.id).catch(() => {});
         await atomicJson(this.journalPath, {
           ...journal,
@@ -425,14 +411,13 @@ export class AccountSwitchService {
     });
   }
   async rollback() {
-    this.assertSupported();
     return this.locked(async () => {
       await this.guardStopped();
       if (await this.reconcileRollback() === 'rolled-back') return { message: '已完成上次中断的账号恢复；下次打开 Antigravity 后生效' };
       const journal = JSON.parse(await readFile(this.journalPath, 'utf8')) as Journal;
       if (journal.status === 'rolled-back') throw new Error('上次切换已撤销');
       if (journal.status === 'cleared') throw new Error('恢复材料已由用户清除');
-      if (journal.status === 'complete' && (!Number.isFinite(Date.parse(journal.at)) || Date.now()-Date.parse(journal.at)>7*86400000)) throw new Error('完成记录已超过 7 天撤销期；材料保留，可在设置中核对和清除');
+      if (journal.status === 'complete' && (!Number.isFinite(Date.parse(journal.at)) || Date.now()-Date.parse(journal.at)>7*86400000)) throw new Error('完成记录已超过 7 天撤销期；恢复材料仍保留在本地数据目录中供核对');
       const db = join(this.options.profile, 'User', 'globalStorage', 'state.vscdb');
       const hasDb = await this.optionalRegular(db);
       const transaction = hasDb ? this.database(db) : undefined;
@@ -465,6 +450,7 @@ export class AccountSwitchService {
         if (transaction) await transaction.replace(journal.before);
         await this.guardStopped();
         if (transaction) await transaction.finish(true);
+        this.manager.invalidateRuntimeCaches?.();
         record.phase = 'committed'; await atomicJson(this.rollbackPath, record);
         await atomicJson(this.journalPath, this.completedRollback(journal));
         await unlink(this.rollbackPath);

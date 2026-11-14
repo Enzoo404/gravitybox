@@ -5,7 +5,8 @@
 *.bak
 *~
 .env
-.env.*.local
+.env.*
+!.env.example
 
 # Regenerable dependencies, builds and verification output
 /node_modules/
@@ -18,6 +19,9 @@
 /dict/.backups/
 /文档/当前版本验收摘要.json
 /vendor/
+*.dmg
+*.sha256
+*.sqlite*
 
 # Intermediate icon exports; the packaged icon remains an input
 /assets/AppIcon.iconset/

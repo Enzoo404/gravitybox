@@ -18,6 +18,7 @@ final class BackendBridge {
     private(set) var isRestarting = false
     private let queue = DispatchQueue(label: "local.gravitybox.bridge", qos: .userInitiated)
     private let controlQueue = DispatchQueue(label:"local.gravitybox.control",qos:.userInitiated,attributes:.concurrent)
+    private let controlSemaphore = DispatchSemaphore(value: 4)
     private static let maxReplyBytes = 4_000_000
     #if NATIVE_UI_TEST
     var fixtureReply: (([String:Any]) -> [String:Any])?
@@ -221,12 +222,24 @@ final class BackendBridge {
             try fm.createDirectory(at:archiveDir,withIntermediateDirectories:true,attributes:[.posixPermissions:0o700])
             let archive = archiveDir.appendingPathComponent("backend-\(Int(Date().timeIntervalSince1970))-\(UUID().uuidString.prefix(8)).log")
             try fm.moveItem(at: log, to: archive)
+            if let archived = try? fm.contentsOfDirectory(at: archiveDir, includingPropertiesForKeys: [.contentModificationDateKey], options: [.skipsHiddenFiles])
+                .filter({ $0.lastPathComponent.hasPrefix("backend-") && $0.pathExtension == "log" }),
+               archived.count > 10 {
+                let sorted = archived.sorted {
+                    let d0 = (try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                    let d1 = (try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                    return d0 < d1
+                }
+                for stale in sorted.prefix(archived.count - 10) {
+                    try? fm.removeItem(at: stale)
+                }
+            }
         }
         if !fm.fileExists(atPath: log.path) { fm.createFile(atPath: log.path, contents: nil, attributes: [.posixPermissions: 0o600]) }
         let handle = try FileHandle(forWritingTo: log)
         do { try handle.seekToEnd() } catch { try? handle.close(); throw error }
         let process = Process(); process.executableURL = node
-        process.arguments = ["--max-old-space-size=128", resources.appendingPathComponent("core/dist/main.js").path, "--state-dir", state.path]
+        process.arguments = ["--max-old-space-size=256", resources.appendingPathComponent("core/dist/main.js").path, "--state-dir", state.path]
         process.standardOutput = FileHandle.nullDevice; process.standardError = handle
         process.terminationHandler = { [weak self] process in
             DispatchQueue.main.async {
@@ -250,11 +263,15 @@ final class BackendBridge {
             "status", "task_list", "task_cancel", "usage_cancel", "ping",
             "dashboard_summary", "account_list", "account_get", "account_switch_preflight",
             "maintenance_scan", "maintenance_history", "usage_summary", "usage_events",
-            "usage_snapshot_release", "auto_switch_get", "auto_switch_best",
-            "account_recovery_info", "api_pricing_get"
+            "usage_snapshot_release", "usage_ledger_review", "auto_switch_get",
+            "account_recovery_info", "api_pricing_get", "pricing_sync_status"
         ]
-        let channel = readOnlyCommands.contains(command) ? controlQueue : queue
+        let isReadOnlyAutoSwitch = command == "auto_switch_best" && (payload["execute"] as? Bool != true)
+        let useControlThrottle = readOnlyCommands.contains(command) || isReadOnlyAutoSwitch
+        let channel = useControlThrottle ? controlQueue : queue
         channel.async { [self] in
+            if useControlThrottle { controlSemaphore.wait() }
+            defer { if useControlThrottle { controlSemaphore.signal() } }
             let result = Result { try request(payload) }
             DispatchQueue.main.async { guard requestGeneration == self.generation else { return }; completion(result) }
         }
@@ -279,7 +296,7 @@ final class BackendBridge {
     private func performRequest(_ payload: [String: Any]) throws -> [String: Any] {
         let command = payload["command"] as? String ?? ""
         // Long helpers (switch/import/maintenance) may legitimately take a while; status stays snappy.
-        let budget: TimeInterval = command == "stop" ? 30 : (command == "status" || command == "task_list" ? 8 : 45)
+        let budget: TimeInterval = command == "stop" ? 30 : (command == "account_switch" ? 65 : (command == "status" || command == "task_list" ? 8 : 45))
         let deadline = Date().addingTimeInterval(budget)
         let fd = try openSocket(deadline: deadline)
         defer { Darwin.close(fd) }

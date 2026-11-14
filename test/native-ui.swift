@@ -1,7 +1,9 @@
 import Cocoa
 
 @main struct NativeUIFixture {
+    static var assertionCount = 0
     static func check(_ condition: Bool, _ message: String) {
+        assertionCount += 1
         if !condition { FileHandle.standardError.write(Data((message+"\n").utf8)); exit(1) }
     }
     static func pump() {
@@ -37,6 +39,14 @@ import Cocoa
         view.cacheDisplay(in:view.bounds,to:rep)
         try rep.representation(using:.png,properties:[:])!.write(to:url)
     }
+    static func allTextValues(_ v: NSView) -> [String] {
+        var values: [String] = []
+        if let tf = v as? NSTextField { values.append(tf.stringValue) }
+        if let btn = v as? NSButton { values.append(btn.title) }
+        if let pop = v as? NSPopUpButton { values.append(contentsOf: pop.itemTitles) }
+        for sub in v.subviews { values.append(contentsOf: allTextValues(sub)) }
+        return values
+    }
     static func main() throws {
         let application = NSApplication.shared
         let interactive = CommandLine.arguments.contains("--interactive")
@@ -57,11 +67,11 @@ import Cocoa
             let windows:[String:Any] = ["gemini":["fiveHour":bucket(91),"weekly":bucket(33)],"claude":["fiveHour":bucket(current ? 0 : 100),"weekly":bucket(48)]]
             return ["id":id,"name":name,"email":email,"subscription_tier":"PRO","revision":id,"familyWindows":windows,"argonStatus":["availability":"available","quotaState":"known","period":"weekly","remaining":0.008],"quota":["last_updated":Date().timeIntervalSince1970,"source":"live"],"models":[]]
         }
-        var accounts = [account("a","Alex","alex@example.invalid",true),account("b","无限","second-long-email@example.invalid",false),account("c","Charlie","third@example.invalid",false)]
+        var accounts = [account("a","Alex","alex@example.invalid",true),account("b","Bob","bob@example.invalid",false),account("c","Charlie","charlie@example.invalid",false)]
         accounts[2]["subscription_tier"] = "FREE"
         accounts[2]["familyWindows"] = ["gemini":["weekly":bucket(100,reset:"6天23小时后重置")],"claude":["weekly":bucket(100,reset:"6天23小时后重置")]]
         accounts[2]["familyModelQuota"] = ["gemini":bucket(100,reset:"4小时59分后重置"),"claude":bucket(100,reset:"6天23小时后重置")]
-        var activeId = "a", switches = 0, preflightState = "safe", lastTranslationCommand: String? = nil
+        var activeId = "a", switches = 0, preflightState = "safe", lastTranslationCommand: String? = nil, lastHudCommandEnabled: Bool? = nil
         assistant.activeAccountId = activeId; assistant.cachedAccounts = accounts
         let models:[[String:Any]] = [
             ["model":"gemini-3.8-flash-n","totalTokens":90800000,"promptTokens":4000000,"candidatesTokens":300000,"requestCount":695,"estimatedUsd":10.77,"priced":true,"pricingStatus":"historical"],
@@ -97,36 +107,62 @@ import Cocoa
                 ]
                 return ["ok":true,"snapshot_id":"fixture-snapshot","rows":eventRows,"total":129,"scope":"全部 344 个会话数据库"]
             case "maintenance_scan":
+                let reqRetention = intVal(payload, "retentionDays", fallback: 7)
+                var scanEntries: [[String: Any]] = [
+                    ["name": "Cache", "title": "网络与静态资源缓存", "subtitle": "界面静态资源与临时网络响应数据", "icon": "internaldrive", "category": "safe", "defaultSelected": true, "bytes": 524_288_000, "fileCount": 1820, "exists": true, "clearable": true],
+                    ["name": "AgentBrowserCache", "title": "浏览器沙箱加速缓存", "subtitle": "Browser 沙箱的网页与编译缓存（保留站点登录与 Cookie）", "icon": "globe", "category": "safe", "defaultSelected": true, "bytes": 324_009_984, "fileCount": 1410, "exists": true, "clearable": true],
+                    ["name": "PartitionsCache", "title": "内嵌视图子分区缓存", "subtitle": "内嵌浏览器与隔离分区的静态资源及编译缓存", "icon": "square.split.2x2", "category": "safe", "defaultSelected": true, "bytes": 96_468_992, "fileCount": 420, "exists": true, "clearable": true],
+                    ["name": "OrphanAgentData", "title": "已删对话残留与临时文件", "subtitle": "含 6 个已删主对话遗留的孤儿记录、崩溃日志与临时媒体", "icon": "trash.slash", "category": "safe", "defaultSelected": true, "bytes": 48_234_496, "fileCount": 192, "exists": true, "clearable": true]
+                ]
+                let safeSum = 993_001_472
+                var statefulSum = 0
+                if reqRetention <= 7 {
+                    scanEntries.append(contentsOf: [
+                        ["name": "AgentSubagentDatabases", "title": "历史子智能体轨迹库", "subtitle": "7 天前共 142 个后台子智能体库（清理前自动归档 Token 账单）", "icon": "arrow.triangle.branch", "category": "stateful", "defaultSelected": false, "bytes": 856_686_592, "fileCount": 142, "exists": true, "clearable": true],
+                        ["name": "AgentTaskStepLogs", "title": "历史任务与步骤输出日志", "subtitle": "7 天前对话的后台终端日志、步骤输出与 scratch 草稿", "icon": "terminal", "category": "stateful", "defaultSelected": false, "bytes": 218_103_808, "fileCount": 980, "exists": true, "clearable": true]
+                    ])
+                    statefulSum = 1_074_790_400
+                }
                 return [
                     "ok": true,
                     "token": "fixture-token",
-                    "entries": [
-                        ["name": "Cache", "title": "网络与静态资源缓存", "subtitle": "界面静态资源、前端脚本与临时网络响应数据", "icon": "internaldrive", "category": "safe", "defaultSelected": true, "bytes": 864_026_624, "fileCount": 2640, "exists": true, "clearable": true],
-                        ["name": "Code Cache", "title": "V8 字节码编译缓存", "subtitle": "JavaScript 与 WebAssembly 预编译加速字节码", "icon": "cpu", "category": "safe", "defaultSelected": true, "bytes": 412_090_368, "fileCount": 1120, "exists": true, "clearable": true],
-                        ["name": "GPUCache", "title": "图形与着色器管线缓存", "subtitle": "Metal / WebGL 渲染管线与着色器编译产物", "icon": "sparkles.rectangle.stack", "category": "safe", "defaultSelected": true, "bytes": 184_549_376, "fileCount": 318, "exists": true, "clearable": true],
-                        ["name": "CachedData", "title": "工作区运行编译缓存", "subtitle": "主进程与渲染进程预编译脚本缓存", "icon": "memorychip", "category": "safe", "defaultSelected": true, "bytes": 38_797_312, "fileCount": 134, "exists": true, "clearable": true],
-                        ["name": "Cookies", "title": "网络会话与站点授权凭据", "subtitle": "站点级 Cookie 与网络登录会话，清理后部分服务需重新授权", "icon": "key.horizontal", "category": "stateful", "defaultSelected": false, "impactWarning": "清理后需重新登录授权", "bytes": 18_874_368, "fileCount": 12, "exists": true, "clearable": true]
-                    ],
-                    "safeBytes": 1_499_463_680,
-                    "statefulBytes": 18_874_368,
-                    "totalBytes": 1_518_338_048,
-                    "totalFiles": 4224,
+                    "retentionDays": reqRetention,
+                    "entries": scanEntries,
+                    "safeBytes": safeSum,
+                    "statefulBytes": statefulSum,
+                    "totalBytes": safeSum + statefulSum,
+                    "totalFiles": 4964,
                     "protectedEntries": [
-                        ["id": "workspace", "title": "工作区与核心账号凭据", "subtitle": "User/globalStorage（OAuth 令牌库 state.vscdb）与工作区配置", "icon": "folder.badge.gearshape", "bytes": 68_157_440, "fileCount": 312, "exists": true],
-                        ["id": "conversations", "title": "Agent 历史对话与上下文库", "subtitle": "本地会话历史记录与模型调用统计数据库", "icon": "bubble.left.and.bubble.right", "bytes": 2_841_640_960, "fileCount": 343, "exists": true]
+                        ["id": "workspace", "title": "工作区与核心账号凭据", "subtitle": "User/globalStorage（OAuth 令牌库 state.vscdb）、Cookies、Local Storage 与工作区配置", "icon": "folder.badge.gearshape", "bytes": 87_031_808, "fileCount": 324, "exists": true],
+                        ["id": "conversations", "title": "Agent 历史对话与上下文库", "subtitle": "受保护的主对话、已归档对话、正式产物与站点会话", "icon": "bubble.left.and.bubble.right", "bytes": 1_841_640_960, "fileCount": 201, "exists": true]
                     ],
-                    "protectedBytes": 2_909_798_400,
+                    "protectedBytes": 1_928_672_768,
                     "snapshots": [
-                        ["id": "GravityBox-缓存-1729900800000", "timestamp": 1729900800, "totalBytes": 312_475_648, "fileCount": 3180, "items": ["Cache", "Code Cache", "GPUCache"], "movedCount": 3, "restorable": true, "interrupted": false]
+                        ["id": "GravityBox-缓存-1729900800000", "timestamp": 1729900800, "totalBytes": 312_475_648, "fileCount": 3180, "items": ["Cache", "AgentBrowserCache", "OrphanAgentData"], "itemTitles": ["网络与静态资源缓存", "浏览器沙箱加速缓存", "已删对话残留与临时文件"], "movedCount": 3, "restorable": true, "interrupted": false],
+                        ["id": "GravityBox-缓存-1729814400000", "timestamp": 1729814400, "totalBytes": 642_252_800, "fileCount": 1120, "items": ["AgentSubagentDatabases", "AgentTaskStepLogs"], "itemTitles": ["历史子智能体轨迹库", "历史任务与步骤输出日志"], "movedCount": 2, "restorable": true, "interrupted": false]
                     ],
                     "running": true,
+                    "browserBusy": false,
                     "scannedAt": Int(Date().timeIntervalSince1970)
                 ]
-            case "account_switch_preflight": return ["ok":preflightState != "error","safe":preflightState == "safe","appRunning":preflightState == "busy","hasRunningTask":preflightState == "busy","error":"隔离预检失败"]
+            case "account_switch_preflight": return [
+                "ok": preflightState != "error",
+                "safe": preflightState == "safe" || preflightState == "running_idle",
+                "appRunning": preflightState == "busy" || preflightState == "running_idle",
+                "stableRunning": preflightState == "running_idle",
+                "hasRunningTask": preflightState == "busy",
+                "error": "隔离预检失败"
+            ]
             case "account_switch": switches += 1; activeId = payload["id"] as? String ?? activeId; return ["ok":true,"message":"隔离事务完成"]
             case "account_recovery_info": return ["ok":true,"available":false]
             case "pause": lastTranslationCommand = "pause"; return ["ok":true]
             case "resume": lastTranslationCommand = "resume"; return ["ok":true]
+            case "hud_set":
+                let enabled = payload["enabled"] as? Bool ?? true
+                lastHudCommandEnabled = enabled
+                var nextStatus = status
+                nextStatus["hudEnabled"] = enabled
+                return ["ok":true,"status":nextStatus]
             default: return ["ok":true]
             }
         }
@@ -145,7 +181,7 @@ import Cocoa
             window.appearance = NSAppearance(named:appearance)
             for size in [NSSize(width:880,height:580),NSSize(width:960,height:640),NSSize(width:1100,height:760)] {
                 window.setFrame(NSRect(origin:window.frame.origin,size:size),display:true)
-                for page in 0..<4 {
+                for page in 0..<5 {
                     assistant.selectPage(page); pump(); window.contentView?.layoutSubtreeIfNeeded()
                     let name = "\(theme)-\(Int(size.width))x\(Int(size.height))-\(page).png"
                     try capture(window.contentView!,output.appendingPathComponent(name)); captures.append(name)
@@ -160,7 +196,7 @@ import Cocoa
                     if page == 2 {
                         let usage = assistant.usagePage!
                         func labels(_ view:NSView)->[NSTextField] { (view as? NSTextField).map{[$0]} ?? view.subviews.flatMap{labels($0)} }
-                        for targetName in ["gemini-3.8-flash-n", "gemini-3.8-flash-exp-a", "Claude Opus 5.5 Medium"] {
+                        for targetName in ["gemini-3.8-flash-n", "gemini-3.8-flash-exp-a", "Claude Opus 5.5"] {
                             for label in labels(usage.donutLegendStack) where label.stringValue == targetName {
                                 let width = (label.stringValue as NSString).size(withAttributes:[.font:label.font!]).width
                                 check(label.bounds.width >= ceil(width), "Cost legend constrains model name \(targetName) at \(Int(size.width))pt width (\(label.bounds.width) < \(ceil(width)))")
@@ -168,7 +204,7 @@ import Cocoa
                             }
                         }
                         check(usage.costTitle.stringValue == "API费用估算" || usage.costTitle.stringValue == "今日费用估算" || usage.costTitle.stringValue == "API 费用估算","Title must remain API费用估算")
-                        check(usage.priceCoverage.stringValue.isEmpty && usage.priceCoverage.isHidden,"Partial pricing model count must stay hidden")
+                        check(usage.statusSummary.stringValue.isEmpty && usage.footerBox.isHidden,"Partial pricing footer warning must stay hidden when all models are priced")
                         check(usage.donutLegendStack.fittingSize.width <= size.width-190,"Legend exceeds page")
                     }
                 }
@@ -176,10 +212,27 @@ import Cocoa
             let policy = AccountPolicySheet(app:assistant,config:["strategy":"priority","monitored_model":"gemini","reserve_percentage":10,"candidate_min_percentage":30],saved:{})
             policy.show(in:window,onDismiss:{})
             policy.window.appearance = NSAppearance(named:appearance); pump()
-            check(policy.modelPopup.itemTitles == ["Gemini","Claude/GPT","Gemini 4 Argon"], "Model popup must expose exactly the requested three choices")
+            check(policy.modelPopup.itemTitles == ["Gemini 全系模型","Gemini","Claude/GPT","Gemini 4 Argon","Gemini 4 Carbon"], "Model popup must expose Gemini 全系模型, Gemini, Claude/GPT, Gemini 4 Argon, and Gemini 4 Carbon")
+            check(policy.strategyPopup.frame.width == policy.modelPopup.frame.width, "Policy popups must share uniform width")
+            var dynamicAccount = accounts[0]
+            dynamicAccount["standaloneModels"] = [
+                ["key":"argon","displayName":"Gemini 4 Argon","availability":"available","quotaState":"known","period":"weekly","remaining":0.008],
+                ["key":"carbon","displayName":"Gemini 4 Carbon","availability":"disabled","quotaState":"not_reported","period":"weekly"],
+                ["key":"xenon","displayName":"Gemini 4 Xenon","availability":"available","quotaState":"known","period":"weekly","remaining":0.85]
+            ]
+            assistant.cachedAccounts = [dynamicAccount]
+            let dynamicPolicy = AccountPolicySheet(app:assistant,config:["strategy":"priority","monitored_model":"xenon","reserve_percentage":10,"candidate_min_percentage":30],saved:{})
+            check(dynamicPolicy.modelPopup.itemTitles == ["Gemini 全系模型","Gemini","Claude/GPT","Gemini 4 Argon","Gemini 4 Carbon","Gemini 4 Xenon"], "Model popup must auto-detect new standalone models")
+            check(dynamicPolicy.modelPopup.selectedItem?.title == "Gemini 4 Xenon", "Model popup must select configured dynamic model")
+            assistant.cachedAccounts = accounts
             for popup in [policy.strategyPopup, policy.modelPopup] {
                 check(popup.focusRingType == .none && popup.cell?.focusRingType == NSFocusRingType.none, "Installed popup cell must not restore the square focus bezel")
+                check(popup.cell is DesignPopUpCell, "PopUp buttons must use DesignPopUpCell so menus drop cleanly below the control")
+                let origin = Design.popUpOrigin(below: popup)
+                check(origin.x == 0 && origin.y == popup.bounds.maxY + 6, "Flipped popup origin must place menu 6pt below control bottom")
             }
+            let unflippedProbe = NSView(frame: NSRect(x: 0, y: 0, width: 80, height: 28))
+            check(Design.popUpOrigin(below: unflippedProbe) == NSPoint(x: 0, y: -6), "Unflipped anchor origin must place menu 6pt below control bottom")
             policy.window.makeFirstResponder(policy.strategyPopup); pump()
             try capture(policy.window.contentView!,output.appendingPathComponent("\(theme)-policy-popup-focused.png"))
             policy.window.makeFirstResponder(policy.reserve); pump()
@@ -195,8 +248,8 @@ import Cocoa
             addSheet.window.contentView?.layoutSubtreeIfNeeded(); pump()
             func findLabels(_ v: NSView) -> [NSTextField] { (v as? NSTextField).map { [$0] } ?? v.subviews.flatMap { findLabels($0) } }
             let addLabels = findLabels(addSheet.window.contentView!)
-            check(addLabels.contains { $0.stringValue == "读取本机已登录的账号" && $0.lineBreakMode != .byTruncatingMiddle && $0.bounds.width >= 150 }, "AddAccountSheet current-account description must not middle-truncate")
-            check(addLabels.contains { $0.stringValue == "在浏览器中完成授权，凭据仅保存在本机" && $0.lineBreakMode != .byTruncatingMiddle && $0.bounds.width >= 180 }, "AddAccountSheet OAuth description must not middle-truncate")
+            check(addLabels.contains { $0.stringValue == "导入当前 Antigravity 登录账号" && $0.lineBreakMode != .byTruncatingMiddle && $0.bounds.width >= 150 }, "AddAccountSheet current-account description must not middle-truncate")
+            check(addLabels.contains { $0.stringValue == "通过浏览器授权，凭据仅存本机" && $0.lineBreakMode != .byTruncatingMiddle && $0.bounds.width >= 140 }, "AddAccountSheet OAuth description must not middle-truncate")
             try capture(addSheet.window.contentView!, output.appendingPathComponent("\(theme)-add-account.png"))
             addSheet.dismiss(); pump()
             let logSheet = UsageLogController(app:assistant,period:"today")
@@ -213,20 +266,16 @@ import Cocoa
             maintSheet.sheet.appearance = NSAppearance(named: appearance)
             maintSheet.cachePage.fetch(force: true); pump()
             maintSheet.sheet.contentView?.layoutSubtreeIfNeeded(); pump()
+            check(maintSheet.cachePage.retentionPopup.itemTitles == ["保留近 7 天", "保留近 30 天", "全部非活跃"], "Maintenance sheet must expose 3 retention window choices")
+            check(!maintSheet.cachePage.snapshotPopup.isHidden && maintSheet.cachePage.snapshotPopup.numberOfItems == 2, "Maintenance recovery footer must expose multi-snapshot selector when >=2 restorable snapshots exist")
+            check(maintSheet.cachePage.selectedNames == Set(["Cache", "AgentBrowserCache", "PartitionsCache", "OrphanAgentData"]), "Maintenance default selection must check safe items only and leave history slimming items unchecked")
+            check(!maintSheet.cachePage.sheetDoneButton.isHidden && maintSheet.cachePage.sheetDoneButton.title == "完成", "Maintenance sheet must display 完成 button")
+            check(maintSheet.cachePage.selectedSummaryBadge.title == "已选 4 项", "Maintenance selectedSummaryBadge must update from 正在扫描 to 已选 4 项 after scan completes")
+            check(maintSheet.cachePage.breakdownWarningLabel.isHidden, "Maintenance breakdownWarningLabel must stay hidden when no items are blocked")
+            check(maintSheet.cachePage.sheetDoneButton.frame.minY < maintSheet.cachePage.view.frame.minY, "Maintenance 完成 button must sit in pinned bottom footer below scroll area")
+            check(maintSheet.cachePage.sheetDoneButton.frame.maxX > maintSheet.cachePage.clearButton.frame.minX, "Maintenance 完成 button must align at bottom-right")
             try capture(maintSheet.sheet.contentView!, output.appendingPathComponent("\(theme)-maintenance-sheet.png"))
             maintSheet.closeSheet(); pump()
-            let card = MenuStatusCard(target:assistant,account:accounts[0],enabled:true)
-            let host = NSWindow(contentRect:NSRect(x:0,y:0,width:320,height:600),styleMask:[.titled],backing:.buffered,defer:false)
-            host.appearance = NSAppearance(named:appearance)
-            let surface = DesignSurface(Design.card); host.contentView = surface
-            card.autoresizingMask = []; surface.addSubview(card); card.frame.origin = .zero
-            card.updateHeight()
-            host.setContentSize(NSSize(width:320,height:card.frame.height)); host.contentView?.layoutSubtreeIfNeeded(); pump()
-            check(card.emailLabel.stringValue == "alex@example.invalid","Full email lost")
-            check(card.emailLabel.bounds.width > 200,"Identity width still compressed")
-            try capture(surface,output.appendingPathComponent("\(theme)-menu-default.png"))
-            card.toggleAccountList(); pump(); host.setContentSize(NSSize(width:320,height:card.frame.height)); host.contentView?.layoutSubtreeIfNeeded()
-            try capture(surface,output.appendingPathComponent("\(theme)-menu-accounts.png")); host.orderOut(nil)
             let allAccounts = accounts
             accounts = [allAccounts[2]]; activeId = "c"; assistant.activeAccountId = "c"; assistant.cachedAccounts = accounts
             window.setFrame(NSRect(origin:window.frame.origin,size:NSSize(width:880,height:580)),display:true)
@@ -244,12 +293,17 @@ import Cocoa
             }
             check(assistant.accountsPage?.activeId == "c", "AccountsPage must preserve configured activeId when liveAccountEmail is not in saved accounts")
             try capture(window.contentView!,output.appendingPathComponent("\(theme)-free-model-quota.png"))
-            let freeCard = MenuStatusCard(target:assistant,account:accounts[0],enabled:true)
-            card.removeFromSuperview(); surface.addSubview(freeCard); freeCard.frame.origin = .zero; freeCard.updateHeight()
-            host.setContentSize(NSSize(width:320,height:freeCard.frame.height)); host.contentView?.layoutSubtreeIfNeeded(); pump()
-            check(freeCard.gemini5h.titleLabel.stringValue == "模型配额" && freeCard.gemini5h.valueLabel.stringValue == "100%", "Menu must show FREE model quota")
-            check(freeCard.claude5h.resetLabel.stringValue.contains("6天23小时"), "Menu must preserve the real long model reset")
-            try capture(surface,output.appendingPathComponent("\(theme)-free-model-menu.png"))
+            let freeMenuPanel = MenuPanelController(app: assistant)
+            let freeHost = NSWindow(contentRect: NSRect(x: 0, y: 0, width: MenuPanelController.panelWidth, height: MenuPanelController.defaultPanelHeight), styleMask: [.titled], backing: .buffered, defer: false)
+            freeHost.appearance = NSAppearance(named: appearance)
+            freeHost.contentViewController = freeMenuPanel
+            freeMenuPanel.selectTab(1, persist: false); freeMenuPanel.panelWillOpen(); pump()
+            freeHost.setContentSize(freeMenuPanel.preferredContentSize); freeHost.contentView?.layoutSubtreeIfNeeded(); pump()
+            check(freeMenuPanel.quotaEmailLabel.stringValue == "charlie@example.invalid", "Full email lost on MenuPanelController")
+            check(freeMenuPanel.quotaGemini5h.titleLabel.stringValue == "模型配额" && freeMenuPanel.quotaGemini5h.valueLabel.stringValue == "100%", "Menu must show FREE model quota")
+            check(freeMenuPanel.quotaClaude5h.resetLabel.stringValue.contains("6天23小时"), "Menu must preserve the real long model reset")
+            try capture(freeHost.contentView!,output.appendingPathComponent("\(theme)-free-model-menu.png"))
+            freeHost.orderOut(nil)
             accounts = allAccounts; activeId = "a"; assistant.activeAccountId = "a"; assistant.cachedAccounts = accounts
         }
         assistant.accountsPage!.fetch(); pump()
@@ -352,12 +406,14 @@ import Cocoa
             try capture(panelHost.contentView!, output.appendingPathComponent("light-menu-panel-usage-single-model.png"))
         }
         menuPanel.selectTab(1, persist: false); pump()
-        check(menuPanel.selectedTab == 1 && menuPanel.headerRefreshButton.title == "刷新" && (menuPanel.headerRefreshButton.toolTip ?? "").contains("当前"), "Quota tab must keep fixed button title and scope tooltip to current account")
+        check(menuPanel.selectedTab == 1 && menuPanel.headerRefreshButton.title == "刷新" && menuPanel.headerRefreshButton.toolTip == nil, "Quota tab must keep fixed button title and zero hover tooltip")
         check(menuPanel.quotaAccountNameLabel.stringValue == "Alex" && menuPanel.quotaGemini5h.valueLabel.stringValue == "91%", "Quota tab must display active account identity and contract quota")
+        check(menuPanel.quotaCarbon.valueLabel.stringValue == "未知", "Missing Carbon response must be unknown even for PRO")
+        check(menuPanel.quotaCarbon.valueLabel.stringValue != "不可用", "Missing model cannot imply disabled")
         check(menuPanel.quotaFooterLabel.stringValue.hasPrefix("更新于 ") && !menuPanel.quotaFooterLabel.stringValue.contains("采样于"), "Quota tab footer must use concise 更新于 timestamp")
         check(menuPanel.quotaFooterLabel.superview === menuPanel.quotaRoot, "Quota tab footer must reside directly in quotaRoot")
         menuPanel.selectTab(2, persist: false); pump()
-        check(menuPanel.selectedTab == 2 && menuPanel.headerRefreshButton.title == "刷新" && (menuPanel.headerRefreshButton.toolTip ?? "").contains("所有"), "Accounts tab must keep fixed button title and scope tooltip to all accounts")
+        check(menuPanel.selectedTab == 2 && menuPanel.headerRefreshButton.title == "刷新" && menuPanel.headerRefreshButton.toolTip == nil, "Accounts tab must keep fixed button title and zero hover tooltip")
         check(menuPanel.accountsCountLabel.stringValue == "3 个账号" && menuPanel.expandedAccountIds.contains("a"), "Accounts tab must list all accounts with active account expanded")
         menuPanel.toggleAccountExpanded("b")
         check(menuPanel.expandedAccountIds.contains("b"), "Clicking backup account row must expand its 5-window quota details without switching")
@@ -387,6 +443,107 @@ import Cocoa
             secondCard.stateButton.performClick(nil)
             check(switchedAccountId == secondCard.accountId, "Clicking account stateButton must trigger account switch independently")
         }
+
+        // Package C: MenuPanelController edge states & switches
+        check(menuPanel.openAntigravityBtn.title == "打开 Antigravity", "MenuPanel openAntigravityBtn title must be 打开 Antigravity")
+        check(menuPanel.openMainBtn.title.hasPrefix("打开") && menuPanel.openMainBtn.title.hasSuffix("↗"), "MenuPanel openMainBtn title must be 打开... ↗")
+
+        // Tab 0 (Usage) empty models & toggle
+        menuPanel.selectTab(0, persist: false); pump()
+        if var emptyModelReport = assistant.cachedUsageReportsByPeriod["today"] {
+            emptyModelReport["byModel"] = []
+            emptyModelReport["snapshotId"] = "empty-models-snap"
+            assistant.cachedUsageReportsByPeriod["today"] = emptyModelReport
+            menuPanel.onUsageReportUpdated(period: "today", result: .success(emptyModelReport))
+            check(menuPanel.modelsHeaderCountLabel.stringValue == "暂无记录", "Empty models must show 暂无记录")
+            check(allTextValues(menuPanel.modelsListStack).contains { $0.contains("当前时间范围暂无模型调用记录") }, "Empty models must show placeholder")
+            check(menuPanel.toggleModelsButton.isHidden == true, "Empty models must hide toggleModelsButton")
+        }
+
+        // Tab 0 period switching
+        menuPanel.selectPeriod(1, persist: false); pump()
+        check(menuPanel.trendTitleLabel.stringValue == "近 7 天趋势", "Period 1 must show 近 7 天趋势")
+        menuPanel.selectPeriod(3, persist: false); pump()
+        check(menuPanel.trendTitleLabel.stringValue == "全部趋势", "Period 3 must show 全部趋势")
+        menuPanel.selectPeriod(0, persist: false); pump()
+
+        // Tab 0 offline state
+        assistant.reachable = false
+        assistant.cachedUsageReportsByPeriod.removeValue(forKey: "today")
+        menuPanel.selectTab(0, persist: false); pump()
+        check(menuPanel.usageScopeLabel.stringValue == "正在等待本机服务…", "Offline Tab 0 must show 正在等待本机服务…")
+        check(menuPanel.usageFooterLabel.stringValue == "本机服务离线", "Offline Tab 0 footer must show 本机服务离线")
+        check(menuPanel.tokensTile.valueLabel.stringValue == "—", "Offline metric tiles must show —")
+
+        // Tab 0 unavailable state
+        assistant.reachable = true
+        assistant.cachedUsageReportsByPeriod["today"] = [
+            "summary": ["availability": "unavailable"]
+        ]
+        menuPanel.selectTab(0, persist: false); pump()
+        check(menuPanel.usageScopeLabel.stringValue == "所选会话数据库均读取失败", "Unavailable Tab 0 must show 所选会话数据库均读取失败")
+        check(menuPanel.usageFooterLabel.stringValue.contains("统计暂不可用"), "Unavailable Tab 0 footer must show 统计暂不可用")
+
+        // Tab 1 (Quota) empty & live unsaved
+        let savedFixtureAccounts = accounts
+        let savedMenuAccounts = assistant.cachedAccounts
+        let savedActiveId = assistant.activeAccountId
+        let savedLiveStatus = assistant.statusValue
+
+        accounts = []
+        assistant.cachedAccounts = []
+        assistant.activeAccountId = ""
+        assistant.statusValue = LiveStatus(["mode": "adaptive", "liveAccountEmail": ""])
+        menuPanel.selectTab(1, persist: false); pump()
+        check(menuPanel.quotaAccountNameLabel.stringValue == "尚未保存账号", "Empty quota tab must show 尚未保存账号")
+        check(menuPanel.quotaEmptyButton.isHidden == false, "Empty quota tab must show quotaEmptyButton")
+        check(menuPanel.quotaGroupsContainer.isHidden == true, "Empty quota tab must hide quotaGroupsContainer")
+
+        assistant.statusValue = LiveStatus(["mode": "adaptive", "liveAccountEmail": "unsaved@example.invalid"])
+        menuPanel.selectTab(1, persist: false); pump()
+        check(menuPanel.quotaAccountNameLabel.stringValue == "运行中账号尚未保存", "Unsaved live account must show 运行中账号尚未保存")
+        check(menuPanel.quotaEmailLabel.stringValue.contains("unsaved@example.invalid"), "Unsaved live account must show email in subtitle")
+
+        // Tab 1 refreshing state & global multi-account summary isolation
+        accounts = savedFixtureAccounts
+        assistant.cachedAccounts = savedMenuAccounts
+        assistant.activeAccountId = savedActiveId
+        assistant.quotaRefreshError = "已读取 1 个账号；2 个刷新失败。详情见账号卡片。"
+        menuPanel.selectTab(1, persist: false); pump()
+        check(menuPanel.quotaWarningLabel.isHidden == true, "Multi-account partial summary must not pollute healthy current account warning label")
+        assistant.quotaRefreshError = "刷新超时，请重试；保留上次配额"
+        menuPanel.selectTab(1, persist: false); pump()
+        check(menuPanel.quotaWarningLabel.isHidden == false && menuPanel.quotaWarningLabel.stringValue == "配额查询超时", "Transport/timeout global error must still display on current quota tab")
+        assistant.quotaRefreshError = nil
+        assistant.quotaRefreshing = true
+        menuPanel.selectTab(1, persist: false); pump()
+        check(menuPanel.quotaFooterLabel.stringValue == "正在刷新配额…", "Refreshing quota must show 正在刷新配额…")
+        assistant.quotaRefreshing = false
+
+        // Tab 2 (Accounts) empty online & offline
+        accounts = []
+        assistant.cachedAccounts = []
+        assistant.reachable = true
+        menuPanel.selectTab(2, persist: false); pump()
+        check(menuPanel.accountsCountLabel.stringValue == "0 个账号", "Empty accounts count must be 0 个账号")
+        check(allTextValues(menuPanel.accountsCardsStack).contains { $0.contains("暂无账号，请前往主界面添加") }, "Empty accounts tab must show guidance")
+
+        assistant.reachable = false
+        menuPanel.selectTab(2, persist: false); pump()
+        check(allTextValues(menuPanel.accountsCardsStack).contains { $0.contains("正在等待本机服务读取账号列表…") }, "Offline accounts tab must show waiting message")
+
+        // Restore accounts and reports
+        accounts = savedFixtureAccounts
+        assistant.reachable = true
+        assistant.cachedAccounts = savedMenuAccounts
+        assistant.activeAccountId = savedActiveId
+        assistant.statusValue = savedLiveStatus
+        assistant.cachedUsageReportsByPeriod["today"] = [
+            "summary": totals,
+            "byModel": models,
+            "todayHourly": todayHourly
+        ]
+        menuPanel.selectTab(0, persist: false); pump()
         assistant.openMainWindowFromMenuPanel(tab: 0, usagePeriod: 2); pump()
         check(assistant.currentPage == 2 && assistant.usageSelectedPeriod == 2, "Footer deep-link from Usage tab must navigate to UsagePage and carry selected period")
         check(assistant.usagePage!.donutChart.totalUsd == 23.78, "Donut chart must receive total equivalent USD")
@@ -407,7 +564,11 @@ import Cocoa
         check(ov.rightBentoTitleLabel.stringValue == "今日活跃模型", "Overview right Bento card title must be 今日活跃模型")
         check(ov.rightBentoCountBadge.title == "Top 2 / 共 4 个", "Overview right Bento count badge must show Top 2 / 共 4 个")
         check(ov.bentoRightStack.arrangedSubviews.count == 2, "Overview Bento right stack must display 2 subrows")
+        func findButtons(_ v: NSView) -> [NSButton] { (v as? NSButton).map { [$0] } ?? v.subviews.flatMap { findButtons($0) } }
+        check(!findButtons(ov.view).contains { $0.title == "管理账号" }, "Overview hero card must not display 管理账号 button")
         if let firstBox = ov.bentoRightStack.arrangedSubviews.first as? NSBox {
+            func findBadges(_ v: NSView) -> [PillBadge] { (v as? PillBadge).map { [$0] } ?? v.subviews.flatMap { findBadges($0) } }
+            check(findBadges(firstBox).allSatisfy { $0.isHidden }, "Active model row must move USD into subtitle without showing a pill badge")
             check(firstBox.accessibilityLabel()?.contains("Gemini 3.8 Flash") == true || firstBox.accessibilityLabel()?.contains("gemini-3.8-flash") == true, "Subrow box must expose VoiceOver accessibility label")
             check(firstBox.toolTip == nil || firstBox.toolTip?.isEmpty == true, "Overview Bento subrows must be read-only without deep-link tooltip")
             check(firstBox.accessibilityRole() == .group, "Subrow box must be an accessible display group, not a button")
@@ -458,9 +619,18 @@ import Cocoa
         assistant.switchAccountByIdFromMenu("b")
         check(assistant.activeAccountId == "a","Menu must not optimistically change current identity")
         waitUntil(description: "account switch to complete") {
-            switches >= 1
+            switches >= 1 && !assistant.accountSwitchInFlight
         }
         check(switches == 1, "Confirmed fixture switch must run exactly once")
+        let opensBeforeIdleSwitch = assistant.openedApplications
+        preflightState = "running_idle"
+        assistant.switchAccountByIdFromMenu("c")
+        waitUntil(description: "running_idle switch to complete and relaunch") {
+            switches >= 2 && !assistant.accountSwitchInFlight && assistant.openedApplications > opensBeforeIdleSwitch
+        }
+        check(switches == 2 && assistant.openedApplications == opensBeforeIdleSwitch + 1, "Switching while Antigravity was running must automatically relaunch Antigravity")
+        switches = 1; assistant.activeAccountId = "a"; activeId = "a"
+        preflightState = "safe"
         preflightState = "busy"; assistant.switchAccountByIdFromMenu("c"); pump()
         check(switches == 1,"Running official app must block switching")
         preflightState = "error"; assistant.switchAccountByIdFromMenu("c"); pump()
@@ -494,18 +664,20 @@ import Cocoa
         check(assistant.targetApplication.bundleIdentifier == "com.google.antigravity", "Native target must be stable")
         check(DesktopApplicationTarget.installedChannels() == ["stable"], "Insiders must not be discoverable")
         let stableSettings = PreferencesController(app: assistant)
-        func allTextValues(_ v: NSView) -> [String] {
-            var values: [String] = []
-            if let tf = v as? NSTextField { values.append(tf.stringValue) }
-            if let btn = v as? NSButton { values.append(btn.title) }
-            if let pop = v as? NSPopUpButton { values.append(contentsOf: pop.itemTitles) }
-            for sub in v.subviews { values.append(contentsOf: allTextValues(sub)) }
-            return values
-        }
         check(!allTextValues(stableSettings.view).contains { $0.localizedCaseInsensitiveContains("Insiders") || $0.contains("目标应用") }, "Settings UI must not display target application switcher or Insiders text")
-        check(stableSettings.checkUpdateBtn.title == "检查更新", "About row must replace 关于 GravityBox with 检查更新 button")
-        check(!allTextValues(stableSettings.view).contains("关于 GravityBox"), "Settings UI must not contain 关于 GravityBox button")
-        check(stableSettings.aboutSubtitleLabel.isHidden && stableSettings.aboutSubtitleLabel.stringValue.isEmpty, "About row subtitle must stay hidden when no update is available")
+        check(stableSettings.manageCacheBtn.title == "管理存储…", "Storage settings row button must display 管理存储…")
+        check(stableSettings.pricingSyncCheckBtn.title == "立即检查" && stableSettings.pricingSyncCheckBtn.intrinsicContentSize.height == 28, "Pricing check button must use fixed-width InlineRefreshButton matching global 28pt height")
+        stableSettings.pricingSyncCheckBtn.setBusy(true, available: true)
+        check(stableSettings.pricingSyncCheckBtn.isActivitySpinning && stableSettings.pricingSyncCheckBtn.title == "立即检查", "Pricing check button must spin in place without title jump")
+        stableSettings.pricingSyncCheckBtn.setBusy(false, available: true)
+        stableSettings.refreshStorageRowState(force: true); pump()
+        check(!stableSettings.storageBadge.isHidden && stableSettings.storageBadge.title.hasPrefix("可释放 "), "Storage settings row must display reclaimable space pill badge")
+        check(!allTextValues(stableSettings.view).contains("检查更新") && !allTextValues(stableSettings.view).contains("关于"), "Settings UI must extract 关于 section out into its own top-level sidebar tab")
+        assistant.selectPage(4); pump()
+        let aboutPage = assistant.aboutPage!
+        check(assistant.names == ["总览", "账号", "用量", "设置", "关于"], "Sidebar must contain 5 top-level tabs ending with 关于")
+        check(aboutPage.checkUpdateBtn.title == "检查更新", "About page must display 检查更新 button")
+        check(aboutPage.statusLine.isHidden && aboutPage.updateStatusLabel.stringValue.isEmpty, "About page must hide idle status subtitle line")
         check(assistant.installUpdateButton?.isHidden == true, "Sidebar installUpdateButton must stay hidden when no update is available")
         assistant.updateManager.simulateRelease(AppReleaseInfo(
             version: "1.1.0",
@@ -517,8 +689,8 @@ import Cocoa
             dmgURL: nil,
             sha256URL: nil
         ))
-        stableSettings.refreshUpdateRowState()
-        check(!stableSettings.aboutSubtitleLabel.isHidden && stableSettings.aboutSubtitleLabel.stringValue == "发现新版本 v1.1.0，可立即升级", "About row must display exact update subtitle when update is available")
+        aboutPage.refreshUpdateState()
+        check(!aboutPage.installNowBtn.isHidden && aboutPage.updateStatusLabel.stringValue.contains("v1.1.0"), "About page must display inline update prompt and 立即更新 button when update is available")
         check(assistant.installUpdateButton?.isHidden == false && assistant.installUpdateButton?.title == "安装更新" && assistant.installUpdateButton?.badgeText == "v1.1.0" && assistant.installUpdateButton?.isUpdatePrompt == true, "Sidebar must display 安装更新 prompt capsule above 打开 Antigravity when update is available")
         if let installBtn = assistant.installUpdateButton, let openBtn = assistant.launchApplicationButton, let bStack = installBtn.superview as? NSStackView {
             let installIdx = bStack.arrangedSubviews.firstIndex(of: installBtn) ?? -1
@@ -532,23 +704,15 @@ import Cocoa
             window.contentView?.layoutSubtreeIfNeeded(); pump()
             try capture(window.contentView!, output.appendingPathComponent("\(theme)-hero-install-update-capsule.png"))
         }
-        assistant.selectPage(3); pump()
-        stableSettings.showUpdateSheet(); pump()
-        if let updateSheet = stableSettings.updateSheet {
-            check(updateSheet.primaryBtn.title == "立即更新", "Update sheet must display 立即更新 button when release is available")
-            check(updateSheet.primaryBtn.showsSpinner == false && updateSheet.spinner.isHidden == true, "Update sheet primaryBtn must hide inline spinner when updateAvailable")
-            check(updateSheet.closeBtn.isEnabled == true, "Update sheet closeBtn must be enabled in updateAvailable state")
-            let sheetTexts = allTextValues(updateSheet.sheet.contentView!)
-            check(!sheetTexts.contains { $0.hasPrefix("构建 ") }, "Update sheet header must not display 构建 pill")
-            check(!sheetTexts.contains { $0.contains("正在连接 GitHub Releases") }, "Update sheet header must not display 正在连接 GitHub Releases subtitle")
-            check(!sheetTexts.contains("正在检查") && !sheetTexts.contains("可升级") && !sheetTexts.contains("已是最新"), "Update sheet notes header must not display right-side state capsule")
-            updateSheet.sheet.contentView?.layoutSubtreeIfNeeded()
-            if let titleRow = updateSheet.titleLabel.superview {
-                check(abs(titleRow.frame.midY - updateSheet.githubBtn.frame.midY) <= 1.5, "GravityBox title and version pill must be vertically parallel with GitHub button")
-            }
-            check(updateSheet.changelogTextView.string.contains("• 新增 GitHub Release 检查更新"), "Update sheet must format markdown list items into bullets")
-            check(!updateSheet.changelogTextView.string.contains("```") && !updateSheet.changelogTextView.string.contains("###"), "Update sheet must strip raw markdown code fences and heading hashes")
-            check(!updateSheet.changelogTextView.string.contains("sudo xattr") && !updateSheet.changelogTextView.string.contains("SHA-256"), "Update sheet must strip terminal quarantine commands and SHA-256 footer blocks")
+        assistant.selectPage(4); pump()
+        check(aboutPage.releaseNotesBtn.title == "更新日志 ↗" && !aboutPage.releaseNotesBtn.isHidden, "About page must display 更新日志 ↗ button when release is available")
+        if let rel = assistant.updateManager.availableRelease {
+            let formattedNotes = AppUpdateManager.formatReleaseNotes(rel.changelog)
+            check(formattedNotes.contains("• 新增 GitHub Release 检查更新"), "Release notes formatter must format markdown list items into bullets")
+            check(!formattedNotes.contains("```") && !formattedNotes.contains("###"), "Release notes formatter must strip raw markdown code fences and heading hashes")
+            check(!formattedNotes.contains("sudo xattr") && !formattedNotes.contains("SHA-256"), "Release notes formatter must strip terminal quarantine commands and SHA-256 footer blocks")
+        }
+        do {
             let updaterScript = AppUpdateManager.buildDetachedUpdaterScript(
                 myPid: 12345,
                 stagedAppPath: "/tmp/staged/GravityBox.app",
@@ -621,47 +785,67 @@ import Cocoa
             try? fm.removeItem(at: state.appendingPathComponent("updates"))
             try? fm.removeItem(at: fakeDownloadsDir)
 
-            for (theme, appearance) in [("light", NSAppearance.Name.aqua), ("dark", NSAppearance.Name.darkAqua)] {
-                updateSheet.sheet.appearance = NSAppearance(named: appearance)
-                updateSheet.sheet.contentView?.layoutSubtreeIfNeeded(); pump()
-                try capture(updateSheet.sheet.contentView!, output.appendingPathComponent("\(theme)-update-sheet-available.png"))
-            }
-            // Verify checking state spinner is embedded inside primaryBtn and button stays bright blue (no dark navy blue flash)
-            let savedRelease = assistant.updateManager.availableRelease
-            assistant.updateManager.simulateChecking()
-            check(updateSheet.primaryBtn.title == "检查中…" && updateSheet.closeBtn.title == "关闭" && updateSheet.changelogHeading.stringValue == "版本说明", "Checking state must render 版本说明 heading, 关闭 button and 检查中… primary button")
-            check(updateSheet.spinner.superview === updateSheet.primaryBtn && !updateSheet.spinner.isHidden, "Checking spinner must be embedded inside primaryBtn")
-            for (theme, appearance) in [("light", NSAppearance.Name.aqua), ("dark", NSAppearance.Name.darkAqua)] {
-                updateSheet.sheet.appearance = NSAppearance(named: appearance)
-                updateSheet.sheet.contentView?.layoutSubtreeIfNeeded(); pump()
-                try capture(updateSheet.sheet.contentView!, output.appendingPathComponent("\(theme)-update-sheet-checking.png"))
-            }
-            assistant.updateManager.simulateRelease(savedRelease)
+            check(aboutPage.autoUpdateSwitch.state == .off, "Auto update switch on About page must default to off")
+            aboutPage.autoUpdateSwitch.state = .on
+            aboutPage.toggleAutoUpdate()
+            check(assistant.configuration.value.autoUpdateEnabled == true, "Toggling About autoUpdateSwitch to on must persist autoUpdateEnabled = true")
+            aboutPage.autoUpdateSwitch.state = .off
+            aboutPage.toggleAutoUpdate()
+            check(assistant.configuration.value.autoUpdateEnabled == false, "Toggling About autoUpdateSwitch to off must persist autoUpdateEnabled = false")
+            aboutPage.autoUpdateSwitch.state = .on
+            aboutPage.toggleAutoUpdate()
+            check(assistant.configuration.value.autoUpdateEnabled == true, "Toggling About autoUpdateSwitch back to on must persist autoUpdateEnabled = true")
 
-            check(updateSheet.autoUpdateSwitch.state == .off, "Auto update switch in sheet footer must default to off")
-            updateSheet.autoUpdateSwitch.state = .off
-            updateSheet.toggleAutoUpdate()
-            check(assistant.configuration.value.autoUpdateEnabled == false, "Toggling autoUpdateSwitch must persist autoUpdateEnabled = false")
-            updateSheet.autoUpdateSwitch.state = .on
-            updateSheet.toggleAutoUpdate()
-            check(assistant.configuration.value.autoUpdateEnabled == true, "Toggling autoUpdateSwitch back must persist autoUpdateEnabled = true")
-            assistant.dismissAllSheetsAndPopovers(); pump()
-            check(window.activeSheetWindow == nil, "dismissAllSheetsAndPopovers must cleanly end attached modal update sheet before update restart")
-        }
-        assistant.updateManager.simulateRelease(nil)
-        stableSettings.refreshUpdateRowState()
-        check(stableSettings.aboutSubtitleLabel.isHidden, "Clearing available release must hide about row subtitle again")
-        check(assistant.installUpdateButton?.isHidden == true, "Clearing available release must hide sidebar installUpdateButton again")
-        if let updateSheet = stableSettings.updateSheet {
-            check(updateSheet.closeBtn.isEnabled == true && updateSheet.primaryBtn.isEnabled == true && !updateSheet.primaryBtn.showsSpinner, "Transitioning to upToDate must keep closeBtn and primaryBtn enabled without spinner")
-            check(updateSheet.changelogHeading.stringValue == "当前版本状态", "Update sheet upToDate state must display 当前版本状态 heading")
-            check(updateSheet.changelogTextView.textContainer?.lineFragmentPadding == 0, "Update sheet changelogTextView must have zero lineFragmentPadding for flush-left alignment")
-            for (theme, appearance) in [("light", NSAppearance.Name.aqua), ("dark", NSAppearance.Name.darkAqua)] {
-                updateSheet.sheet.appearance = NSAppearance(named: appearance)
-                updateSheet.sheet.contentView?.layoutSubtreeIfNeeded(); pump()
-                try capture(updateSheet.sheet.contentView!, output.appendingPathComponent("\(theme)-update-sheet-uptodate.png"))
+            assistant.selectPage(0); pump()
+            assistant.checkForUpdatesFromMenu(); pump()
+            check(assistant.currentPage == 4 && window.activeSheetWindow == nil, "checkForUpdatesFromMenu must navigate inline to About page without opening legacy update sheet")
+
+            if let maintSheet = assistant.preferencesController?.maintenanceSheet {
+                maintSheet.show(in: window); pump()
+                check(window.activeSheetWindow === maintSheet.sheet, "Maintenance sheet must attach before dismissAllSheetsAndPopovers verification")
+                assistant.dismissAllSheetsAndPopovers(); pump()
+                check(window.activeSheetWindow == nil, "dismissAllSheetsAndPopovers must cleanly end attached modal sheets")
             }
         }
+
+        // Package D: AboutPage states and system specs
+        let sampleRelease = AppReleaseInfo(
+            version: "1.1.0",
+            tagName: "v1.1.0",
+            title: "GravityBox v1.1.0",
+            changelog: "### 更新亮点\n- 新增功能",
+            publishedDate: "2026-11-04",
+            htmlURL: URL(string: "https://github.com/Enzoo404/gravitybox/releases/tag/v1.1.0")!,
+            dmgURL: nil,
+            sha256URL: nil
+        )
+        assistant.updateManager.simulateDownloading(sampleRelease)
+        aboutPage.refreshUpdateState()
+        check(aboutPage.cancelDownloadBtn.isHidden == false && aboutPage.updateMetaLabel.stringValue == "下载中", "About page downloading state must show cancel button and 下载中")
+
+        let fakeReadyDMG = state.appendingPathComponent("fake-ready.dmg")
+        assistant.updateManager.simulateReadyToInstall(sampleRelease, dmgURL: fakeReadyDMG)
+        aboutPage.refreshUpdateState()
+        check(aboutPage.installNowBtn.isHidden == false && aboutPage.updateMetaLabel.stringValue == "已校验", "About page readyToInstall state must show installNowBtn and 已校验")
+
+        assistant.updateManager.simulateFailed("本地校验异常")
+        aboutPage.refreshUpdateState()
+        check(aboutPage.checkUpdateBtn.isHidden == false && aboutPage.updateMetaLabel.stringValue == "可重试" && aboutPage.releaseNotesBtn.isHidden, "About page failed state must show checkUpdateBtn, 可重试 and hide releaseNotesBtn")
+
+        check(!aboutPage.versionSpecLabel.stringValue.isEmpty, "About page versionSpecLabel must not be empty")
+        check(aboutPage.versionSpecLabel.stringValue.contains("Antigravity") && !aboutPage.versionSpecLabel.stringValue.contains("Build "), "About page versionSpecLabel must display Antigravity version without Build number")
+        let aboutTexts = allTextValues(aboutPage.view)
+        check(aboutTexts.contains("自动检查更新") && aboutTexts.contains("运行信息") && aboutTexts.contains("目标应用") && aboutTexts.contains("GravityBox 数据目录"), "Simplified About page must render 自动检查更新, 运行信息, 目标应用 and GravityBox 数据目录")
+        check(!aboutTexts.contains("系统环境") && !aboutTexts.contains("构建与环境") && !aboutTexts.contains("本地数据与隐私原则") && !aboutTexts.contains("macOS · arm64") && !aboutTexts.contains { $0.contains("查看历史发行版本") }, "Simplified About page must omit redundant OS, build, privacy, arm64 pill and Releases subtitle rows")
+        check(aboutPage.revealDataBtn.title == "在访达中显示", "About page revealDataBtn title must be 在访达中显示")
+        check(aboutPage.githubReleasesBtn.title == "GitHub ↗", "About page githubReleasesBtn title must be GitHub ↗")
+
+        assistant.updateManager.simulateRelease(nil)
+        aboutPage.refreshUpdateState()
+        check(!aboutPage.checkUpdateBtn.isHidden && aboutPage.installNowBtn.isHidden, "Clearing available release must restore 检查更新 button on About page")
+        check(!aboutPage.statusLine.isHidden && aboutPage.updateStatusLabel.stringValue == "已是最新版本", "About page must display 已是最新版本 status after checking up-to-date")
+        check(assistant.installUpdateButton?.isHidden == true, "Clearing available release must hide sidebar installUpdateButton again")
+        check(aboutPage.releaseNotesBtn.isHidden && window.activeSheetWindow == nil, "Clearing available release must hide releaseNotesBtn without opening modal update sheet")
         // Verify unified inactive PillBadge styling across neutral/secondary tints
         let lightApp = NSAppearance(named: .aqua)!
         let darkApp = NSAppearance(named: .darkAqua)!
@@ -692,12 +876,23 @@ import Cocoa
         ]
         assistant.overview!.updateReadinessMatrix()
 
-        // Verify AccountsPage unified & per-card collapse/expand behavior
+        // Verify AccountsPage unified & per-card collapse/expand behavior and removal of Backup button
         assistant.selectPage(1); pump()
         let accPage = assistant.accountsPage!
         accPage.fetch(); pump()
         window.appearance = NSAppearance(named: .aqua)
         window.contentView?.layoutSubtreeIfNeeded(); pump()
+        func allAccButtons(_ v: NSView) -> [NSButton] { (v as? NSButton).map { [$0] } ?? v.subviews.flatMap { allAccButtons($0) } }
+        check(!allAccButtons(accPage.view).contains { $0.title == "备份…" }, "AccountsPage header must remove 备份… button")
+        check((accPage.toggleCollapseAllButton as? DesignButton)?.isQuietAccessory == false, "AccountsPage 收起配额/展开配额 button must match global capsule button style")
+        check(accPage.autoSwitchStatusBadge.title == "已停用", "Smart switch disabled state must retain 已停用 pill badge")
+        let offSubtitle = accPage.policySubtitleLabel.stringValue
+        accPage.autoSwitchToggle.state = .on
+        accPage.updateAutoSwitchState()
+        check(accPage.autoSwitchStatusBadge.title.hasPrefix("已启用"), "Smart switch enabled state must display 已启用 pill badge")
+        check(accPage.policySubtitleLabel.stringValue == offSubtitle, "Smart switch subtitle must stay consistent between ON and OFF states")
+        accPage.autoSwitchToggle.state = .off
+        accPage.updateAutoSwitchState()
         check(!accPage.toggleCollapseAllButton.isHidden && accPage.toggleCollapseAllButton.title == "收起配额", "AccountsPage header must show 收起配额 button when cards are expanded")
         let expandedFirstCardHeight = accPage.cardsStack.arrangedSubviews.first?.bounds.height ?? 0
         check(expandedFirstCardHeight > 180, "Expanded account card height must include full quota bars (>180pt)")
@@ -748,24 +943,45 @@ import Cocoa
 
         // Verify translationSwitch target-based state toggling and error-recovery behavior
         check(stableSettings.translationSwitch.isEnabled == true, "translationSwitch must be enabled when reachable")
+        check((stableSettings.translationSwitch as AnyObject) is DesignSwitch && (stableSettings.hudSwitch as AnyObject) is DesignSwitch && (stableAccounts.autoSwitchToggle as AnyObject) is DesignSwitch, "Switches must use DesignSwitch to stay blue when window is unfocused")
         check(stableSettings.translationSwitch.state == .on, "translationSwitch must be on when status mode is adaptive")
-        check(stableSettings.translationSwitch.toolTip == "点击关闭界面汉化", "translationSwitch tooltip must prompt to disable when on")
+        check(stableSettings.translationSwitch.toolTip == nil, "translationSwitch must not display hover tooltip")
+
+        // Verify More Menu (…) includes 对话状态栏 right below 界面汉化
+        let moreMenu = assistant.buildMoreMenu()
+        let moreTitles = moreMenu.items.map(\.title)
+        if let transIdx = moreTitles.firstIndex(of: "界面汉化"), let hudIdx = moreTitles.firstIndex(of: "对话状态栏") {
+            check(hudIdx == transIdx + 1, "对话状态栏 must sit directly below 界面汉化 in More menu")
+        } else {
+            check(false, "More menu must contain both 界面汉化 and 对话状态栏")
+        }
+
+        // Verify global zero-tooltip requirement across all pages and menu panel
+        func hasNonEmptyTooltip(_ v: NSView) -> String? {
+            if let tip = v.toolTip, !tip.isEmpty { return "\(type(of: v)): \(tip)" }
+            for sub in v.subviews {
+                if let found = hasNonEmptyTooltip(sub) { return found }
+            }
+            return nil
+        }
+        for pageView: NSView in [assistant.overview!.view, assistant.accountsPage!.view, assistant.usagePage!.view, stableSettings.view!, aboutPage.view, menuPanel.view] {
+            let found = hasNonEmptyTooltip(pageView)
+            check(found == nil, "Global tooltip cleanup violated on view: \(found ?? "")")
+        }
 
         // 0. Verify unreachable backend (e.g. Node process blocked by Gatekeeper quarantine): switch stays greyed out
         assistant.reachable = false
         stableSettings.update()
         check(stableSettings.translationSwitch.isEnabled == false, "translationSwitch must remain greyed out / disabled when backend is unreachable due to Gatekeeper quarantine interception")
-        check(stableSettings.translationSwitch.toolTip == "正在连接后台服务…", "translationSwitch tooltip must show connecting message when backend is unreachable")
-        let menuDisabled = NSMenu()
-        assistant.menuNeedsUpdate(menuDisabled)
+        check(stableSettings.translationSwitch.toolTip == nil, "translationSwitch must not show hover tooltip when backend is unreachable")
+        let menuDisabled = assistant.buildMoreMenu()
         let toggleDisabled = menuDisabled.items.first { $0.title == "界面汉化" }
         check(toggleDisabled?.isEnabled == false, "Menu bar translation toggle must be disabled when backend is unreachable")
 
         assistant.reachable = true
         stableSettings.update()
         check(stableSettings.translationSwitch.isEnabled == true, "translationSwitch must become enabled once backend is reachable after quarantine clearance")
-        let menuEnabled = NSMenu()
-        assistant.menuNeedsUpdate(menuEnabled)
+        let menuEnabled = assistant.buildMoreMenu()
         let toggleEnabled = menuEnabled.items.first { $0.title == "界面汉化" }
         check(toggleEnabled?.isEnabled == true, "Menu bar translation toggle must become enabled once backend is reachable")
 
@@ -785,7 +1001,7 @@ import Cocoa
         assistant.statusValue = LiveStatus(["mode": "error", "message": "连接中断", "appVersion": "2.29.1"])
         stableSettings.update()
         check(stableSettings.translationSwitch.state == .off, "translationSwitch must be off when status mode is error")
-        check(stableSettings.translationSwitch.toolTip == "连接异常，点击重试", "translationSwitch tooltip must offer retry in error mode")
+        check(stableSettings.translationSwitch.toolTip == nil, "translationSwitch must not display hover tooltip in error mode")
         // User flips switch ON to recover/retry
         stableSettings.translationSwitch.state = .on
         stableSettings.toggleTranslation()
@@ -817,6 +1033,15 @@ import Cocoa
         // Restore normal status
         assistant.statusValue = LiveStatus(status)
         stableSettings.update()
+        check(stableSettings.hudSwitch.isEnabled == true && stableSettings.hudSwitch.state == .on, "hudSwitch must default to on and enabled when translation is active")
+        stableSettings.hudSwitch.state = .off
+        stableSettings.toggleHud()
+        pump()
+        check(lastHudCommandEnabled == false && assistant.configuration.value.hudEnabled == false, "Turning off hudSwitch must send hud_set(false) and persist hudEnabled=false")
+        stableSettings.hudSwitch.state = .on
+        stableSettings.toggleHud()
+        pump()
+        check(lastHudCommandEnabled == true && assistant.configuration.value.hudEnabled == true, "Turning on hudSwitch must send hud_set(true) and persist hudEnabled=true")
 
         DesktopApplicationTarget.installedChannelsOverride = ["stable"]
         check(DesktopApplicationTarget.bothInstalled == false, "Single-app mode must report bothInstalled == false")
@@ -864,7 +1089,235 @@ import Cocoa
 
         Assistant.applicationChannel = "stable"
         assistant.configuration.value.applicationChannel = "stable"
-        let result:[String:Any] = ["stableOnlySelectionPassed":true,"nativeLayouts":captures.count,"captures":captures,"menuCaptures":4,"safeSwitchSharedFlowPassed":true,"emailWidthPassed":true,"partialPricingPassed":true,"scope":"isolated synthetic AppKit fixture; not installed-app acceptance"]
+        // Failed account changes must never export stale contents under the new account name.
+        do {
+            let isolated = Assistant(state: state.appendingPathComponent("usage-query-contract"))
+            isolated.configuration = try ConfigurationStore(state: isolated.state)
+            isolated.bridge = BackendBridge(resources: state, state: isolated.state)
+            isolated.reachable = true
+            var fail = false
+            isolated.bridge.fixtureReply = { request in
+                if fail { return ["ok": false, "error": "synthetic read failure"] }
+                return ["ok": true, "period": request["period"] as? String ?? "today", "selectedAccountId": "all", "snapshotId": "stable-query-snapshot", "summary": ["availability": "complete", "totalTokens": 150, "requestCount": 1, "databasesScanned": 1, "databasesDiscovered": 1], "byModel": [], "dailyTrends": [], "todayHourly": []]
+            }
+            let page = UsagePage(app: isolated)
+            pump()
+            fail = true; page.fetch(force: true); pump()
+            check(page.statusSummary.stringValue.contains("读取失败"), "Failure feedback must be present")
+            fail = false; page.fetch(force: true); pump()
+            check(!page.statusSummary.stringValue.contains("读取失败"), "Same snapshot success must clear an earlier failure")
+            page.periodSegment.selectedSegment = 1
+            fail = true; page.fetch(force: true); pump()
+            check(!page.exportButton.isEnabled, "A period mismatch must disable stale export")
+            if let overview = assistant.dashboardPage {
+                overview.renderSummary([
+                    "accounts": ["activeEmail": "test@example.invalid", "activeName": "Test", "activeTier": "PRO", "isLiveVerified": true],
+                    "usage": ["todayTokens": 100, "totalTokens": 1000, "estimatedUsd": 0.1, "allTimeEstimatedUsd": 1.0, "requestCount": 1, "totalRequestCount": 10, "databasesScanned": 378, "databasesDiscovered": 378, "failedDatabasesCount": 0, "skippedLargeRecords": 0, "unknownTimeRecords": 0, "hasError": false, "availability": "partial"]
+                ], isStaleFallback: false)
+                check(overview.usageQualityLabel.isHidden, "Overview usageQualityLabel must remain hidden when 378/378 DBs succeeded with 0 failed/skipped/unknown despite partial historical availability")
+            }
+            page.updateReadStatus(["databasesScanned": 378, "databasesDiscovered": 378, "failedDatabasesCount": 0, "skippedLargeRecords": 0, "unknownTimeRecords": 0, "unpricedModels": 0, "availability": "partial", "pricing_warnings": ["旧JSON含缺少来源或归属证据的记录，原件已保留；请查看只读账本预览", "历史金额凭据缺少原始用量或时间，已单独保留待核对，不计入Token和请求数"]])
+            check(page.footerBox.isHidden, "Usage footerBox must remain hidden in healthy state even with read-only legacy archive notes")
+            page.updateReadStatus(["databasesScanned": 377, "databasesDiscovered": 378, "failedDatabasesCount": 1, "skippedLargeRecords": 0, "unknownTimeRecords": 0, "unpricedModels": 0, "availability": "partial"])
+            check(!page.footerBox.isHidden && page.statusSummary.stringValue.contains("1"), "Usage footerBox must appear when failedDatabasesCount > 0")
+            let pricingSheet = PricingSyncSheetController(app: isolated)
+
+            // Package A: Modal sheet lifecycle, healed count, badge varieties, empty state and recheck
+            let testParentWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 600), styleMask: [.titled], backing: .buffered, defer: false)
+            pricingSheet.show(in: testParentWindow, payload: [
+                "synced": true,
+                "count": 3,
+                "healedCount": 12,
+                "version": "2026-11-13",
+                "status": ["lastCheckAt": 1794539810722.0, "modelCount": 3],
+                "prices": [
+                    "gemini-custom": [
+                        "input": 0.5, "output": 2.5, "cached": 0.05,
+                        "provenance": ["platform": "Custom", "checkedAt": "2026-11-13"]
+                    ],
+                    "gemini-expired": [
+                        "input": 1.0, "output": 5.0, "cached": 0.1,
+                        "provenance": ["platform": "Google Cloud", "checkedAt": "2026-01-01"]
+                    ],
+                    "gemini-legacy": [
+                        "input": 0.8, "output": 4.0, "cached": 0.08
+                    ]
+                ],
+                "pricingStatus": ["gemini-custom": "user", "gemini-expired": "expired", "gemini-legacy": "historical"]
+            ])
+            check(pricingSheet.sheet.sheetParent === testParentWindow, "PricingSyncSheetController must attach to parent window")
+            check(pricingSheet.renderedSummaryLines.contains { $0.contains("gemini-custom [自定义]") }, "Must render user pricing status as 自定义")
+            check(pricingSheet.renderedSummaryLines.contains { $0.contains("gemini-expired [已过期]") }, "Must render expired pricing status as 已过期")
+            check(pricingSheet.renderedSummaryLines.contains { $0.contains("gemini-legacy [历史基准]") }, "Must render default pricing status as 历史基准")
+            check(pricingSheet.subtitleLabel.stringValue.contains("已自动补齐 12 条历史未计价记录"), "Must display auto-healed count in subtitle")
+            check(allTextValues(pricingSheet.sheet.contentView!).contains("价格基准已同步并补齐历史记录"), "Must display healed title")
+            pricingSheet.closeSheet()
+            pump()
+            check(testParentWindow.attachedSheet == nil, "PricingSyncSheetController must cleanly detach on close")
+
+            // Empty prices dictionary
+            pricingSheet.apply(payload: ["synced": true, "prices": [:]])
+            check(allTextValues(pricingSheet.sheet.contentView!).contains("暂无可用的模型价格基准记录"), "Empty prices must render empty label")
+
+            // Recheck button
+            check(pricingSheet.recheckBtn.title == "重新检查" && pricingSheet.recheckBtn.frame.width >= 88, "Recheck button must be titled 重新检查 with width >= 88")
+            pricingSheet.recheck()
+            pump()
+
+            // Triggering pricingSheet from PreferencesController
+            let testPrefs = PreferencesController(app: isolated)
+            isolated.window = testParentWindow
+            let prevReply = isolated.bridge.fixtureReply
+            isolated.bridge.fixtureReply = { payload in
+                if payload["command"] as? String == "pricing_sync_check" {
+                    return ["ok": true, "synced": true, "prices": ["model-a": ["input": 1.0, "output": 2.0, "cached": 0.1]]]
+                }
+                return prevReply?(payload) ?? ["ok": true]
+            }
+            testPrefs.checkPricingSync()
+            pump()
+            check(testPrefs.pricingSheet != nil && testPrefs.pricingSheet?.sheet.sheetParent === testParentWindow, "checkPricingSync must show pricingSheet attached to window")
+            testPrefs.pricingSheet?.closeSheet()
+            pump()
+            isolated.bridge.fixtureReply = prevReply
+
+            pricingSheet.apply(payload: [
+                "synced": true,
+                "count": 2,
+                "version": "2026-11-13",
+                "status": ["lastCheckAt": 1794539810722.0, "modelCount": 2],
+                "prices": [
+                    "gemini-3.8-flash": [
+                        "input": 0.75, "output": 3.75, "cached": 0.075,
+                        "provenance": ["platform": "Google Cloud 标准 Global API", "checkedAt": "2026-11-12", "validUntil": "2026-12-31T23:59:59Z", "sourceUrl": "https://cloud.google.com/vertex-ai/generative-ai/pricing"]
+                    ],
+                    "gemini-4-hydrogen": [
+                        "input": 1.5, "output": 7.5, "cached": 0.075, "cacheWrite": 0,
+                        "provenance": ["platform": "Google Cloud 标准 Global API", "checkedAt": "2026-11-13", "sourceUrl": "https://cloud.google.com/model-garden/pricing?hl=en"]
+                    ]
+                ],
+                "pricingStatus": ["gemini-3.8-flash": "confirmed", "gemini-4-hydrogen": "confirmed"],
+            ])
+            check(pricingSheet.sheet.contentView != nil, "PricingSyncSheetController must populate native sheet view")
+            func allPricingButtons(_ v: NSView) -> [NSButton] { (v as? NSButton).map { [$0] } ?? v.subviews.flatMap { allPricingButtons($0) } }
+            check(!allPricingButtons(pricingSheet.sheet.contentView!).contains { $0.title == "复制价格表" }, "PricingSyncSheetController must remove 复制价格表 button")
+            check(pricingSheet.closeBtn.title == "完成", "PricingSyncSheetController exit button must be titled 完成")
+            check(pricingSheet.subtitleLabel.isHidden && pricingSheet.subtitleLabel.stringValue.isEmpty, "PricingSyncSheetController must hide header subtitle on normal synced state")
+            check(pricingSheet.summaryPill.title.hasPrefix("已同步 ") && pricingSheet.summaryPill.title.hasSuffix("· 2 款"), "PricingSyncSheetController pill must display latest sync time and active count: \(pricingSheet.summaryPill.title)")
+            check(!pricingSheet.historicalNoteLabel.isHidden && pricingSheet.historicalNoteLabel.stringValue.contains("已下架模型"), "PricingSyncSheetController must explain historical pricing retention")
+            check(pricingSheet.renderedSummaryLines.contains { $0.contains("官方定价 2026-11-12 · 优惠至 2026-12-31") } && !pricingSheet.renderedSummaryLines.contains { $0.contains("核对 2026") }, "PricingSyncSheetController must use Plan 1 date wording")
+            try capture(pricingSheet.sheet.contentView!, output.appendingPathComponent("light-pricing-sheet.png"))
+            pricingSheet.apply(payload: [
+                "synced": false,
+                "error": "offline",
+                "status": ["lastCheckAt": 1794539910722.0, "modelCount": 1],
+                "prices": [
+                    "gemini-4-hydrogen": ["input": 1.5, "output": 7.5, "cached": 0.075]
+                ],
+                "pricingStatus": ["gemini-4-hydrogen": "confirmed"],
+            ])
+            check(!pricingSheet.subtitleLabel.isHidden && pricingSheet.subtitleLabel.stringValue == "检查提示：offline", "PricingSyncSheetController must show concise failure reason without unit suffix")
+            check(pricingSheet.summaryPill.title.hasSuffix("· 1 款"), "PricingSyncSheetController pill must display failed check time and active count: \(pricingSheet.summaryPill.title)")
+            var checks = 0
+            let manager = isolated.updateManager
+            manager.checkTransport = { request, completion in
+                checks += 1
+                DispatchQueue.global().async {
+                    let response = HTTPURLResponse(url: request.url!, statusCode: 403, httpVersion: nil, headerFields: nil)
+                    completion(nil, response, nil)
+                }
+            }
+            manager.checkForUpdates(silent: true)
+            manager.checkForUpdates(silent: false)
+            pump()
+            check(checks == 1, "Overlapping update checks must share the main-thread busy gate")
+            manager.checkForUpdates(silent: false)
+            pump()
+            check(checks == 2, "A background 403 must reset busy state so retry can run")
+            for (input, expected) in [(999, "999"), (1000, "1K"), (999499, "999K"), (999500, "1M"), (999999, "1M"), (1_000_000, "1M"), (999_500_000, "1B")] {
+                check(InterfaceText.formatCompactTokens(input) == expected, "Compact number boundary must match HUD: \(input)")
+            }
+            let appPaths = ["/Applications/Antigravity.app"]
+            check(
+                Assistant.hasRunningAntigravityProcess(
+                    psOutput: "/Applications/Antigravity.app/Contents/MacOS/Electron\n",
+                    appPaths: appPaths
+                ) == true,
+                "Executable inside Antigravity.app/Contents must count as running"
+            )
+            check(
+                Assistant.hasRunningAntigravityProcess(
+                    psOutput: "/bin/zsh -c ls /Applications/Antigravity.app/Contents/Resources\n",
+                    appPaths: appPaths
+                ) == false,
+                "Unrelated process mentioning app path in arguments must not block switching"
+            )
+            isolated.suppressLifecycleAutoQuit(seconds: 60.0)
+            let longDeadline = isolated.suppressLifecycleAutoQuitUntil
+            isolated.suppressLifecycleAutoQuit(seconds: 5.0)
+            check(
+                isolated.suppressLifecycleAutoQuitUntil >= longDeadline,
+                "Shorter lifecycle auto-quit suppression must not shorten an existing longer deadline"
+            )
+
+            // Package E: AssistantAccountUsage switch menu and cache invalidation
+            isolated.cachedAccounts = []
+            let emptyAccountMenu = isolated.buildAccountSwitchMenu()
+            check(emptyAccountMenu.items.contains { $0.title == "暂无可用账号快照" }, "Empty account switch menu must show 暂无可用账号快照")
+            isolated.cachedAccounts = accounts
+            isolated.activeAccountId = "a"
+            let fullAccountMenu = isolated.buildAccountSwitchMenu()
+            check(fullAccountMenu.items.contains { $0.title == "管理账号…" }, "Account switch menu must contain 管理账号…")
+            check(fullAccountMenu.items.contains { $0.title.contains("Alex") && $0.title.contains("PRO") }, "Account switch menu must show account name and tier")
+
+            isolated.cachedUsageReportsByPeriod["today"] = ["summary": totals]
+            check(!isolated.cachedUsageReportsByPeriod.isEmpty, "Usage report cache must be populated")
+            isolated.invalidateUsageReportCache()
+            check(isolated.cachedUsageReportsByPeriod.isEmpty, "invalidateUsageReportCache must clear cachedUsageReportsByPeriod")
+        }
+
+        // Exercise the real countdown view, rather than a JS reimplementation of its old colors.
+        let countdown = QuotaBarView(percentage: 80, resetText: "6天12小时后重置")
+        check(countdown.resetLabel.textColor == Design.secondary, "Normal countdown stays neutral")
+        countdown.update(percentage: 5, resetText: "3小时后重置")
+        check(countdown.resetLabel.textColor == Design.secondary, "Low percentage does not turn a normal reset time into an urgent notice")
+        countdown.update(percentage: 50, resetText: "即将重置")
+        check(countdown.resetLabel.textColor != Design.secondary, "Imminent reset uses warning color")
+        countdown.update(percentage: 50, resetText: "重置时间已过")
+        check(countdown.resetLabel.textColor != Design.secondary, "Expired reset uses warning color")
+
+        // Production account quota updates reuse card views, including unchanged snapshots.
+        do {
+            let page = assistant.accountsPage!
+            let windows = ["gemini":["fiveHour":bucket(80),"weekly":bucket(90)],"claude":["fiveHour":bucket(100),"weekly":bucket(70)]]
+            let base: [String: Any] = ["id":"gate-account", "email":"gate@example.invalid", "revision":"gate-revision", "familyWindows":windows]
+            page.fetch(["accounts":[base], "activeId":"gate-account"])
+            let cards = page.cardsStack.arrangedSubviews
+            page.fetch(["accounts":[base], "activeId":"gate-account"])
+            check(zip(cards,page.cardsStack.arrangedSubviews).allSatisfy { $0 === $1 }, "Identical snapshots retain card views")
+            func quotaViews(_ view: NSView) -> [QuotaBarView] { (view as? QuotaBarView).map{[$0]} ?? view.subviews.flatMap{quotaViews($0)} }
+            for (family, key, percent, title) in [("gemini","fiveHour",40.0,"Gemini · 5 小时"),("gemini","weekly",85.0,"Gemini · 每周"),("claude","fiveHour",50.0,"Claude/GPT · 5 小时")] {
+                var changed = base
+                var nextWindows = windows; nextWindows[family]?[key] = bucket(percent)
+                changed["familyWindows"] = nextWindows
+                page.fetch(["accounts":[changed], "activeId":"gate-account"])
+                check(quotaViews(page.view).contains { $0.titleLabel.stringValue == title && $0.percentageKnown && $0.percentage == Int(percent) }, "Production card refresh observes \(family)/\(key)")
+                check(page.cardsStack.arrangedSubviews.count == cards.count && zip(cards,page.cardsStack.arrangedSubviews).allSatisfy { $0 === $1 }, "Account quota changes reuse existing card views")
+            }
+        }
+
+        // Production dashboard identity handling includes mismatch, missing identity and offline states.
+        do {
+            let page = assistant.dashboardPage!
+            for (verified, liveEmail, expectedStatus) in [(true,"other@example.invalid","账号不一致"),(true,"gate@example.invalid",""),(true,"",""),(false,"","")] {
+                page.renderSummary(["accounts":["activeEmail":"gate@example.invalid", "isLiveVerified":verified, "liveAccountEmail":liveEmail]], isStaleFallback:false)
+                check(page.accountStatusLabel.stringValue == expectedStatus, "Production dashboard identity status for \(liveEmail)")
+                check(page.activeEmailLabel.stringValue == "gate@example.invalid", "Identity warning preserves saved email")
+                check(page.currentAccountPill.title == (verified ? "当前账号" : "已选记录"), "Offline state cannot claim a verified current account")
+            }
+        }
+
+        let result:[String:Any] = ["stableOnlySelectionPassed":true,"nativeLayouts":captures.count,"captures":captures,"menuCaptures":6,"safeSwitchSharedFlowPassed":true,"emailWidthPassed":true,"partialPricingPassed":true,"nativeAssertions":assertionCount,"scope":"isolated synthetic AppKit fixture; not installed-app acceptance"]
         try JSONSerialization.data(withJSONObject:result,options:[.prettyPrinted,.sortedKeys]).write(to:output.appendingPathComponent("native-ui-results.json"))
         window.orderOut(nil)
         print("24 current-page native layouts and 4 menu states; fixture checks passed")

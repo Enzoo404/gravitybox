@@ -1,7 +1,47 @@
 /** Select small metadata fields from a protobuf BLOB without loading skipped payloads. */
 export type ProtoSelection = { [field: number]: true | ProtoSelection };
-export const GENERATION_PROJECTION: ProtoSelection = { 1: { 4: true, 9: true, 19: true, 21: true }, 2: true, 4: true };
-export const STEP_PROJECTION: ProtoSelection = { 1: true, 9: true, 12: true };
+export const GENERATION_PROJECTION: ProtoSelection = {
+  1: { 3: true, 4: true, 9: true, 19: true, 21: true },
+  2: true,
+  3: { 27: { 8: true, 12: true, 20: true }, 28: true },
+  4: true,
+};
+export const STEP_PROJECTION: ProtoSelection = {
+  1: true,
+  9: true,
+  12: true,
+  24: { 8: true, 12: true, 20: true },
+};
+export const HUD_STEP_METADATA_PROJECTION: ProtoSelection = {
+  1: true,
+  4: { 2: true, 3: true, 8: true },
+  6: true,
+  7: true,
+  8: true,
+  9: true,
+  12: true,
+  22: true,
+  24: { 4: true, 8: true, 12: true, 20: true },
+  32: true,
+};
+export const HUD_GEN_METADATA_PROJECTION: ProtoSelection = {
+  1: {
+    3: true,
+    4: true,
+    9: { 10: { 1: true, 3: true, 4: true } },
+    11: true,
+    12: true,
+    19: true,
+    21: true,
+  },
+  2: true,
+  4: true,
+  3: {
+    14: true,
+    27: { 4: true, 8: true, 12: true, 20: true },
+    28: true,
+  },
+};
 
 function encodeVarint(value: number): Buffer {
   const bytes: number[] = [];

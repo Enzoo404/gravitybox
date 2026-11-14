@@ -1,7 +1,7 @@
-/* Original runtime engine for AGZH. Runs in an isolated CDP world; no application code is patched. */
+/* Original runtime engine for GravityBox. Runs in an isolated CDP world; no application code is patched. */
 (function bootstrapRuntime() {
   'use strict';
-  const options = globalThis.__AGZH_BOOT__;
+  const options = globalThis.__GRAVITYBOX_BOOT__;
   if (!options || location.origin !== options.origin) return;
   if (options.path === '/fixture' && location.pathname !== '/fixture') return;
   const allowedPath=location.pathname==='/'||/^\/(?:history|sidecars|customizations|automations|settings|settings-standalone|terminal-standalone|new-project|onboarding|multi|artifact|s|chatski-connect)(?:\/.*)?$/i.test(location.pathname)||/^\/c(?:\/|\/(?:[0-9a-f-]{36}|_new)(?:\/.*)?)?$/i.test(location.pathname)||/^\/(?:forked|view|battle)\/.*$/i.test(location.pathname)||(options.path==='/fixture'&&location.pathname==='/fixture');
@@ -48,33 +48,47 @@
   if(options.conservative&&options.path!=='/fixture'&&!options.shellValidated){
     const ready=()=>!!document.body&&(!!systemSettingsPane()||(!!document.querySelector('[aria-label*="Sidebar" i],[aria-label*="侧边栏"],[data-testid*="sidebar" i],[data-testid="agent-input-box"]')&&!!document.querySelector('[data-testid="model-selector-trigger"],a[href="/history"],a[href="/customizations"],[data-testid="agent-input-box"],textarea,input'))||(/^\/(?:settings(?:\/[^?#]*)?|settings-standalone)$/.test(location.pathname)&&!!document.querySelector('[role="dialog"][aria-label="Settings"],[role="dialog"][aria-label="设置"],[data-testid*="settings"]')&&!!document.querySelector('[role="tablist"],nav,[role="navigation"]'))||(location.pathname==='/terminal-standalone'&&!!document.querySelector('.xterm,.monaco-editor,[data-testid*="terminal"]')));
     if(!ready()){
-      globalThis.__AGZH_PENDING_BOOT__?.cancel();let stopped=false;const watcher=new MutationObserver(()=>{if(!stopped&&ready()){cancel();options.shellValidated=true;bootstrapRuntime();}});const timeout=setTimeout(()=>cancel(),5000);
-      function cancel(){stopped=true;watcher.disconnect();clearTimeout(timeout);delete globalThis.__AGZH_PENDING_BOOT__;}
-      globalThis.__AGZH_PENDING_BOOT__={cancel};watcher.observe(document,{childList:true,subtree:true});return;
+      globalThis.__GRAVITYBOX_PENDING_BOOT__?.cancel();let stopped=false;const watcher=new MutationObserver(()=>{if(!stopped&&ready()){cancel();options.shellValidated=true;bootstrapRuntime();}});const timeout=setTimeout(()=>cancel(),5000);
+      function cancel(){stopped=true;watcher.disconnect();clearTimeout(timeout);delete globalThis.__GRAVITYBOX_PENDING_BOOT__;}
+      globalThis.__GRAVITYBOX_PENDING_BOOT__={cancel};watcher.observe(document,{childList:true,subtree:true});return;
     }options.shellValidated=true;
   }
 
-  const KEY = '__AGZH_ENGINE_V1__';
+  const KEY = '__GRAVITYBOX_ENGINE_V1__';
+  if (options.translationEnabled === false) {
+    // HUD-only connection: expose the lifecycle contract without installing
+    // translators, project markers, mutation observers or scan collectors.
+    let dictionary = options.dictionary;
+    const state = () => ({ active: true, version: dictionary.version, runtimeId: options.runtimeId,
+      languageMode: 'en', pending: 0, scanCount: 0, translatedNodes: 0 });
+    globalThis[KEY] = {
+      state, getLanguageMode: () => 'en', refresh() {},
+      update(next) { dictionary = next; }, setShortcutEnabled() {},
+      dispose() { delete globalThis[KEY]; delete globalThis.__GRAVITYBOX_BOOT__; },
+    };
+    globalThis.__GRAVITYBOX_ATTACH_HUD__?.();
+    return;
+  }
   if (globalThis[KEY]) { globalThis[KEY].setShortcutEnabled?.(options.shortcutEnabled !== false); globalThis[KEY].update(options.dictionary); return; }
   let shortcutEnabled = options.path === '/fixture' && options.shortcutEnabled !== false;
   const ownedProjectMarkers = new Set();
-  const UI = '[data-agzh-ui],button,a[href],h1,h2,h3,h4,[role="navigation"],[role="button"],[role="menuitem"],[role="tab"],[role="option"],[role="tooltip"],[role="dialog"],[role="status"],[role="alert"],[role="banner"],label,th,td,summary,figcaption,.monaco-menu-item,[data-sonner-toast],[role="listitem"],[role="region"],[data-testid*="settings"],[data-testid*="preferences"],[data-testid*="empty"],[data-testid*="notice"],[data-testid*="banner"],[data-testid*="card"],[data-testid*="header"],[data-testid*="sidecar"],[data-testid*="trigger"],[data-testid="agent-input-box"],[contenteditable="true"][role="combobox"]+p,[data-testid="cascade-system-message-toolbar"],[data-testid="turn-cards-container"],[data-select-popup],[role="menu"],[role="listbox"]';
+  const UI = '[data-gravitybox-ui],button,a[href],h1,h2,h3,h4,[role="navigation"],[role="button"],[role="menuitem"],[role="tab"],[role="option"],[role="tooltip"],[role="dialog"],[role="status"],[role="alert"],[role="banner"],label,th,td,summary,figcaption,.monaco-menu-item,[data-sonner-toast],[role="listitem"],[role="region"],[data-testid*="settings"],[data-testid*="preferences"],[data-testid*="empty"],[data-testid*="notice"],[data-testid*="banner"],[data-testid*="card"],[data-testid*="header"],[data-testid*="sidecar"],[data-testid*="trigger"],[data-testid="agent-input-box"],[contenteditable="true"][role="combobox"]+p,[data-testid="cascade-system-message-toolbar"],[data-testid="turn-cards-container"],[data-testid="side-question-followup-thinking"],[data-select-popup],[role="menu"],[role="listbox"]';
   const UI_SELECTOR = 'button, [role="button"], [role="tab"], [role="menuitem"], [role="tooltip"], [role="option"], label, option, th, td, summary, figcaption, .monaco-menu-item, [data-sonner-toast], [role="listitem"], [role="region"], h1, h2, h3, h4, [data-select-popup], [role="menu"], [role="listbox"]';
   /* PROTECTED keeps user content, code and editors in English. `[data-testid="conversation-row-sidebar"]`
      is the container the app really uses for the conversation list: its title <span> is NOT inside
      `a[href^="/c/"]`, so relying on the anchor alone left conversation titles translatable. */
-  const PROTECTED = 'script,style,code,pre,input,textarea,svg,canvas,.file-tree,[data-message-id],[contenteditable]:not([contenteditable="false"]),[data-agzh-protect],[data-message-author-role],[data-testid*="message"]:not([data-testid="cascade-system-message-toolbar"]),[data-testid*="conversation-title"],[data-testid="conversation-row-sidebar"],[data-testid*="conversation-row"],[data-testid*="model"],[data-testid*="artifact"],[data-testid="planner-response-text"],[data-testid="user-input-step"],[data-testid="breadcrumb-segment"],[data-testid="project-header"],[data-testid="project-selector-trigger"],a[href^="/c/"],a[href*="/c/"],.monaco-editor,.xterm,.markdown,.markdown-frontmatter,.markdown-alert-title,.notebook-markdown-cell,.prose,[role="log"],.chat-message,.message-content,.conversation-title,.terminal,.output-view,.debug-console,.code-view,.artifact-container,.model-item,.agzh-project-name,[data-testid*="attachment"],[data-testid*="file-chip"],[data-testid*="context-chip"]';
-  /* J01 positive user-content contract. A container marked `data-agzh-user-content` or an element
-     marked `data-agzh-user-name` is user-authored text: never translated, never collected. On top
+  const PROTECTED = 'script,style,code,pre,input,textarea,svg,canvas,.file-tree,[data-message-id],[contenteditable]:not([contenteditable="false"]),[data-gravitybox-protect],[data-message-author-role],[data-testid*="message"]:not([data-testid="cascade-system-message-toolbar"]),[data-testid*="conversation-title"],[data-testid="conversation-row-sidebar"],[data-testid*="conversation-row"],[data-testid*="model"],[data-testid*="artifact"],[data-testid="planner-response-text"],[data-testid="user-input-step"],[data-testid="breadcrumb-segment"],[data-testid="project-header"],[data-testid="project-selector-trigger"],a[href^="/c/"],a[href*="/c/"],.monaco-editor,.xterm,.markdown,.markdown-frontmatter,.markdown-alert-title,.notebook-markdown-cell,.prose,[role="log"],.chat-message,.message-content,.conversation-title,.terminal,.output-view,.debug-console,.code-view,.artifact-container,.model-item,.gravitybox-project-name,[data-testid*="attachment"],[data-testid*="file-chip"],[data-testid*="context-chip"],[data-testid="side-question-followup-user"],[data-testid="voice-transcript-summary"],[data-testid="coordinator-card-latest-line"],[data-testid="coordinator-worker-card"] .truncate';
+  /* J01 positive user-content contract. A container marked `data-gravitybox-user-content` or an element
+     marked `data-gravitybox-user-name` is user-authored text: never translated, never collected. On top
      of the explicit contract (usable by adapters and tests) entity surfaces are recognised
      structurally so user names stay English even on unmarked builds: links to a plugin/skill/
      session/automation detail page carry the entity name, and a heading / name field / list row /
      option row that belongs to an entity card is a name, not interface copy. Genuine controls
      (buttons, tabs, command menus) remain translatable: a `[role="menuitem"]` only counts as a name
      inside an entity container or a row with per-item actions. */
-  const USER_CONTENT = '[data-agzh-user-content],[data-agzh-user-name]';
-  const ENTITY_HREF = /^\/(?:c(?:\/|\/(?:[0-9a-f-]{36}|_new)(?:\/.*)?)?|customizations\/(?:plugins|skills|automations)\/[\w.-]+|marketplaces\/[\w.-]+\/plugins\/[\w.-]+|automations\/[\w.-]+|projects\/[\w.-]+|sidecars\/[\w.-]+)$/i;
-  const ENTITY_CONTAINER = '[data-agzh-user-content],[data-testid="automation-card"],[data-testid="automation-row"],[data-testid="automation-item"],[data-testid="automation-list-item"],[data-testid*="workspace"],[data-testid*="project"],[data-testid*="skill"],[data-testid*="plugin"],[data-testid*="marketplace"],[data-testid*="session"]';
+  const USER_CONTENT = '[data-gravitybox-user-content],[data-gravitybox-user-name]';
+  const ENTITY_HREF = /^\/(?:c(?:\/|\/(?:[0-9a-f-]{36}|_new)(?:\/.*)?)?|customizations\/(?:plugins|skills|automations|sidecars)\/[\w.-]+|(?:customizations\/)?marketplaces\/[\w.-]+\/(?:plugins|skills|bundles)\/[\w.-]+|automations\/[\w.-]+|projects\/[\w.-]+|sidecars\/(?:triggers\/)?[\w.-]+)$/i;
+  const ENTITY_CONTAINER = '[data-gravitybox-user-content],[data-testid="automation-card"],[data-testid="automation-row"],[data-testid="automation-item"],[data-testid="automation-list-item"],[data-testid*="workspace"],[data-testid*="project"],[data-testid*="skill"],[data-testid*="plugin"],[data-testid*="marketplace"],[data-testid*="session"]';
   const ENTITY_ROW = '[data-testid*="card"],[data-testid*="row"],li,[role="listitem"],[role="option"],[role="menuitem"],tr';
   const ROW_ACTIONS = '[data-testid*="actions"],[data-testid*="menu-trigger"],[aria-label*="More actions" i],[aria-label*="更多操作"],[aria-label="More options" i]';
   const USER_NAME_ROW = 'h1,h2,h3,h4,[data-testid*="name"],[data-testid*="title"]';
@@ -173,7 +187,7 @@
   function isValidUiText(raw) {
     if (!raw || typeof raw !== 'string') return false;
     const text = normalize(raw);
-    if (text.length < 2 || text.length > 120) return false;
+    if (text.length < 2 || text.length > 400) return false;
     if (!/[a-zA-Z]{2,}/.test(text)) return false;
     if (/[\u3400-\u9fff]/.test(text)) return false;
     if (/(?:https?:\/\/|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}|(?:^|\s)(?:\/|~\/|[A-Za-z]:\\)|\b(?:sk-|AIza)[A-Za-z0-9_-]{12,})/.test(text)) return false;
@@ -201,7 +215,7 @@
 
   let dictionary = options.dictionary;
   let foldedMap = new Map();
-  let languageMode = 'zh'; // 'zh' | 'en'
+  let languageMode = options.translationEnabled === false ? 'en' : 'zh'; // 'zh' | 'en'
   let active = true;
   let observer;
   let timer = null;
@@ -219,7 +233,7 @@
      (the controller calls it after navigatedWithinDocument) and by a light poll. Outside the list
      the engine suspends, restores every translation it owns to English and drops its queue; when
      the route comes back the document is rescanned and Chinese is re-applied. */
-  const ALLOWED_ROUTE = /^(?:\/|\/(?:history|sidecars|customizations|automations|settings|settings-standalone|terminal-standalone|new-project|onboarding|multi|artifact|s|chatski-connect)(?:\/.*)?|\/c(?:\/|\/(?:[0-9a-f-]{36}|_new)(?:\/.*)?)?|\/(?:forked|view|battle)\/.*)$/i;
+  const ALLOWED_ROUTE = /^(?:\/|\/(?:history|sidecars|customizations|automations|settings|settings-standalone|terminal-standalone|new-project|multi|artifact|s|chatski-connect)(?:\/.*)?|\/c(?:\/|\/(?:[0-9a-f-]{36}|_new)(?:\/.*)?)?|\/(?:forked|view|battle)\/.*)$/i;
   const RESTRICTED_ROUTE = /^\/(?:onboarding|oauth|auth|login|sign-in)(?:\/|$)/i;
   let routeExcluded = false;
   let routeTimer = null;
@@ -243,6 +257,7 @@
     const excluded = !routeAllowedNow();
     if (excluded === routeExcluded && !force) return routeExcluded;
     routeExcluded = excluded;
+    try { globalThis.__GRAVITYBOX_HUD_V1__?.setRouteExcluded?.(routeExcluded); } catch {}
     if (excluded) {
       if (timer !== null) { clearTimeout(timer); timer = null; }
       pending.clear(); waiting.clear(); settingsWaiting.clear(); requeueDocument = false; reconcileRequested = false; reconcileQueue = null;
@@ -311,18 +326,18 @@
 
   function injectMicroPatch() {
     try {
-      if (typeof document === 'undefined' || document.getElementById('__agzh_micro_patch__')) return;
+      if (typeof document === 'undefined' || document.getElementById('__gravitybox_micro_patch__')) return;
       const target = document.head || document.documentElement;
       if (!target) return;
       const style = document.createElement('style');
-      style.id = '__agzh_micro_patch__';
+      style.id = '__gravitybox_micro_patch__';
       style.textContent = `
-        button[data-agzh-loc="1"], [role="button"][data-agzh-loc="1"], [role="tab"][data-agzh-loc="1"],
-        button[data-agzh-ui], [role="button"][data-agzh-ui], [role="tab"][data-agzh-ui] {
+        button[data-gravitybox-loc="1"], [role="button"][data-gravitybox-loc="1"], [role="tab"][data-gravitybox-loc="1"],
+        button[data-gravitybox-ui], [role="button"][data-gravitybox-ui], [role="tab"][data-gravitybox-ui] {
           white-space: nowrap;
         }
-        p[data-agzh-loc="1"], .description[data-agzh-loc="1"],
-        p[data-agzh-ui], .description[data-agzh-ui] {
+        p[data-gravitybox-loc="1"], .description[data-gravitybox-loc="1"],
+        p[data-gravitybox-ui], .description[data-gravitybox-ui] {
           line-height: 1.5;
         }
       `;
@@ -366,14 +381,14 @@
      can flip "translatable <-> protected" (protection-relevant classes, role, contenteditable,
      protection markers, data-testid) invalidates the element, and therefore its recorded subtree. */
   const protectionTokens = new WeakMap();
-  const PROTECTIVE_CLASSES = new Set(['chat-message', 'message-content', 'conversation-title', 'terminal', 'output-view', 'debug-console', 'code-view', 'artifact-container', 'model-item', 'markdown', 'markdown-frontmatter', 'markdown-alert-title', 'notebook-markdown-cell', 'prose', 'file-tree', 'agzh-project-name']);
-  const PROTECTION_ATTRS = ['class', 'role', 'contenteditable', 'data-testid', 'data-agzh-protect', 'data-agzh-user-content', 'data-agzh-user-name'];
+  const PROTECTIVE_CLASSES = new Set(['chat-message', 'message-content', 'conversation-title', 'terminal', 'output-view', 'debug-console', 'code-view', 'artifact-container', 'model-item', 'markdown', 'markdown-frontmatter', 'markdown-alert-title', 'notebook-markdown-cell', 'prose', 'file-tree', 'gravitybox-project-name']);
+  const PROTECTION_ATTRS = ['class', 'role', 'contenteditable', 'data-testid', 'data-gravitybox-protect', 'data-gravitybox-user-content', 'data-gravitybox-user-name'];
   function protectionToken(el) {
     const raw = typeof el.className === 'string' ? el.className : '';
     let protective = '';
     for (const token of raw.split(/\s+/)) if (token && PROTECTIVE_CLASSES.has(token)) protective += token + ' ';
     return protective + '|' + (el.getAttribute('role') || '') + '|' + (el.getAttribute('contenteditable') || '') +
-      '|' + (el.hasAttribute('data-agzh-protect') ? 'p' : '') + (el.hasAttribute('data-agzh-user-content') ? 'u' : '') + (el.hasAttribute('data-agzh-user-name') ? 'n' : '') +
+      '|' + (el.hasAttribute('data-gravitybox-protect') ? 'p' : '') + (el.hasAttribute('data-gravitybox-user-content') ? 'u' : '') + (el.hasAttribute('data-gravitybox-user-name') ? 'n' : '') +
       '|' + (el.getAttribute('data-testid') || '');
   }
   function protectionChanged(el) {
@@ -402,16 +417,16 @@
          after the header itself is gone; the class is also part of PROTECTED. Guard the write:
          classList.add on an element that already has the class is a no-op, but an unconditional
          write produced a mutation on every scan and drove the flush timer into a busy loop. */
-      if (matches(node, 'button,[role="button"]') && !node.classList.contains('agzh-project-name')) { node.classList.add('agzh-project-name'); ownedProjectMarkers.add(new WeakRef(node)); }
+      if (matches(node, 'button,[role="button"]') && !node.classList.contains('gravitybox-project-name')) { node.classList.add('gravitybox-project-name'); ownedProjectMarkers.add(new WeakRef(node)); }
     }
     projectNames = next;
   }
   const blockedCache = new WeakMap();
   const eligibleCache = new WeakMap();
 
-  const MODEL_LABELS = new Set(['Model', 'Usage', 'View Usage', 'Weekly limit', 'Daily limit', 'Weekly Limit Remaining', 'Five Hour Limit Remaining', 'Gemini Models', 'Claude and GPT models', 'Gemini 4 Argon', 'Gemini 4 Argon Weekly Limit', 'New', 'Notice', 'Unavailable', 'Refreshing...', 'No quota information available.', '% left']);
+  const MODEL_LABELS = new Set(['Model', 'Usage', 'View Usage', 'Weekly limit', 'Daily limit', 'Weekly Limit Remaining', 'Five Hour Limit Remaining', 'Gemini Models', 'Claude and GPT models', 'Gemini 4 Argon', 'Gemini 4 Argon Weekly Limit', 'Gemini 4 Carbon', 'Gemini 4 Carbon Weekly Limit', 'New', 'Notice', 'Unavailable', 'Refreshing...', 'No quota information available.', '% left']);
   const MODEL_GROUP_LABEL = /^Models within this group:\s*((?:(?:Gemini|Claude|GPT)[\w .,+()/-]{0,399})?)$/i;
-  const MODEL_LIMIT_LABEL = /^\d+[smhd]\s+limit$/i;
+  const MODEL_LIMIT_LABEL = /^(?:\d+[smhd]\s+limit|Gemini(?:\s+\d+(?:\.\d+)?)?(?:\s+[A-Za-z][\w-]{0,48}){1,3}\s+(?:Weekly|Daily|Five Hour)\s+Limit)$/i;
   const MODEL_PERCENT_LEFT = /^(?:\d+%\s+)?left$/i;
   const MODEL_RESET_LABEL = /^(?:(?:Weekly|Daily|\d+[smhd])\s+limit,\s*)?resets in (?:<1m|\d+[dhms](?:\s+\d+[dhms])*)$/i;
   function modelUiLabel(element) {
@@ -420,7 +435,7 @@
     const value = normalize(original);
     if (!MODEL_LABELS.has(value) && !MODEL_LIMIT_LABEL.test(value) && !MODEL_PERCENT_LEFT.test(value) && !MODEL_GROUP_LABEL.test(value) && !MODEL_RESET_LABEL.test(value)) return false;
     // Only fixed interface labels may cross model containers. Content, names and editors stay protected.
-    return ancestors(element).every(el => !matches(el, PROTECTED) || (el.hasAttribute('data-testid') && /model/.test(el.getAttribute('data-testid')) && !matches(el, '[data-agzh-protect],[contenteditable],.model-item')));
+    return ancestors(element).every(el => !matches(el, PROTECTED) || (el.hasAttribute('data-testid') && /model/.test(el.getAttribute('data-testid')) && !matches(el, '[data-gravitybox-protect],[contenteditable],.model-item')));
   }
 
   function isRelativeTimeBadge(element) {
@@ -428,7 +443,7 @@
     // A time-shaped user title/body is still user content. Only a leaf badge inside a known row
     // can bypass the row's protection; use its saved original so Chinese does not change eligibility.
     const row = element.closest('[data-testid="conversation-row-sidebar"]');
-    if (!row || element.matches('.truncate,[data-testid*="title"]') || element.closest('.truncate,[data-agzh-protect],.markdown,.prose,[data-message-author-role]')) return false;
+    if (!row || element.matches('.truncate,[data-testid*="title"]') || element.closest('.truncate,[data-gravitybox-protect],.markdown,.prose,[data-message-author-role]')) return false;
     if (ancestors(element).some(el => el !== row && el.matches(PROTECTED))) return false;
     const text = element.firstChild;
     const original = nodeSlots.get(text)?.get('')?.original ?? element.textContent ?? '';
@@ -442,7 +457,7 @@
     if(!root?.contains(button))return false;
     // The small standalone expansion control is built-in navigation, unlike project rows.
     const original=nodeSlots.get(button.firstChild)?.get('')?.original??button.textContent??'';
-    if(button.matches('.text-xs.mx-4.hover\\:underline')&&['Show All','Show all','显示全部','Collapse','收起'].includes(normalize(original)))return false;
+    if(button.matches('.mx-4.hover\\:underline:is(.text-xs,.text-sm)')&&['Show All','Show all','Show Less','Show less','显示全部','Collapse','收起'].includes(normalize(original)))return false;
     const headings=[...root.querySelectorAll('h2')].filter(e=>!pane.contains(e));
     const label=e=>(e.textContent||'').replace(/\s+/g,' ').trim();
     const start=headings.find(e=>['Projects','Project list','项目列表','项目'].includes(label(e)));
@@ -512,6 +527,9 @@
   }
 
   const TEMPLATE_RULES = [
+    { key: "{model} Weekly Limit", pattern: /^(Gemini(?:\s+\d+(?:\.\d+)?)?(?:\s+[A-Za-z][\w-]{0,48}){1,3})\s+Weekly\s+Limit$/i, replace: (_, model) => `${model} 每周限额` },
+    { key: "{model} Daily Limit", pattern: /^(Gemini(?:\s+\d+(?:\.\d+)?)?(?:\s+[A-Za-z][\w-]{0,48}){1,3})\s+Daily\s+Limit$/i, replace: (_, model) => `${model} 每日限额` },
+    { key: "{model} Five Hour Limit", pattern: /^(Gemini(?:\s+\d+(?:\.\d+)?)?(?:\s+[A-Za-z][\w-]{0,48}){1,3})\s+Five\s+Hour\s+Limit$/i, replace: (_, model) => `${model} 5小时限额` },
     { key: "Models within this group: {models}", pattern: MODEL_GROUP_LABEL, replace: (_, models) => `此组包含的模型：${models}` },
     { key: "Load older messages, showing {shown} of {total}", pattern: /^Load older messages, showing (\d+) of (\d+)$/i, replace: (_,shown,total) => `加载更早消息（已显示 ${shown} / ${total} 条）` },
     {
@@ -1398,6 +1416,81 @@
     {
       key: "Open the {name} plugin", pattern: /^Open\s+the\s+(.+?)\s+plugin$/i,
       replace: (_, n) => `打开 ${n} 插件`
+    },
+    {
+      key: "Cancel Questionnaire and Stop the Agent ({shortcut})",
+      pattern: /^Cancel\s+Questionnaire\s+and\s+Stop\s+the\s+Agent\s+\(([^)]+)\)$/i,
+      replace: (_, s) => `取消问卷并停止智能体 (${s})`
+    },
+    {
+      key: "{additions} lines added, {deletions} lines removed",
+      pattern: /^(\d+)\s+lines?\s+added,\s*(\d+)\s+lines?\s+removed$/i,
+      replace: (_, a, d) => `新增 ${a} 行，删除 ${d} 行`
+    },
+    {
+      key: "{name} (Remote)",
+      pattern: /^(.+?)\s+\(Remote\)$/i,
+      replace: (_, name) => `${name}（远程）`
+    },
+    {
+      key: "Account this MCP server uses: {name}",
+      pattern: /^Account\s+this\s+MCP\s+server\s+uses:\s*(.+)$/i,
+      replace: (_, name) => `此 MCP 服务器使用的账号：${name}`
+    },
+    {
+      key: "Detached at {commit}",
+      pattern: /^Detached\s+at\s+([0-9a-f]{7,40})$/i,
+      replace: (_, commit) => `游离于 ${commit}`
+    },
+    {
+      key: "Unfold lines {start}-{end}",
+      pattern: /^Unfold\s+lines\s+(\d+)-(\d+)$/i,
+      replace: (_, s, e) => `展开第 ${s}-${e} 行`
+    },
+    {
+      key: "View Diff for {file}",
+      pattern: /^View\s+Diff\s+for\s+(.+)$/i,
+      replace: (_, f) => `查看 ${f} 的差异`
+    },
+    {
+      key: "Version {version}",
+      pattern: /^Version\s+(v?\d+\.\d+(?:\.\d+)*(?:-[\w.]+)?)$/i,
+      replace: (_, v) => `版本 ${v}`
+    },
+    {
+      key: "Preview unavailable — {reason}",
+      pattern: /^Preview\s+unavailable\s+[—-]\s+(.+)$/i,
+      replace: (_, r) => `预览不可用 — ${r}`
+    },
+    {
+      key: "Open URL in system browser: {url}",
+      pattern: /^Open\s+URL\s+in\s+system\s+browser:\s*(https?:\/\/.+)$/i,
+      replace: (_, u) => `在系统浏览器中打开 URL：${u}`
+    },
+    {
+      key: "Opens external link: {url}",
+      pattern: /^Opens\s+external\s+link:\s*(https?:\/\/.+)$/i,
+      replace: (_, u) => `打开外部链接：${u}`
+    },
+    {
+      key: 'Created automation "{name}".',
+      pattern: /^Created\s+automation\s+"(.+)"\.$/i,
+      replace: (_, n) => `已创建自动化“${n}”。`
+    },
+    {
+      key: "The folder “{name}” does not exist. Would you like to create it?",
+      pattern: /^The\s+folder\s+[“"](.+?)[”"]\s+does\s+not\s+exist\.\s+Would\s+you\s+like\s+to\s+create\s+it\?$/i,
+      replace: (_, n) => `文件夹“${n}”不存在，是否创建？`
+    },
+    {
+      key: "This window's agents, files, and terminals are on {host}.",
+      pattern: /^This\s+window's\s+agents,\s+files,\s+and\s+terminals\s+are\s+on\s+(.+?)\.$/i,
+      replace: (_, h) => `此窗口的智能体、文件与终端运行于 ${h}。`
+    },
+    {
+      key: "Stop {count} selected",
+      pattern: /^Stop\s+(\d+)\s+selected$/i,
+      replace: (_, n) => `停止已选中的 ${n} 项`
     }
   ];
 
@@ -1465,7 +1558,7 @@
      predicate is what keeps translation and restoration in agreement: when they disagreed, a value
      flip-flopped between English and Chinese on every scan. */
   function translatable(node, attr, scan) {
-    if (attr) return attributeAllowed(node, attr, scan);
+    if (attr) return attributeAllowed(node, attr);
     return eligible(node.parentElement, scan);
   }
   function updateValue(node, attr = '', scan = 0) {
@@ -1475,7 +1568,7 @@
     const el = attr ? node : node.parentElement;
     if (current === null) {
       if (slots) { slots.delete(attr); if (!slots.size) activeNodes.delete(node); }
-      if (el && el.nodeType === Node.ELEMENT_NODE && !slots?.size) delete el.dataset.agzhLoc;
+      if (el && el.nodeType === Node.ELEMENT_NODE && !slots?.size) delete el.dataset.gravityboxLoc;
       return;
     }
     if (!translatable(node, attr, scan)) {
@@ -1483,7 +1576,7 @@
          drop the slot so a later re-entry starts from the real text instead of a stale value. */
       if (old && current === old.last) setValue(node, attr, old.original);
       if (slots) { slots.delete(attr); if (!slots.size) activeNodes.delete(node); }
-      if (el && el.nodeType === Node.ELEMENT_NODE && !slots?.size) delete el.dataset.agzhLoc;
+      if (el && el.nodeType === Node.ELEMENT_NODE && !slots?.size) delete el.dataset.gravityboxLoc;
       return;
     }
     if (old?.group) {
@@ -1513,9 +1606,9 @@
 
     if (el && el.nodeType === Node.ELEMENT_NODE) {
       if (languageMode === 'zh' && next !== original) {
-        el.dataset.agzhLoc = '1';
+        el.dataset.gravityboxLoc = '1';
       } else if (languageMode === 'en' || next === original) {
-        delete el.dataset.agzhLoc;
+        delete el.dataset.gravityboxLoc;
       }
     }
   }
@@ -1528,7 +1621,7 @@
      is never touched, whereas a standalone <input placeholder="Search"> is a real UI string.
      An input that lives inside a conversation row or a code block still has no UI context, so it
      correctly stays English. */
-  function attributeAllowed(element, attribute, scan) {
+  function attributeAllowed(element, attribute) {
     if(routeExcluded||restrictedAdaptiveRoute())return false;
     if (!TRANSLATABLE_ATTRS.includes(attribute)) return false;
     if (!element || element.nodeType !== Node.ELEMENT_NODE) return false;
@@ -1538,6 +1631,10 @@
       return ancestors(element).every(el=>!matches(el,PROTECTED)||el===row);
     }
     if (userNamed(element)) return false;
+    if (attribute === 'aria-label' && element.matches('button[data-testid="model-selector-trigger"],[role="button"][data-testid="model-selector-trigger"]')
+        && /^Select model,\s*current:\s*.+$/i.test(original)) {
+      return ancestors(element).every(el => !matches(el, PROTECTED) || el === element);
+    }
     const protectedParents = ancestors(element).filter(el => matches(el, PROTECTED));
     if (protectedParents.some(el => el !== element || !['INPUT', 'TEXTAREA'].includes(el.tagName))) return false;
     // These first-party controls have no UI ancestor. Keep the exception exact so arbitrary
@@ -1586,7 +1683,7 @@
       slots.delete('');
       if (!slots.size) activeNodes.delete(node);
     }
-    delete el.dataset.agzhLoc;
+    delete el.dataset.gravityboxLoc;
   }
 
   /* J04 (conservative): the template is the element's direct children rendered as text runs plus
@@ -1655,8 +1752,8 @@
       for (let k = 0; k < items.length; k++) writeGroupSlot(items[k].node, el, k === 0 ? part : '', items[k].original, groupKeys);
     }
     auditRecord(norm, zh, el, 'template', groupKeys);
-    if (languageMode === 'zh') el.dataset.agzhLoc = '1';
-    else delete el.dataset.agzhLoc;
+    if (languageMode === 'zh') el.dataset.gravityboxLoc = '1';
+    else delete el.dataset.gravityboxLoc;
     for (let i = inlineElements.length - 1; i >= 0; i--) queue.add(inlineElements[i]);
     return true;
   }
@@ -1700,8 +1797,8 @@
       inlineGroupContainers.add(el);
       for (let k = 0; k < items.length; k++) writeGroupSlot(items[k].node, el, k === 0 ? zh : '', items[k].original, groupKeys);
       auditRecord(norm, zh, el, 'template', groupKeys);
-      if (languageMode === 'zh') el.dataset.agzhLoc = '1';
-      else delete el.dataset.agzhLoc;
+      if (languageMode === 'zh') el.dataset.gravityboxLoc = '1';
+      else delete el.dataset.gravityboxLoc;
       return true;
     }
     const normPlaceholders = placeholderTokens(norm), zhPlaceholders = placeholderTokens(zh);
@@ -1855,9 +1952,9 @@
     }
     maxSliceMs = Math.max(maxSliceMs, performance.now() - flushStarted);
   }
-  const observerOptions = { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['title', 'aria-label', 'data-tooltip', 'placeholder', 'class', 'role', 'contenteditable', 'data-testid', 'data-agzh-protect', 'data-agzh-user-content', 'data-agzh-user-name'] };
+  const observerOptions = { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['title', 'aria-label', 'data-tooltip', 'placeholder', 'class', 'role', 'contenteditable', 'data-testid', 'data-gravitybox-protect', 'data-gravitybox-user-content', 'data-gravitybox-user-name'] };
   function observe(root) { if (!observed.has(root)) { observed.add(root); observer.observe(root, observerOptions); } }
-  /* Any mutation of class / role / contenteditable / data-agzh-protect can switch a node between
+  /* Any mutation of class / role / contenteditable / data-gravitybox-protect can switch a node between
      "translatable" and "protected", so a reconcile pass is requested; the reconcile walks only the
      recorded nodes instead of re-scanning the changed node's whole subtree. */
   observer = new MutationObserver(mutations => {
@@ -1956,12 +2053,13 @@
           setValue(node, attr, targetVal);
           const el = attr ? node : node.parentElement;
           if (el && el.nodeType === Node.ELEMENT_NODE) {
-            if (languageMode === 'en') delete el.dataset.agzhLoc;
-            else el.dataset.agzhLoc = '1';
+            if (languageMode === 'en') delete el.dataset.gravityboxLoc;
+            else el.dataset.gravityboxLoc = '1';
           }
         }
       }
-      try{globalThis.__agzhLanguageChanged?.(languageMode);}catch{}
+      try{globalThis.__gravityboxLanguageChanged?.(languageMode);}catch{}
+      try{globalThis.__GRAVITYBOX_HUD_V1__?.setLanguage?.(languageMode);}catch{}
       return { mode: languageMode, activeNodes: activeNodes.size, groups: 0 };
     },
     getLanguageMode() { return languageMode; },
@@ -1983,7 +2081,7 @@
         if(template&&conservative&&!inSystemSettings(el,scan))return;
         if(conservative&&!attribute&&!template&&!isDialogPromptParagraph(el)&&!el?.closest('button,[role="button"],[role="tab"],[role="menuitem"],[role="tooltip"],label,h1,h2,h3,h4,[data-select-popup],[role="menu"],[role="listbox"],[role="option"]')&&!inSystemSettings(el,scan))return;
         const valid=template?isValidTemplateText(raw):isValidUiText(raw);
-        if(rows.size>=500||!visibleUi(el)||userNamed(el)||(attribute ? !attributeAllowed(el,attribute,scan) : blocked(el,scan)||(!template&&!el.closest(UI_SELECTOR)&&!inSystemSettings(el,scan)&&!isDialogPromptParagraph(el)))||pluginDescription(el)||!valid)return;
+        if(rows.size>=500||!visibleUi(el)||userNamed(el)||(attribute ? !attributeAllowed(el,attribute) : blocked(el,scan)||(!template&&!el.closest(UI_SELECTOR)&&!inSystemSettings(el,scan)&&!isDialogPromptParagraph(el)))||pluginDescription(el)||!valid)return;
         const key=normalize(raw),route=scopeRoute(el);
         if(isBrandName(key))return;
         /* An unsupported inline layout is still a candidate even when the dictionary holds an
@@ -2022,7 +2120,7 @@
         }
         for(const el of root.querySelectorAll('[title],[aria-label],[placeholder],[data-tooltip]')){
           if(performance.now()-collectStarted>12){lastCollectionTruncated=true;break collectRoots;}
-          for(const attr of TRANSLATABLE_ATTRS)if(el.hasAttribute(attr)&&attributeAllowed(el,attr,scan))add(el.getAttribute(attr),el,attr==='placeholder'?'placeholder':inferKind(el),attr);
+          for(const attr of TRANSLATABLE_ATTRS)if(el.hasAttribute(attr)&&attributeAllowed(el,attr))add(el.getAttribute(attr),el,attr==='placeholder'?'placeholder':inferKind(el),attr);
         }
       }maxSliceMs=Math.max(maxSliceMs,performance.now()-collectStarted);return [...rows.values()];
     },
@@ -2073,7 +2171,7 @@
           if (++visited > 50000 || performance.now()-auditStarted>80) { truncated = true; break auditRoots; }
           if (!visibleUi(el)) continue;
           for (const attr of TRANSLATABLE_ATTRS) {
-            if (!el.hasAttribute(attr) || !attributeAllowed(el,attr,scan)) continue;
+            if (!el.hasAttribute(attr) || !attributeAllowed(el,attr)) continue;
             const current = normalize(el.getAttribute(attr));
             const attributeSlot=nodeSlots.get(el)?.get(attr);
             const original = normalize(attributeSlot?.original ?? current), key = known.get(original);
@@ -2100,6 +2198,7 @@
       };
     },
     dispose() {
+      try { globalThis.__GRAVITYBOX_HUD_V1__?.dispose?.(); } catch {}
       auditKeys = null; auditTrail.clear();
       active = false; observer.disconnect(); clearTimeout(timer); timer = null; reconcileQueue = null;
       if (routeTimer) { clearInterval(routeTimer); routeTimer = null; }
@@ -2109,10 +2208,10 @@
         window.removeEventListener('keydown', handleKeydown, true);
       }
       if (toastTimer) { clearTimeout(toastTimer); toastTimer = null; }
-      const toast = document.getElementById('__agzh_toast__');
+      const toast = document.getElementById('__gravitybox_toast__');
       if (toast) toast.remove();
 
-      const style = document.getElementById('__agzh_micro_patch__');
+      const style = document.getElementById('__gravitybox_micro_patch__');
       if (style) style.remove();
       let restored = 0; let skipped = 0;
       for (const node of activeNodes) {
@@ -2121,13 +2220,13 @@
           if (slots) for (const [attr, slot] of slots) {
             if (getValue(node, attr) === slot.last) { setValue(node, attr, slot.original); restored++; } else skipped++;
             const el = attr ? node : node.parentElement;
-            if (el && el.nodeType === Node.ELEMENT_NODE) delete el.dataset.agzhLoc;
+            if (el && el.nodeType === Node.ELEMENT_NODE) delete el.dataset.gravityboxLoc;
           }
         }
       }
       skippedRestores = skipped;
-      for (const ref of ownedProjectMarkers) ref.deref()?.classList.remove('agzh-project-name'); ownedProjectMarkers.clear();
-      if (globalThis.__AGZH_BOOT__ === options) delete globalThis.__AGZH_BOOT__;
+      for (const ref of ownedProjectMarkers) ref.deref()?.classList.remove('gravitybox-project-name'); ownedProjectMarkers.clear();
+      if (globalThis.__GRAVITYBOX_BOOT__ === options) delete globalThis.__GRAVITYBOX_BOOT__;
       activeNodes.clear(); observed.clear(); inlineGroupContainers.clear(); unsupportedInlineGroupSet.clear(); delete globalThis[KEY];
       return { restored, skipped, active: false };
     }
@@ -2137,11 +2236,11 @@
   function showToast(message, duration=1200) {
     try {
       if (typeof document === 'undefined') return;
-      let toast = document.getElementById('__agzh_toast__');
+      let toast = document.getElementById('__gravitybox_toast__');
       if (!toast) {
         toast = document.createElement('div');
-        toast.id = '__agzh_toast__';
-        toast.setAttribute('data-agzh-protect', 'true');
+        toast.id = '__gravitybox_toast__';
+        toast.setAttribute('data-gravitybox-protect', 'true');
         Object.assign(toast.style, {
           position: 'fixed',
           top: '16px',
@@ -2205,7 +2304,8 @@
   }
 
   globalThis[KEY] = api;
-  globalThis.__AGZH_ATTACH_DEEP_SCAN__?.();
+  globalThis.__GRAVITYBOX_ATTACH_DEEP_SCAN__?.();
+  globalThis.__GRAVITYBOX_ATTACH_HUD__?.();
   try {
     window.addEventListener('popstate', checkRoute);
     window.addEventListener('hashchange', checkRoute);

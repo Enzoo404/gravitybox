@@ -1,5 +1,6 @@
 import { Worker } from 'node:worker_threads';
 import { randomUUID } from 'node:crypto';
+import type { HudWorkerScanRequest, HudWorkerScanResult } from './sqlite-worker.js';
 
 const MAX_IDLE_WORKERS = 8;
 const IDLE_WORKER_TTL_MS = 35_000;
@@ -11,7 +12,9 @@ function acquirePooledWorker(path: string): Worker {
     entry.cleanup();
     if (entry.worker.threadId < 0) continue;
     entry.worker.ref();
-    entry.worker.postMessage({ id: 'open', open: path });
+    if (path.length > 0) {
+      entry.worker.postMessage({ id: 'open', open: path });
+    }
     return entry.worker;
   }
   return new Worker(new URL('./sqlite-worker.js', import.meta.url), {
@@ -48,7 +51,7 @@ function releasePooledWorker(worker: Worker) {
   idleWorkers.push({ worker, timer, cleanup: removeIdle });
 }
 
-/** One background, read-only SQLite transaction per database scan. */
+/** Bounded read-only statements; no transaction is retained while the caller parses batches. */
 export class SqliteReadSnapshot {
   private worker: Worker;
   private failure?: string;
@@ -108,6 +111,7 @@ export class SqliteReadSnapshot {
   async query(sql: string): Promise<{ok:boolean;rows:any[];error?:string}> {
     return this.request({sql});
   }
+  async verifyUnchanged(): Promise<boolean> { return (await this.request({ verify: true })).ok; }
   async projectBlob(table:'gen_metadata'|'steps', column:'data'|'metadata', idx:number): Promise<{ok:boolean;rows:any[];error?:string}> {
     return this.request({projection:{table,column,idx}});
   }
@@ -151,4 +155,61 @@ export class SqliteReadSnapshot {
     this.worker.removeListener('error', this.onError);
     this.worker.removeListener('message', this.onMessage);
   }
+}
+
+/**
+ * 在只读 Worker 线程池中执行单次无长事务 HUD 数据库增量/全量扫描，
+ * 单次请求内自动提交并立即关闭 SQLite 句柄，绝不阻塞主进程事件循环或宿主 wal_checkpoint。
+ */
+export async function runHudDbScanInWorker(
+  hudScan: HudWorkerScanRequest,
+  timeoutMs = 3000
+): Promise<HudWorkerScanResult> {
+  const worker = acquirePooledWorker('');
+  const id = randomUUID();
+  return new Promise<HudWorkerScanResult>((resolve, reject) => {
+    let settled = false;
+    const cleanup = () => {
+      clearTimeout(timer);
+      worker.removeListener('message', onMessage);
+      worker.removeListener('error', onError);
+      worker.removeListener('exit', onExit);
+    };
+    const onMessage = (msg: any) => {
+      if (!msg || msg.id !== id || settled) return;
+      settled = true;
+      cleanup();
+      releasePooledWorker(worker);
+      if (msg.ok && msg.hudResult) {
+        resolve(msg.hudResult as HudWorkerScanResult);
+      } else {
+        reject(new Error(msg.error || 'HUD 数据库读取失败'));
+      }
+    };
+    const onError = (err: Error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      void worker.terminate();
+      reject(err);
+    };
+    const onExit = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new Error('HUD 数据库读取工作线程异常退出'));
+    };
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      void worker.terminate();
+      reject(new Error('HUD 数据库读取超出单次时间预算'));
+    }, timeoutMs);
+
+    worker.on('message', onMessage);
+    worker.once('error', onError);
+    worker.once('exit', onExit);
+    worker.postMessage({ id, hudScan });
+  });
 }

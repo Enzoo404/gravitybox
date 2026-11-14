@@ -1,0 +1,90 @@
+{
+  "schema": 1,
+  "note": "历史快照的结构和完整性基准；不能替代原始官方字节或历史AST重提取证据",
+  "versions": {
+    "2.23.0": {
+      "bundleSha256": "867d1990b61d87f4b9ff8c5ecb1551c8688135267f32e56e02563f2d3e78fd68",
+      "snapshotSha256": "d9587cda627cbf86d8730753e9c1b088c2c63b6d6fe10271eebd497b6df3c510",
+      "extractor": "legacy-regex",
+      "trust": "reviewed-repository-snapshot",
+      "byteVerifiedThisRun": false
+    },
+    "2.23.1": {
+      "bundleSha256": "ad12ecf66061edab6a3835d1360e1bad50787bc7b2f2c9d86568281360864696",
+      "snapshotSha256": "39f7cd72be714e4aa5c26da2692fd0e26185c1f0dd812dc74d26d622d5fc183c",
+      "extractor": "legacy-regex",
+      "trust": "reviewed-repository-snapshot",
+      "byteVerifiedThisRun": false
+    },
+    "2.24.0": {
+      "bundleSha256": "7a0bf9576e8ffd8e9fb39716368b1c79c2ccd965da65e049fe846100f34edf88",
+      "snapshotSha256": "55c75bf2129eb4785bf55558c5f954e70bb59861d6071b3cb841a72511d18f45",
+      "extractor": "legacy-regex",
+      "trust": "reviewed-repository-snapshot",
+      "byteVerifiedThisRun": false
+    },
+    "2.26.0": {
+      "bundleSha256": "94abc09ac34dcae3a98f5e0fb74b66c87f8a8ad6ad214136544f924da2099e5e",
+      "snapshotSha256": "357f80335df8b0102ee37ebc3d04eb473011929c69044d941b9b408d9b8ce9e4",
+      "extractor": "legacy-regex",
+      "trust": "reviewed-repository-snapshot",
+      "byteVerifiedThisRun": false
+    },
+    "2.27.0": {
+      "bundleSha256": "40f3e1bb1441eebcba05e47c2d043954659b69788e9c513a86fc04493cd5fe66",
+      "snapshotSha256": "b48329816dbc89ace27b5e1e899d4c50ad00a2809dace43aa7d3d0f4f20aeeb9",
+      "extractor": "legacy-regex",
+      "trust": "reviewed-repository-snapshot",
+      "byteVerifiedThisRun": false
+    },
+    "2.28.0": {
+      "bundleSha256": "4d2d2f3ab5aaaeda254ec4b773593fc5db683f0b5ddf81225c65a5f60e644038",
+      "snapshotSha256": "94da29b2bc081043a4d1adf564479be6ed3c77aa272049f54886b807fce7eb28",
+      "extractor": "legacy-regex",
+      "trust": "reviewed-repository-snapshot",
+      "byteVerifiedThisRun": false
+    },
+    "2.29.0": {
+      "bundleSha256": "8d1196a22cd3eb9779e8faf5c31eb732d3df8d9d037b685733ed4e3d6cdfb5a2",
+      "snapshotSha256": "9fc2d2cc940472204508bbd019038c1d03d9ca85596b3e3be881a82f5d7aa26c",
+      "extractor": "legacy-regex",
+      "trust": "reviewed-repository-snapshot",
+      "byteVerifiedThisRun": false
+    },
+    "2.29.1": {
+      "bundleSha256": "eec7297695f3b4f25d4e92f5f9d0bc4efeec86523cddcddddefc3410c5efe37a",
+      "snapshotSha256": "462f14864e1654f81a3d06fc589264ae8367f0299f3b466ad91f9cb1fe6fc3d3",
+      "extractor": "legacy-regex",
+      "trust": "reviewed-repository-snapshot",
+      "byteVerifiedThisRun": false
+    },
+    "2.30.0": {
+      "bundleSha256": "35e0da21894a7f6560075eae2501c88fede5204eb6067fac2653e2c7a63dc403",
+      "snapshotSha256": "036929c872737897833b379167c1bb8337c49e9daeffe1c8c96f53e1455aa4f2",
+      "extractor": "legacy-regex",
+      "trust": "reviewed-repository-snapshot",
+      "byteVerifiedThisRun": false
+    },
+    "2.31.0": {
+      "bundleSha256": "00c7aa77bcd1f0bce710f98a97be1e10c0b0fe91770d79216c94b47f2e591308",
+      "snapshotSha256": "3f490894da6e343eaaf052a786210c34dff63ec5ed26f859117a42e3fd1afb8b",
+      "extractor": "legacy-regex",
+      "trust": "reviewed-repository-snapshot",
+      "byteVerifiedThisRun": false
+    },
+    "2.31.2": {
+      "bundleSha256": "00c7aa77bcd1f0bce710f98a97be1e10c0b0fe91770d79216c94b47f2e591308",
+      "snapshotSha256": "86840832eeb30f44aafb4650eddaf4b564cc6b9caee931658b4f924dbabf310a",
+      "extractor": "legacy-regex",
+      "trust": "reviewed-repository-snapshot",
+      "byteVerifiedThisRun": false
+    },
+    "2.32.1": {
+      "bundleSha256": "4c0a1ff5659e7dd92e6ad249a386c0dbce2c8e94b88522a2f366ff20b397081e",
+      "snapshotSha256": "5909cfb18d45ee81c67a15b55e625eafcb6124a8a361a58452fffe1d8b068a00",
+      "extractor": "typescript-ast-v2",
+      "trust": "explicit-byte-extraction",
+      "byteVerifiedAt": "2026-11-14T10:03:36.115Z"
+    }
+  }
+}
