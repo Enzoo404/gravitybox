@@ -5,17 +5,16 @@ final class AboutPage: NSObject {
     var view: NSView!
 
     let versionPill: PillBadge
-    let envPill = pillBadge("macOS · arm64", color: Design.inactivePill)
     let checkUpdateBtn: InlineRefreshButton
     let installNowBtn = button("立即更新", target: nil, action: #selector(installAvailableUpdate))
     let cancelDownloadBtn = button("取消下载", target: nil, action: #selector(cancelActiveDownload))
-    let releaseNotesBtn = button("更新日志…", target: nil, action: #selector(openUpdateSheet))
-    let updateStatusIcon = symbol("checkmark.seal.fill", size: 14, color: Design.secondary)
-    let updateStatusLabel = text("点击右上角「检查更新」获取最新版本", size: 12.5, weight: .medium, color: .labelColor)
-    let updateMetaLabel = text("", size: 11.5, color: Design.secondary)
+    let releaseNotesBtn = button("更新日志 ↗", target: nil, action: #selector(openReleasesPage))
+    let updateStatusIcon = symbol("checkmark.seal.fill", size: 12, color: Design.secondary)
+    let updateStatusLabel = text("", size: 11.5, weight: .medium, color: Design.secondary)
+    let updateMetaLabel = text("", size: 11, color: Design.secondary)
+    private(set) var statusLine: NSStackView!
     let autoUpdateSwitch = DesignSwitch()
     let versionSpecLabel = text("", size: 12.5, weight: .medium, color: .labelColor)
-    let osSpecLabel = text("", size: 12.5, weight: .medium, color: .labelColor)
     let revealDataBtn = button("在访达中显示", target: nil, action: #selector(revealDataFolder))
     let githubReleasesBtn = button("GitHub ↗", target: nil, action: #selector(openReleasesPage))
     private let heroActions = horizontal([], spacing: 8)
@@ -65,15 +64,30 @@ final class AboutPage: NSObject {
         }
 
         let appName = text("GravityBox", size: 18, weight: .bold, color: .labelColor)
-        let titleLine = horizontal([appName, versionPill, envPill], spacing: 7)
+        let titleLine = horizontal([appName, versionPill], spacing: 7)
         titleLine.alignment = .centerY
         versionPill.setContentCompressionResistancePriority(.required, for: .horizontal)
-        envPill.setContentCompressionResistancePriority(.required, for: .horizontal)
 
-        let tagline = text("原生 Antigravity 账号配额与双语工作台", size: 11.5, color: Design.secondary)
-        tagline.lineBreakMode = .byTruncatingTail
-        let brandCol = vertical([titleLine, tagline], spacing: 3)
+        updateStatusIcon.translatesAutoresizingMaskIntoConstraints = false
+        updateStatusIcon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 12, weight: .semibold)
+        for c in updateStatusIcon.constraints where c.firstAttribute == .width || c.firstAttribute == .height {
+            c.constant = 14
+        }
+        updateStatusLabel.lineBreakMode = .byTruncatingTail
+        updateStatusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        updateMetaLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .medium)
+        updateMetaLabel.setContentHuggingPriority(.required, for: .horizontal)
+        updateMetaLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+        updateMetaLabel.isHidden = true
+
+        statusLine = horizontal([updateStatusIcon, updateStatusLabel, updateMetaLabel], spacing: 5)
+        statusLine.alignment = .centerY
+        statusLine.detachesHiddenViews = true
+        statusLine.isHidden = true
+
+        let brandCol = vertical([titleLine, statusLine], spacing: 4)
         brandCol.alignment = .leading
+        brandCol.detachesHiddenViews = true
         brandCol.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         heroActions.alignment = .centerY
@@ -86,49 +100,24 @@ final class AboutPage: NSObject {
         let heroTop = horizontal([iconBox, brandCol, flexibleSpace(), heroActions], spacing: 12)
         heroTop.alignment = .centerY
 
-        updateStatusIcon.translatesAutoresizingMaskIntoConstraints = false
-        updateStatusIcon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 13.5, weight: .semibold)
-        updateStatusLabel.lineBreakMode = .byTruncatingTail
-        updateStatusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        updateMetaLabel.font = .monospacedDigitSystemFont(ofSize: 11.5, weight: .regular)
-        updateMetaLabel.setContentHuggingPriority(.required, for: .horizontal)
-        updateMetaLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
-        let statusRow = horizontal([updateStatusIcon, updateStatusLabel, flexibleSpace(), updateMetaLabel], spacing: 8)
-        statusRow.alignment = .centerY
-
         autoUpdateSwitch.controlSize = .small
         autoUpdateSwitch.state = app.configuration.value.autoUpdateEnabled ? .on : .off
         autoUpdateSwitch.target = self
         autoUpdateSwitch.action = #selector(toggleAutoUpdate)
-        autoUpdateSwitch.setAccessibilityLabel("自动检查并预下载更新")
-        let autoTitle = text("自动检查并预下载更新", size: 13, weight: .semibold, color: .labelColor)
-        let autoSub = text("开启后将在后台定期检查 GitHub Release 新版本并预下载安装包", size: 11, color: Design.secondary)
-        autoSub.lineBreakMode = .byTruncatingTail
-        let autoCaptions = vertical([autoTitle, autoSub], spacing: 2)
-        autoCaptions.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        let autoRow = horizontal([autoCaptions, flexibleSpace(), autoUpdateSwitch], spacing: 12)
+        autoUpdateSwitch.setAccessibilityLabel("自动检查更新")
+        let autoTitle = text("自动检查更新", size: 13, weight: .semibold, color: .labelColor)
+        let autoRow = horizontal([autoTitle, flexibleSpace(), autoUpdateSwitch], spacing: 12)
         autoRow.alignment = .centerY
 
-        let heroInner = vertical([heroTop, divider(), statusRow, divider(), autoRow], spacing: 11)
+        let heroInner = vertical([heroTop, divider(), autoRow], spacing: 11)
         for child in heroInner.arrangedSubviews { fillWidth(child, in: heroInner) }
         let heroCard = group([heroInner], inset: 14)
         heroCard.cornerRadius = Design.Radius.card
 
-        // 2. System & Runtime Specs Card (Apple System Settings About style)
-        let buildDisplay = resolvedBuildSummary()
-        versionSpecLabel.stringValue = buildDisplay.isEmpty ? "v\(ver)" : "v\(ver)（Build \(buildDisplay)）"
+        // 2. Environment & Data Card
         versionSpecLabel.font = .monospacedDigitSystemFont(ofSize: 12.5, weight: .medium)
-        enableTextCopy(versionSpecLabel, title: "复制版本信息")
-
-        let osVer = ProcessInfo.processInfo.operatingSystemVersion
-        let osStr = osVer.patchVersion > 0
-            ? "macOS \(osVer.majorVersion).\(osVer.minorVersion).\(osVer.patchVersion)"
-            : "macOS \(osVer.majorVersion).\(osVer.minorVersion)"
-        osSpecLabel.stringValue = "\(osStr) · Apple Silicon (arm64)"
-        osSpecLabel.font = .monospacedDigitSystemFont(ofSize: 12.5, weight: .medium)
-
-        let targetSpecLabel = text("Antigravity 正式版（com.google.antigravity）", size: 12.5, weight: .medium, color: .labelColor)
-        targetSpecLabel.lineBreakMode = .byTruncatingMiddle
+        versionSpecLabel.lineBreakMode = .byTruncatingMiddle
+        versionSpecLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         let displayStatePath = app.state.path.replacingOccurrences(
             of: FileManager.default.homeDirectoryForCurrentUser.path,
@@ -139,11 +128,24 @@ final class AboutPage: NSObject {
         dataPathLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         enableTextCopy(dataPathLabel, value: app.state.path, title: "复制目录路径")
 
-        func specRow(_ key: String, right: NSView) -> NSView {
-            let keyLbl = text(key, size: 12.5, weight: .regular, color: Design.secondary)
+        func specRow(icon: String, tint: NSColor, key: String, right: NSView) -> NSView {
+            let iconBox = tintedIconBox(
+                size: 28,
+                cornerRadius: 7.5,
+                tint: tint,
+                lightNeutralAlpha: 0.04
+            )
+            let iconView = symbol(icon, size: 13.5, color: tint)
+            iconView.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 13.5, weight: .medium)
+            iconBox.addSubview(iconView)
+            NSLayoutConstraint.activate([
+                iconView.centerXAnchor.constraint(equalTo: iconBox.centerXAnchor),
+                iconView.centerYAnchor.constraint(equalTo: iconBox.centerYAnchor)
+            ])
+            let keyLbl = text(key, size: 13, weight: .semibold, color: .labelColor)
             keyLbl.setContentHuggingPriority(.required, for: .horizontal)
             keyLbl.setContentCompressionResistancePriority(.required, for: .horizontal)
-            let row = horizontal([keyLbl, flexibleSpace(), right], spacing: 12)
+            let row = horizontal([iconBox, keyLbl, flexibleSpace(), right], spacing: 11)
             row.alignment = .centerY
             return row
         }
@@ -153,42 +155,23 @@ final class AboutPage: NSObject {
         dataRight.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         let specsInner = vertical([
-            specRow("应用版本", right: versionSpecLabel),
+            specRow(icon: "cpu", tint: .systemIndigo, key: "目标应用", right: versionSpecLabel),
             divider(),
-            specRow("系统环境", right: osSpecLabel),
-            divider(),
-            specRow("目标应用", right: targetSpecLabel),
-            divider(),
-            specRow("数据目录", right: dataRight)
-        ], spacing: 9.5)
+            specRow(icon: "folder", tint: .systemOrange, key: "GravityBox 数据目录", right: dataRight)
+        ], spacing: 11)
         for child in specsInner.arrangedSubviews { fillWidth(child, in: specsInner) }
         let specsCard = group([specsInner], inset: 14)
         specsCard.cornerRadius = Design.Radius.card
 
-        // 3. Project & Privacy Principles Card
-        let localOnlyPill = pillBadge("仅本机运行 · 零遥测", color: Design.inactivePill)
-        localOnlyPill.setContentHuggingPriority(.required, for: .horizontal)
-        localOnlyPill.setContentCompressionResistancePriority(.required, for: .horizontal)
-
-        let projectInner = vertical([
-            settingRow(
-                icon: "shippingbox",
-                tint: Design.blue,
-                title: "GitHub Releases",
-                subtitle: "查看历史发行版本、更新日志与 SHA-256 校验说明",
-                control: githubReleasesBtn
-            ),
-            divider(),
-            settingRow(
-                icon: "lock.shield",
-                tint: .systemGreen,
-                title: "本地数据与隐私原则",
-                subtitle: "账号凭据、用量账本与汉化词典仅保存在本机，绝不上传任何遥测数据",
-                control: localOnlyPill
-            )
-        ], spacing: 11)
-        for child in projectInner.arrangedSubviews { fillWidth(child, in: projectInner) }
-        let projectCard = group([projectInner], inset: 14)
+        // 3. GitHub Releases Card
+        let releasesRow = settingRow(
+            icon: "shippingbox",
+            tint: Design.blue,
+            title: "GitHub Releases",
+            subtitle: "",
+            control: githubReleasesBtn
+        )
+        let projectCard = group([releasesRow], inset: 14)
         projectCard.cornerRadius = Design.Radius.card
 
         func sectionGroup(_ title: String, card: NSView) -> NSStackView {
@@ -202,12 +185,14 @@ final class AboutPage: NSObject {
         let root = pageStack(title: "关于")
         root.spacing = 12
         root.addArrangedSubview(heroCard)
-        root.addArrangedSubview(sectionGroup("版本与环境", card: specsCard))
-        root.addArrangedSubview(sectionGroup("项目与隐私", card: projectCard))
+        root.addArrangedSubview(sectionGroup("运行信息", card: specsCard))
+        root.addArrangedSubview(projectCard)
         fillWidth(heroCard, in: root)
+        fillWidth(projectCard, in: root)
 
         view = scrollPage(root)
         Design.applyControls(view)
+        refreshSpecs()
         refreshUpdateState()
     }
 
@@ -231,6 +216,35 @@ final class AboutPage: NSObject {
         return buildStr.isEmpty ? app.updateManager.currentBuildDisplay : buildStr
     }
 
+    private func resolvedAntigravityDisplay() -> String {
+        let bundleVer = (Bundle(path: DesktopApplicationTarget().path)?
+            .object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if !bundleVer.isEmpty {
+            return "Antigravity \(bundleVer)"
+        }
+        let liveVer = app.statusValue.appVersion.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !liveVer.isEmpty && liveVer != "fixture" {
+            return "Antigravity \(liveVer)"
+        }
+        return "Antigravity 正式版"
+    }
+
+    private func refreshSpecs() {
+        let ver = app.updateManager.currentVersion
+        let buildDisplay = resolvedBuildSummary()
+        let buildPart = buildDisplay.isEmpty ? "v\(ver)" : "Build \(buildDisplay)"
+        let antigravityPart = resolvedAntigravityDisplay()
+        versionSpecLabel.stringValue = antigravityPart
+
+        let osVer = ProcessInfo.processInfo.operatingSystemVersion
+        let osStr = osVer.patchVersion > 0
+            ? "macOS \(osVer.majorVersion).\(osVer.minorVersion).\(osVer.patchVersion)"
+            : "macOS \(osVer.majorVersion).\(osVer.minorVersion)"
+        let copyText = "GravityBox v\(ver) (\(buildPart)) · \(antigravityPart) · \(osStr) arm64"
+        enableTextCopy(versionSpecLabel, value: copyText, title: "复制版本与环境信息")
+    }
+
     func syncAutoUpdateSwitch() {
         autoUpdateSwitch.state = app.configuration.value.autoUpdateEnabled ? .on : .off
     }
@@ -241,40 +255,49 @@ final class AboutPage: NSObject {
         versionPill.title = "v\(ver)"
         switch app.updateManager.state {
         case .idle:
-            updateStatusIcon.image = NSImage(systemSymbolName: "arrow.triangle.2.circlepath", accessibilityDescription: nil)
-            updateStatusIcon.contentTintColor = Design.secondary
-            updateStatusLabel.stringValue = "点击右上角「检查更新」获取 GitHub Release 最新版本"
-            updateMetaLabel.stringValue = "当前 v\(ver)"
+            statusLine.isHidden = true
+            updateStatusLabel.stringValue = ""
+            updateMetaLabel.stringValue = ""
+            updateMetaLabel.isHidden = true
             checkUpdateBtn.isHidden = false
             checkUpdateBtn.setBusy(false, available: true)
             installNowBtn.isHidden = true
             cancelDownloadBtn.isHidden = true
             releaseNotesBtn.isHidden = true
         case .checking:
+            statusLine.isHidden = false
             updateStatusIcon.image = NSImage(systemSymbolName: "arrow.triangle.2.circlepath", accessibilityDescription: nil)
             updateStatusIcon.contentTintColor = Design.blue
-            updateStatusLabel.stringValue = "正在检查 GitHub Release 最新版本…"
-            updateMetaLabel.stringValue = "当前 v\(ver)"
+            updateStatusLabel.textColor = Design.secondary
+            updateStatusLabel.stringValue = "正在检查最新版本…"
+            updateMetaLabel.stringValue = ""
+            updateMetaLabel.isHidden = true
             checkUpdateBtn.isHidden = false
             checkUpdateBtn.setBusy(true, available: true)
             installNowBtn.isHidden = true
             cancelDownloadBtn.isHidden = true
             releaseNotesBtn.isHidden = true
         case .upToDate:
+            statusLine.isHidden = false
             updateStatusIcon.image = NSImage(systemSymbolName: "checkmark.seal.fill", accessibilityDescription: nil)
             updateStatusIcon.contentTintColor = .systemGreen
-            updateStatusLabel.stringValue = "GravityBox v\(ver) 已是最新版本"
-            updateMetaLabel.stringValue = "官方发布一致"
+            updateStatusLabel.textColor = Design.secondary
+            updateStatusLabel.stringValue = "已是最新版本"
+            updateMetaLabel.stringValue = ""
+            updateMetaLabel.isHidden = true
             checkUpdateBtn.isHidden = false
             checkUpdateBtn.setBusy(false, available: true)
             installNowBtn.isHidden = true
             cancelDownloadBtn.isHidden = true
             releaseNotesBtn.isHidden = true
         case .updateAvailable(let release):
+            statusLine.isHidden = false
             updateStatusIcon.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: nil)
             updateStatusIcon.contentTintColor = Design.blue
-            updateStatusLabel.stringValue = "发现新版本 \(release.tagName)，可立即升级"
+            updateStatusLabel.textColor = .labelColor
+            updateStatusLabel.stringValue = "发现新版本 \(release.tagName)"
             updateMetaLabel.stringValue = release.publishedDate.isEmpty ? "" : "发布于 \(release.publishedDate)"
+            updateMetaLabel.isHidden = updateMetaLabel.stringValue.isEmpty
             checkUpdateBtn.isHidden = true
             installNowBtn.title = "立即更新"
             installNowBtn.isEnabled = true
@@ -282,20 +305,26 @@ final class AboutPage: NSObject {
             cancelDownloadBtn.isHidden = true
             releaseNotesBtn.isHidden = false
         case .downloading(let release):
+            statusLine.isHidden = false
             updateStatusIcon.image = NSImage(systemSymbolName: "arrow.down.circle.fill", accessibilityDescription: nil)
             updateStatusIcon.contentTintColor = Design.blue
-            updateStatusLabel.stringValue = "正在后台下载 \(release.tagName) 更新包并校验 SHA-256…"
+            updateStatusLabel.textColor = .labelColor
+            updateStatusLabel.stringValue = "正在下载 \(release.tagName) 更新包…"
             updateMetaLabel.stringValue = "下载中"
+            updateMetaLabel.isHidden = false
             checkUpdateBtn.isHidden = true
             installNowBtn.isHidden = true
             cancelDownloadBtn.isEnabled = true
             cancelDownloadBtn.isHidden = false
             releaseNotesBtn.isHidden = false
         case .readyToInstall(let release, _):
+            statusLine.isHidden = false
             updateStatusIcon.image = NSImage(systemSymbolName: "checkmark.shield.fill", accessibilityDescription: nil)
             updateStatusIcon.contentTintColor = .systemGreen
-            updateStatusLabel.stringValue = "\(release.tagName) 更新包已就绪并校验通过，可立即安装"
+            updateStatusLabel.textColor = .labelColor
+            updateStatusLabel.stringValue = "\(release.tagName) 更新包已就绪"
             updateMetaLabel.stringValue = "已校验"
+            updateMetaLabel.isHidden = false
             checkUpdateBtn.isHidden = true
             installNowBtn.title = "立即更新"
             installNowBtn.isEnabled = true
@@ -303,10 +332,13 @@ final class AboutPage: NSObject {
             cancelDownloadBtn.isHidden = true
             releaseNotesBtn.isHidden = false
         case .installing(let release):
+            statusLine.isHidden = false
             updateStatusIcon.image = NSImage(systemSymbolName: "gearshape.2.fill", accessibilityDescription: nil)
             updateStatusIcon.contentTintColor = Design.blue
-            updateStatusLabel.stringValue = "正在准备重启并安装 \(release.tagName)…"
+            updateStatusLabel.textColor = .labelColor
+            updateStatusLabel.stringValue = "正在准备安装 \(release.tagName)…"
             updateMetaLabel.stringValue = "安装中"
+            updateMetaLabel.isHidden = false
             checkUpdateBtn.isHidden = true
             installNowBtn.title = "正在安装…"
             installNowBtn.isEnabled = false
@@ -314,19 +346,23 @@ final class AboutPage: NSObject {
             cancelDownloadBtn.isHidden = true
             releaseNotesBtn.isHidden = false
         case .failed(let message):
+            statusLine.isHidden = false
             updateStatusIcon.image = NSImage(systemSymbolName: "exclamationmark.triangle.fill", accessibilityDescription: nil)
             updateStatusIcon.contentTintColor = accessibleWarningColor()
+            updateStatusLabel.textColor = .labelColor
             updateStatusLabel.stringValue = "检查更新未完成：\(message)"
             updateMetaLabel.stringValue = "可重试"
+            updateMetaLabel.isHidden = false
             checkUpdateBtn.isHidden = false
             checkUpdateBtn.setBusy(false, available: true)
             installNowBtn.isHidden = true
             cancelDownloadBtn.isHidden = true
-            releaseNotesBtn.isHidden = false
+            releaseNotesBtn.isHidden = true
         }
     }
 
     func update() {
+        refreshSpecs()
         refreshUpdateState()
     }
 
@@ -339,7 +375,6 @@ final class AboutPage: NSObject {
             checkForUpdates()
             return
         }
-        app.showUpdateSheet()
         app.updateManager.installRelease(release)
     }
 
@@ -347,16 +382,11 @@ final class AboutPage: NSObject {
         app.updateManager.cancelDownload()
     }
 
-    @objc func openUpdateSheet() {
-        app.showUpdateSheet()
-    }
-
     @objc func toggleAutoUpdate() {
         let enabled = autoUpdateSwitch.state == .on
         app.configuration.value.autoUpdateEnabled = enabled
         try? app.configuration.save()
         app.configureAutoUpdateTimer()
-        app.updateSheet?.autoUpdateSwitch.state = enabled ? .on : .off
     }
 
     @objc func revealDataFolder() {

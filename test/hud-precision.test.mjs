@@ -6,6 +6,7 @@ import path from 'node:path';
 import {
   buildConversationHudMetrics,
   computeTps,
+  formatHudUsd,
   formatTurnDurationCard,
   formatTurnDurationCompact,
   parseLatestGenMetadataBlob,
@@ -747,4 +748,446 @@ test('主对话模型停止时即使子智能体仍在运行，activityPhase 也
     ],
   });
   assert.equal(foregroundExecuting.activityPhase, 'executing');
+});
+
+test('latestStepOutputTps 真实记录最近一个完结前台模型步速度，不被短工具步均值与子智能体步骤覆盖', () => {
+  const shortSteps = Array.from({ length: 6 }, (_, i) =>
+    step({
+      idx: i * 2 + 1,
+      stepType: 15,
+      status: 3,
+      startTimeSeconds: 100 + i * 4,
+      endTimeSeconds: 100 + i * 4 + 3.4,
+      outputTokens: 150,
+      generation: { timeToFirstTokenSeconds: 3.2, streamingDurationSeconds: 0.2 },
+    })
+  );
+  const longFinalStep = step({
+    idx: 16,
+    stepType: 15,
+    status: 3,
+    startTimeSeconds: 200,
+    endTimeSeconds: 224.12,
+    outputTokens: 4324,
+    generation: { timeToFirstTokenSeconds: 0.12, streamingDurationSeconds: 24.0 },
+  });
+  const pendingNextStep = step({
+    idx: 17,
+    stepType: 15,
+    status: 2,
+    startTimeSeconds: 225,
+    endTimeSeconds: null,
+    hasUsage: false,
+    outputTokens: 0,
+  });
+  const subagentWorkerStep = step({
+    idx: 18,
+    stepType: 15,
+    status: 3,
+    isSubagentStep: true,
+    startTimeSeconds: 226,
+    endTimeSeconds: 236,
+    outputTokens: 100,
+    generation: { timeToFirstTokenSeconds: 5, streamingDurationSeconds: 5 },
+  });
+
+  const fgSteps = [step({ idx: 0, stepType: 14 }), ...shortSteps, longFinalStep, pendingNextStep];
+  const res = buildConversationHudMetrics({
+    conversationId: 'latest-step-tps-isolated',
+    isStreaming: true,
+    activityPhase: 'generating',
+    contextSteps: fgSteps,
+    steps: [...fgSteps, subagentWorkerStep],
+  });
+
+  // 全会话累计均速被前 6 步与子智能体摊薄，但 latestStepOutputTps 忠实锁定前台最近完结的第 16 步 (4324 / 24.12 ≈ 179.27 tok/s)
+  assert.ok(res.session.outputTps < 120, `均速应低于长步单步速度，实际 ${res.session.outputTps}`);
+  assert.ok(
+    Math.abs((res.session.latestStepOutputTps || 0) - 4324 / 24.12) < 0.01,
+    `latestStepOutputTps 应精确等于 4324 / 24.12，实际 ${res.session.latestStepOutputTps}`
+  );
+  assert.equal(res.session.latestStepOutputTpsFormatted, '179.27 tok/s');
+
+  // 无有效计时步骤时，不应编造 latestStepOutputTps
+  const untimed = buildConversationHudMetrics({
+    conversationId: 'latest-step-tps-empty',
+    isStreaming: true,
+    steps: [step({ idx: 0, stepType: 14 }), pendingNextStep],
+  });
+  assert.equal(untimed.session.latestStepOutputTps, undefined);
+  assert.equal(untimed.session.latestStepOutputTpsFormatted, undefined);
+  assert.equal(untimed.session.currentTurnOutputTps, 0);
+  assert.equal(untimed.session.currentTurnOutputTpsFormatted, '计算中...');
+  assert.equal(untimed.session.currentTurnTimedSamples, 0);
+});
+
+test('currentTurnOutputTps 仅统计本轮已完结前台模型步并隔离历史轮次与子智能体步骤', () => {
+  const prevTurnStep = step({
+    idx: 1,
+    stepType: 15,
+    status: 3,
+    startTimeSeconds: 10,
+    endTimeSeconds: 30,
+    outputTokens: 600,
+    generation: { timeToFirstTokenSeconds: 1, streamingDurationSeconds: 19 },
+  });
+  const turnStep1 = step({
+    idx: 3,
+    stepType: 15,
+    status: 3,
+    startTimeSeconds: 50,
+    endTimeSeconds: 55,
+    outputTokens: 500,
+    generation: { timeToFirstTokenSeconds: 1, streamingDurationSeconds: 4 },
+  });
+  const turnStep2 = step({
+    idx: 4,
+    stepType: 15,
+    status: 3,
+    startTimeSeconds: 60,
+    endTimeSeconds: 70,
+    outputTokens: 1500,
+    generation: { timeToFirstTokenSeconds: 2, streamingDurationSeconds: 8 },
+  });
+  const subagentStep = step({
+    idx: 5,
+    stepType: 15,
+    status: 3,
+    isSubagentStep: true,
+    startTimeSeconds: 72,
+    endTimeSeconds: 92,
+    outputTokens: 200,
+    generation: { timeToFirstTokenSeconds: 10, streamingDurationSeconds: 10 },
+  });
+
+  const fgSteps = [
+    step({ idx: 0, stepType: 14 }),
+    prevTurnStep,
+    step({ idx: 2, stepType: 14 }),
+    turnStep1,
+    turnStep2,
+  ];
+  const res = buildConversationHudMetrics({
+    conversationId: 'current-turn-tps-isolated',
+    isStreaming: false,
+    contextSteps: fgSteps,
+    steps: [...fgSteps, subagentStep],
+  });
+
+  // 本轮仅汇总 turnStep1 (500 / 5s) 与 turnStep2 (1500 / 10s) => 2000 / 15 ≈ 133.33 tok/s
+  assert.equal(res.session.currentTurnTimedSamples, 2);
+  assert.ok(
+    Math.abs((res.session.currentTurnOutputTps || 0) - 2000 / 15) < 0.01,
+    `currentTurnOutputTps 应为 2000 / 15，实际 ${res.session.currentTurnOutputTps}`
+  );
+  assert.equal(res.session.currentTurnOutputTpsFormatted, '133.33 tok/s');
+  assert.equal(res.session.latestStepOutputTpsFormatted, '150.00 tok/s');
+  assert.ok((res.session.outputTps || 0) < 100, `全会话均速受上一轮与子智能体拉低，实际 ${res.session.outputTps}`);
+});
+
+test('并行工具与并行子智能体时长按物理区间去重，且不影响 TPS 累计口径', () => {
+  const baseSec = Date.now() / 1000 - 10;
+  const parallelTools = Array.from({ length: 6 }, (_, i) =>
+    step({
+      idx: 3 + i,
+      stepType: 21,
+      status: 2,
+      startTimeSeconds: baseSec + 5,
+      endTimeSeconds: baseSec + 5.002,
+      toolCallName: 'edit_file',
+      hasUsage: false,
+      rawInputTokens: 0,
+      cachedReadTokens: 0,
+      cacheWriteTokens: 0,
+      outputTokens: 0,
+      reasoningTokens: 0,
+      candidateTokens: 0,
+    })
+  );
+  const modelStep = step({
+    idx: 2,
+    stepType: 15,
+    status: 3,
+    startTimeSeconds: baseSec,
+    endTimeSeconds: baseSec + 5,
+    outputTokens: 500,
+    generation: { timeToFirstTokenSeconds: 1, streamingDurationSeconds: 4 },
+  });
+  const baseSteps = [step({ idx: 1, stepType: 14, startTimeSeconds: baseSec, endTimeSeconds: baseSec }), modelStep];
+
+  const running = metrics([...baseSteps, ...parallelTools], {
+    isStreaming: true,
+    allowDbActiveStepInference: true,
+  });
+  assert.equal(running.session.activeToolStepCount, 6);
+  assert.ok(
+    running.session.inFlightToolDurationSeconds >= 4.9 && running.session.inFlightToolDurationSeconds < 6,
+    `6 个并行活跃工具仅计 ~5s，实际 ${running.session.inFlightToolDurationSeconds}`
+  );
+  assert.ok(
+    running.session.currentTurnToolDurationSeconds >= 4.9 && running.session.currentTurnToolDurationSeconds < 6,
+    `本轮并行工具用时应 ~5s，实际 ${running.session.currentTurnToolDurationSeconds}`
+  );
+  assert.ok(
+    running.session.currentTurnDurationSeconds >= 9.9 && running.session.currentTurnDurationSeconds < 11,
+    `本轮总用时应为 5s(模型)+5s(并行工具)=~10s，实际 ${running.session.currentTurnDurationSeconds}`
+  );
+  assert.equal(running.session.outputTps, 100);
+
+  const finishedTools = parallelTools.map((tool) => ({
+    ...tool,
+    status: 3,
+    endTimeSeconds: baseSec + 10,
+  }));
+  const completed = metrics([...baseSteps, ...finishedTools], {
+    isStreaming: false,
+  });
+  assert.equal(completed.session.toolDurationSeconds, 5);
+  assert.equal(completed.session.inFlightToolDurationSeconds, 0);
+  assert.equal(completed.session.currentTurnToolDurationSeconds, 5);
+  assert.equal(completed.session.currentTurnDurationSeconds, 10);
+  assert.equal(completed.session.outputTps, 100);
+
+  // 并行子智能体：一个完成 [childBase, childBase+10]，一个活跃 [childBase, now]（elapsed ~12s） => inFlight 仅计增量 ~2s
+  const childBase = Date.now() / 1000 - 12;
+  const mainTurn = [
+    step({ idx: 1, stepType: 14, startTimeSeconds: childBase, endTimeSeconds: childBase }),
+    step({ idx: 2, stepType: 127, status: 2, startTimeSeconds: childBase, endTimeSeconds: childBase + 0.01, hasUsage: false }),
+  ];
+  const childDone = step({
+    idx: 1,
+    stepType: 15,
+    status: 3,
+    startTimeSeconds: childBase,
+    endTimeSeconds: childBase + 10,
+    outputTokens: 200,
+  });
+  const childActive = step({
+    idx: 1,
+    stepType: 15,
+    status: 8,
+    startTimeSeconds: childBase,
+    endTimeSeconds: null,
+    outputTokens: 0,
+  });
+  const childParallel = metrics([...mainTurn, childDone, childActive], {
+    contextSteps: mainTurn,
+    isStreaming: true,
+    isSubagentRunning: true,
+    allowDbActiveStepInference: true,
+  });
+  assert.equal(childParallel.session.modelDurationSeconds, 10);
+  assert.ok(
+    childParallel.session.inFlightModelDurationSeconds >= 1.9 && childParallel.session.inFlightModelDurationSeconds < 3,
+    `并行子智能体重叠部分不得重复计入 inFlight，实际 ${childParallel.session.inFlightModelDurationSeconds}`
+  );
+});
+
+test('历史轮次残留未闭合步与 status=6/7 终止态步不污染 activeCount 与 inFlight', () => {
+  const turn2Base = Date.now() / 1000 - 10;
+  const result = metrics(
+    [
+      step({ idx: 1, stepType: 14, startTimeSeconds: 10, endTimeSeconds: 10 }),
+      step({ idx: 2, stepType: 132, status: 2, startTimeSeconds: 10, endTimeSeconds: null, hasUsage: false }),
+      step({ idx: 3, stepType: 132, status: 6, startTimeSeconds: 15, endTimeSeconds: null, hasUsage: false }),
+      step({ idx: 10, stepType: 14, startTimeSeconds: turn2Base, endTimeSeconds: turn2Base }),
+      step({ idx: 11, stepType: 15, status: 3, startTimeSeconds: turn2Base, endTimeSeconds: turn2Base + 5, outputTokens: 100 }),
+      step({ idx: 12, stepType: 132, status: 7, startTimeSeconds: turn2Base + 5, endTimeSeconds: null, hasUsage: false }),
+    ],
+    { isStreaming: true, allowDbActiveStepInference: true }
+  );
+  assert.equal(result.session.activeModelStepCount, 0);
+  assert.equal(result.session.activeToolStepCount, 0);
+  assert.equal(result.session.inFlightModelDurationSeconds, 0);
+  assert.equal(result.session.inFlightToolDurationSeconds, 0);
+  assert.equal(result.session.currentTurnDurationSeconds, 5);
+});
+
+test('latestStepTtft 仅取最近已完结前台模型步并隔离历史步与子智能体', () => {
+  const olderFg = step({
+    idx: 1,
+    stepType: 15,
+    status: 3,
+    startTimeSeconds: 10,
+    endTimeSeconds: 20,
+    generation: { timeToFirstTokenSeconds: 4.5, streamingDurationSeconds: 5.5 },
+  });
+  const latestFg = step({
+    idx: 3,
+    stepType: 15,
+    status: 3,
+    startTimeSeconds: 30,
+    endTimeSeconds: 38,
+    generation: { timeToFirstTokenSeconds: 1.244, streamingDurationSeconds: 6.756 },
+  });
+  const subagentLater = step({
+    idx: 4,
+    stepType: 15,
+    status: 3,
+    isSubagentStep: true,
+    startTimeSeconds: 40,
+    endTimeSeconds: 50,
+    generation: { timeToFirstTokenSeconds: 9.8, streamingDurationSeconds: 0.2 },
+  });
+  const pendingFg = step({
+    idx: 5,
+    stepType: 15,
+    status: 2,
+    startTimeSeconds: 52,
+    endTimeSeconds: null,
+    generation: { timeToFirstTokenSeconds: 0.2, streamingDurationSeconds: 0 },
+  });
+
+  const fgSteps = [step({ idx: 0, stepType: 14 }), olderFg, step({ idx: 2, stepType: 14 }), latestFg, pendingFg];
+  const res = buildConversationHudMetrics({
+    conversationId: 'latest-step-ttft',
+    isStreaming: true,
+    contextSteps: fgSteps,
+    steps: [...fgSteps, subagentLater],
+  });
+
+  closeTo(res.session.latestStepTtftSeconds, 1.244, 'latestStepTtftSeconds');
+  assert.equal(res.session.latestStepTtftFormatted, '1.24 秒');
+  assert.equal(res.session.latestStepTtftFormattedEn, '1.24s');
+
+  const emptyTtft = buildConversationHudMetrics({
+    conversationId: 'latest-step-ttft-empty',
+    isStreaming: true,
+    steps: [step({ idx: 0, stepType: 14 }), pendingFg],
+  });
+  assert.equal(emptyTtft.session.latestStepTtftSeconds, undefined);
+  assert.equal(emptyTtft.session.latestStepTtftFormatted, undefined);
+  assert.equal(emptyTtft.session.latestStepTtftFormattedEn, undefined);
+});
+
+test('formatHudUsd 与 tokens 估算费用/缓存节省严守零编造规则', () => {
+  assert.equal(formatHudUsd(0), '~$0.00');
+  assert.equal(formatHudUsd(0.00426), '~$0.0043');
+  assert.equal(formatHudUsd(0.00999), '~$0.0100');
+  assert.equal(formatHudUsd(0.184), '~$0.18');
+  assert.equal(formatHudUsd(12.345), '~$12.35');
+
+  const pricedSingle = buildConversationHudMetrics({
+    conversationId: 'cost-single',
+    modelId: 'gemini-3.8-flash',
+    steps: [
+      step({
+        idx: 1,
+        modelName: 'gemini-3.8-flash',
+        rawInputTokens: 100000,
+        cachedReadTokens: 800000,
+        cacheWriteTokens: 0,
+        outputTokens: 20000,
+      }),
+    ],
+  });
+  assert.equal(pricedSingle.tokens.pricedStepCount, 1);
+  assert.equal(Boolean(pricedSingle.tokens.hasUnpricedSteps), false);
+  assert.ok(Number.isFinite(pricedSingle.tokens.estimatedCostUsd) && pricedSingle.tokens.estimatedCostUsd > 0);
+  assert.ok(Number.isFinite(pricedSingle.tokens.cacheSavedUsd) && pricedSingle.tokens.cacheSavedUsd > 0);
+  assert.match(pricedSingle.tokens.estimatedCostFormatted, /^~\$\d+/);
+  assert.match(pricedSingle.tokens.cacheSavedFormatted, /^~\$\d+/);
+
+  // 多模型 + 含 cacheWrite 模型（claude-sonnet-4-6 支持 cacheWrite 定价）
+  const multiModel = buildConversationHudMetrics({
+    conversationId: 'cost-multi-model',
+    modelId: 'gemini-3.8-flash',
+    steps: [
+      step({
+        idx: 1,
+        modelName: 'gemini-3.8-flash',
+        rawInputTokens: 100000,
+        cachedReadTokens: 800000,
+        cacheWriteTokens: 0,
+        outputTokens: 20000,
+      }),
+      step({
+        idx: 2,
+        modelName: 'claude-sonnet-4-6',
+        rawInputTokens: 100000,
+        cachedReadTokens: 200000,
+        cacheWriteTokens: 50000,
+        outputTokens: 10000,
+      }),
+    ],
+  });
+  assert.equal(multiModel.tokens.pricedStepCount, 2);
+  assert.equal(Boolean(multiModel.tokens.hasUnpricedSteps), false);
+  assert.ok(multiModel.tokens.estimatedCostUsd > pricedSingle.tokens.estimatedCostUsd);
+  assert.ok(multiModel.tokens.cacheSavedUsd > pricedSingle.tokens.cacheSavedUsd);
+
+  // 加倍用量应使估算费用与缓存节省严格线性翻倍
+  const pricedDoubled = buildConversationHudMetrics({
+    conversationId: 'cost-double',
+    modelId: 'gemini-3.8-flash',
+    steps: [
+      step({
+        idx: 1,
+        modelName: 'gemini-3.8-flash',
+        rawInputTokens: 200000,
+        cachedReadTokens: 1600000,
+        cacheWriteTokens: 0,
+        outputTokens: 40000,
+      }),
+    ],
+  });
+  closeTo(pricedDoubled.tokens.estimatedCostUsd, pricedSingle.tokens.estimatedCostUsd * 2, 'cost linearity');
+  closeTo(pricedDoubled.tokens.cacheSavedUsd, pricedSingle.tokens.cacheSavedUsd * 2, 'cacheSaved linearity');
+
+  // 混合已定价与未知模型（或无 cacheWrite 定价却写入缓存）步：标记 hasUnpricedSteps=true 且只汇总已匹配步
+  const mixed = buildConversationHudMetrics({
+    conversationId: 'cost-mixed',
+    modelId: 'gemini-3.8-flash',
+    steps: [
+      step({
+        idx: 1,
+        modelName: 'gemini-3.8-flash',
+        rawInputTokens: 100000,
+        cachedReadTokens: 800000,
+        cacheWriteTokens: 0,
+        outputTokens: 20000,
+      }),
+      step({
+        idx: 2,
+        modelName: 'gemini-3.8-flash',
+        rawInputTokens: 100000,
+        cachedReadTokens: 800000,
+        cacheWriteTokens: 50000,
+        outputTokens: 20000,
+      }),
+      step({
+        idx: 3,
+        modelName: 'unknown-unpriced-model-xyz',
+        rawInputTokens: 500000,
+        cachedReadTokens: 500000,
+        cacheWriteTokens: 0,
+        outputTokens: 50000,
+      }),
+    ],
+  });
+  assert.equal(mixed.tokens.pricedStepCount, 1);
+  assert.equal(mixed.tokens.hasUnpricedSteps, true);
+  closeTo(mixed.tokens.estimatedCostUsd, pricedSingle.tokens.estimatedCostUsd, 'mixed ignores unpriced steps');
+
+  // 完全无匹配定价或空费率表：严禁编造费率，费用与节省保留 undefined
+  const unpriced = buildConversationHudMetrics({
+    conversationId: 'cost-unpriced',
+    modelId: 'unknown-unpriced-model-xyz',
+    pricingTable: {},
+    steps: [
+      step({
+        idx: 1,
+        modelName: 'unknown-unpriced-model-xyz',
+        rawInputTokens: 100000,
+        cachedReadTokens: 800000,
+        cacheWriteTokens: 0,
+        outputTokens: 20000,
+      }),
+    ],
+  });
+  assert.equal(unpriced.tokens.pricedStepCount, undefined);
+  assert.equal(unpriced.tokens.estimatedCostUsd, undefined);
+  assert.equal(unpriced.tokens.estimatedCostFormatted, undefined);
+  assert.equal(unpriced.tokens.cacheSavedUsd, undefined);
+  assert.equal(unpriced.tokens.cacheSavedFormatted, undefined);
 });

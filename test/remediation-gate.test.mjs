@@ -150,10 +150,17 @@ test('P1-Batch2: 归档容量裁剪、只读 StateDb、四档套餐权重与基�
 
  // 3) ledger-reviews 未应用的预览自动裁剪上限 (<=5)，且池化 UsageLedger Worker 连续请求稳定
  const ledger=new UsageLedger(dir);
- await ledger.save([{event_key:'ev-1',source_id:'s1',model:'gemini-3.8-flash',input_tokens:100,output_tokens:50,cached_tokens:0,total_tokens:150,timestamp_seconds:Math.floor(Date.now()/1000)}]);
+ const nowTs=Math.floor(Date.now()/1000);
+ await ledger.save([
+  {event_key:'ev-1',source_id:'s1',model:'gemini-3.8-flash',input_tokens:100,output_tokens:50,cached_tokens:0,total_tokens:150,timestamp_seconds:nowTs},
+  {event_key:'ev-placeholder',source_id:'s2',model:'MODEL_PLACEHOLDER_M669',input_tokens:1000000,output_tokens:0,cached_tokens:0,total_tokens:1000000,timestamp_seconds:nowTs},
+ ]);
+ let placeholderPreview;
  for(let i=0;i<7;i++){
-  await ledger.revalue({action:'preview',prices:{'gemini-3.8-flash':{input:0.5,output:1.5,cached:0.05}},accounts:[]});
+  placeholderPreview=await ledger.revalue({action:'preview',prices:{'gemini-3.8-flash':{input:0.5,output:1.5,cached:0.05}},accounts:[]});
  }
+ assert.equal(placeholderPreview.unverifiableCount,0,'MODEL_PLACEHOLDER_M669 应在 revalueLedger 中归一化至 gemini-3.8-flash');
+ assert.ok(placeholderPreview.after>=0.5,'占位符事件重估金额应命中定价');
  const reviewReceipts=(await readdir(join(dir,'ledger-reviews'))).filter(f=>/^[0-9a-f-]{36}\.json$/i.test(f));
  assert.ok(reviewReceipts.length<=5,`ledger-reviews 未应用预览应裁剪至 <=5 份，实际 ${reviewReceipts.length}`);
 

@@ -49,6 +49,7 @@ export class CdpHudBridge implements ICdpHudBridge {
     engine?: ConversationMetricsEngine;
     geminiDir?: string;
     conversationsDir?: string;
+    stateDir?: string;
     pollIntervalMs?: number;
   }) {
     this.engine =
@@ -56,6 +57,7 @@ export class CdpHudBridge implements ICdpHudBridge {
       new ConversationMetricsEngine({
         geminiDir: options?.geminiDir,
         conversationsDir: options?.conversationsDir,
+        stateDir: options?.stateDir,
       });
     const interval = options?.pollIntervalMs ?? 250;
     this.basePollIntervalMs = interval;

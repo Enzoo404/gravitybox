@@ -14,7 +14,8 @@ final class PreferencesController: NSObject {
     let login = DesignSwitch()
     let syncLifecycleSwitch = DesignSwitch()
     let storageBadge = pillBadge("", color: Design.blue)
-    let storageSubtitleLabel = text("清理无损缓存、孤儿残留与历史运行日志，核心账号与主对话受保护", size: 11, color: Design.secondary, wrap: true)
+    static let defaultStorageSubtitle = "清理无损缓存与历史日志，保留核心数据"
+    let storageSubtitleLabel = text(PreferencesController.defaultStorageSubtitle, size: 11, color: Design.secondary, wrap: true)
     var manageCacheBtn: NSButton!
     var pricingSheet: PricingSyncSheetController?
     private var lastStorageScanAt: Date = .distantPast
@@ -58,16 +59,16 @@ final class PreferencesController: NSObject {
         pricingControlGroup.alignment = .centerY
 
         let enhanceGroup = vertical([
-            settingRow(icon: "character.book.closed", tint: .systemGreen, title: "界面汉化", subtitle: "基于外置词典实时汉化 Antigravity 界面，不改动官方应用包", control: translationSwitch),
+            settingRow(icon: "character.book.closed", tint: .systemGreen, title: "界面汉化", subtitle: "实时汉化 Antigravity，不改动官方应用", control: translationSwitch),
             divider(),
-            settingRow(icon: "chart.bar.xaxis", tint: .systemIndigo, title: "对话状态栏", subtitle: "可独立开启；关闭汉化时以英文显示轮次、Token 与上下文", control: hudSwitch)
+            settingRow(icon: "chart.bar.xaxis", tint: .systemIndigo, title: "对话状态栏", subtitle: "在 Antigravity 输入框下方显示轮次、Token 与上下文", control: hudSwitch)
         ], spacing: 12)
         for child in enhanceGroup.arrangedSubviews { fillWidth(child, in: enhanceGroup) }
 
         let dataSyncGroup = vertical([
-            settingRow(icon: "arrow.clockwise", tint: Design.blue, title: "配额刷新间隔", subtitle: "定时在后台同步已保存账号的最新剩余配额", control: refresh),
+            settingRow(icon: "arrow.clockwise", tint: Design.blue, title: "配额刷新间隔", subtitle: "定时更新已保存账号的剩余配额", control: refresh),
             divider(),
-            settingRow(icon: "dollarsign.circle", tint: Design.blue, title: "自动更新价格基准", subtitle: "同步 GravityBox 维护的公开价格表，保留官方来源与计价条件", control: pricingControlGroup)
+            settingRow(icon: "dollarsign.circle", tint: Design.blue, title: "自动更新价格基准", subtitle: "自动同步公开模型费率，每 24 小时检查一次", control: pricingControlGroup)
         ], spacing: 12)
         for child in dataSyncGroup.arrangedSubviews { fillWidth(child, in: dataSyncGroup) }
 
@@ -90,9 +91,9 @@ final class PreferencesController: NSObject {
             captionsStack.addArrangedSubview(storageSubtitleLabel)
         }
         let systemAndStorageGroup = vertical([
-            settingRow(icon: "power", tint: .systemGray, title: "登录时启动", subtitle: "登录 macOS 时自动在菜单栏启动 GravityBox", control: login),
+            settingRow(icon: "power", tint: .systemGray, title: "登录时启动", subtitle: "登录 macOS 时自动在菜单栏驻留", control: login),
             divider(),
-            settingRow(icon: "link", tint: .systemTeal, title: "跟随 Antigravity 启停", subtitle: "打开 Antigravity 时自动在菜单栏启动，关闭时一并退出", control: syncLifecycleSwitch),
+            settingRow(icon: "link", tint: .systemTeal, title: "跟随 Antigravity 启停", subtitle: "随 Antigravity 自动启动并同步退出", control: syncLifecycleSwitch),
             divider(),
             storageRow
         ], spacing: 12)
@@ -158,9 +159,9 @@ final class PreferencesController: NSObject {
         if safeBytes > 0 && statefulBytes > 0 {
             let safeStr = ByteCountFormatter.string(fromByteCount: safeBytes, countStyle: .file)
             let statefulStr = ByteCountFormatter.string(fromByteCount: statefulBytes, countStyle: .file)
-            storageSubtitleLabel.stringValue = "推荐清理 \(safeStr) 无损缓存，另有 \(statefulStr) 历史数据可按需瘦身"
+            storageSubtitleLabel.stringValue = "可清理 \(safeStr) 无损缓存，另有 \(statefulStr) 历史数据可瘦身"
         } else {
-            storageSubtitleLabel.stringValue = "清理无损缓存、孤儿残留与历史运行日志，核心账号与主对话受保护"
+            storageSubtitleLabel.stringValue = Self.defaultStorageSubtitle
         }
         storageSubtitleLabel.toolTip = nil
     }

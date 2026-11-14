@@ -14,7 +14,7 @@ GravityBox 的基础词典与版本分层词典结构（`dict/`，按功能与�
 
 ## 3. 运行环境许可 (Runtime Environment)
 
-完整安装包内置了构建时复制的 Apple Silicon / Universal Node 22 运行环境，随包分发其官方 LICENSE（包含 Node.js、V8、libuv 等第三方组件许可，位于安装包内 `Contents/Resources/runtime/LICENSE` 与本仓库 `licenses/NODE-LICENSE`）。Node 来源：[Node.js 官方网站](https://nodejs.org/)。
+完整安装包内置了构建时复制的 Apple Silicon (`arm64`) Node 22 运行环境，随包分发其官方 LICENSE（包含 Node.js、V8、libuv 等第三方组件许可，位于安装包内 `Contents/Resources/runtime/LICENSE` 与本仓库 `licenses/NODE-LICENSE`）。Node 来源：[Node.js 官方网站](https://nodejs.org/)。
 
 ## 4. 商标与品牌免责声明 (Trademark Disclaimer)
 

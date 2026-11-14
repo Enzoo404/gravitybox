@@ -87,19 +87,13 @@ final class AddAccountSheet: NSObject {
         feedback = horizontal([spinner, status], spacing: 8)
         feedback.isHidden = true
         let headerBadge = iconBadge("person.badge.plus", tint: Design.blue, size: 32)
-        let headerSub = text("支持直接导入当前登录的 Antigravity 账号，或通过浏览器添加备用账号", size: 11, color: Design.secondary, wrap: true)
-        let headerTitle = vertical([
-            text("添加账号", size: 16, weight: .semibold, color: .labelColor),
-            headerSub
-        ], spacing: 2)
-        headerTitle.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        fillWidth(headerSub, in: headerTitle)
+        let headerTitle = text("添加账号", size: 16, weight: .semibold, color: .labelColor)
         let headerRow = horizontal([headerBadge, headerTitle, flexibleSpace()], spacing: 10)
         headerRow.alignment = .centerY
         let root = vertical([
             headerRow,
-            choice("person.crop.rectangle", "保存当前账号", "读取本机已登录的账号", currentButton),
-            choice("globe", "Google 授权登录", "在浏览器中完成授权，凭据仅保存在本机", googleButton),
+            choice("person.crop.rectangle", "保存当前账号", "导入当前 Antigravity 登录账号", currentButton),
+            choice("globe", "Google 授权登录", "通过浏览器授权，凭据仅存本机", googleButton),
             feedback,
             horizontal([flexibleSpace(), cancelButton])
         ], spacing: 12)

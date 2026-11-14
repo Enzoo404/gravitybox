@@ -834,6 +834,14 @@ ${engine}`,auth.executionContextId);assert.equal(await cdp.evaluate('!!globalThi
           averageTtftFormattedEn: '19.7s',
           outputTps: 90.126,
           outputTpsFormatted: '90.13 tok/s',
+          latestStepOutputTps: 107.142,
+          latestStepOutputTpsFormatted: '107.14 tok/s',
+          latestStepTtftSeconds: 2.345,
+          latestStepTtftFormatted: '2.35 秒',
+          latestStepTtftFormattedEn: '2.35s',
+          currentTurnOutputTps: 98.456,
+          currentTurnOutputTpsFormatted: '98.46 tok/s',
+          currentTurnTimedSamples: 3,
           currentTurnDurationSeconds: 18.4,
           currentTurnDurationFormatted: '18秒',
           currentTurnDurationFormattedEn: '18s',
@@ -853,7 +861,11 @@ ${engine}`,auth.executionContextId);assert.equal(await cdp.evaluate('!!globalThi
           cachedReadTokens: 56526799,
           cachedReadFormatted: '56,526,799 tok',
           outputTokens: 105493,
-          outputFormatted: '105,493 tok'
+          outputFormatted: '105,493 tok',
+          estimatedCostUsd: 0.184,
+          estimatedCostFormatted: '~$0.18',
+          cacheSavedUsd: 1.024,
+          cacheSavedFormatted: '~$1.02'
         },
         context: {
           modelId: 'gemini-4-argon',
@@ -899,6 +911,10 @@ ${engine}`,auth.executionContextId);assert.equal(await cdp.evaluate('!!globalThi
       const sr = document.querySelector('#__gravitybox_hud_host__').shadowRoot;
       return {
         speed: sr.querySelector('#val-tps').textContent,
+        latestTtft: sr.querySelector('#val-ttft-latest').textContent,
+        latestSpeed: sr.querySelector('#val-tps-latest').textContent,
+        hasDashedDivider: Boolean(sr.querySelector('#hud-popover-session .hud-popover-divider-dashed')),
+        hasTokensDashedDivider: Boolean(sr.querySelector('#hud-popover-tokens .hud-popover-divider-dashed')),
         turnDuration: sr.querySelector('#val-turn-dur').textContent,
         duration: sr.querySelector('#val-model-dur').textContent,
         toolDuration: sr.querySelector('#val-tool-dur').textContent,
@@ -907,11 +923,17 @@ ${engine}`,auth.executionContextId);assert.equal(await cdp.evaluate('!!globalThi
         tokensBadge: sr.querySelector('#pop-tokens-badge').textContent,
         cachedRead: sr.querySelector('#val-cached-read').textContent,
         outputTok: sr.querySelector('#val-output-tok').textContent,
+        estCost: sr.querySelector('#val-est-cost').textContent,
+        cacheSaved: sr.querySelector('#val-cache-saved').textContent,
         context: sr.querySelector('#pop-ctx-pct').textContent,
         ctxCapacity: sr.querySelector('#pop-ctx-capacity').textContent,
       };
     })()`);
     assert.equal(precision.speed, '90.13 tok/s');
+    assert.equal(precision.latestTtft, '2.35 秒');
+    assert.equal(precision.latestSpeed, '107.14 tok/s');
+    assert.equal(precision.hasDashedDivider, true);
+    assert.equal(precision.hasTokensDashedDivider, true);
     assert.equal(precision.turnDuration, '18秒');
     assert.equal(precision.duration, '1小时5分59秒');
     assert.equal(precision.toolDuration, '12分31秒');
@@ -920,6 +942,8 @@ ${engine}`,auth.executionContextId);assert.equal(await cdp.evaluate('!!globalThi
     assert.equal(precision.tokensBadge, '58.6M tok');
     assert.equal(precision.cachedRead, '56.5M tok');
     assert.equal(precision.outputTok, '105K tok');
+    assert.equal(precision.estCost, '~$0.18');
+    assert.equal(precision.cacheSaved, '~$1.02');
     assert.equal(precision.context, '64.1%');
     assert.equal(precision.ctxCapacity, '672K / 1.05M');
 

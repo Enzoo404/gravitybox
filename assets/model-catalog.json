@@ -1072,7 +1072,21 @@
       }
     }
   },
-  "aliases": {},
+  "aliases": {
+    "gemini-pro-orchestrator-g1-pro": "gemini-4-argon",
+    "gemini-pro-orchestrator": "gemini-4-argon",
+    "orchestrator (argon)": "gemini-4-argon",
+    "Orchestrator (Argon)": "gemini-4-argon",
+    "orchestrator (carbon)": "gemini-4-carbon",
+    "Orchestrator (Carbon)": "gemini-4-carbon",
+    "gemini-flash-worker-agy": "gemini-3.8-flash",
+    "gemini-flash-worker": "gemini-3.8-flash",
+    "Gemini Flash": "gemini-3.8-flash",
+    "gemini-flash": "gemini-3.8-flash",
+    "MODEL_PLACEHOLDER_M667": "gemini-4-carbon",
+    "MODEL_PLACEHOLDER_M668": "gemini-4-argon",
+    "MODEL_PLACEHOLDER_M669": "gemini-3.8-flash"
+  },
   "feedModels": [
     "gemini-3.8-flash",
     "gemini-4-argon",

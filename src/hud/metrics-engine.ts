@@ -12,6 +12,13 @@ import type {
   ParsedGenMetadata,
 } from './types.js';
 import { resolveModelCapacity } from './model-catalog.js';
+import {
+  DEFAULT_API_PRICES,
+  resolvePricingFromTable,
+  calculateEstimatedUsd,
+  type ApiPricingEntry,
+} from '../pricing.js';
+import { loadRawPricingTable } from '../usage-pricing.js';
 import { runHudDbScanInWorker } from '../sqlite-read.js';
 import type { HudWorkerRawStepRow } from '../sqlite-worker.js';
 import { decodeVarint64, skipProtobufField } from '../protobuf.js';
@@ -701,6 +708,16 @@ export function formatTurnDurationCard(seconds: number, lang: 'zh' | 'en' = 'zh'
   return durationText(seconds, lang);
 }
 
+/**
+ * 格式化 HUD 卡片美元估算金额（>= $0.01 保留 2 位小数；(0, $0.01) 保留 4 位小数避免微额误显 ~$0.00）
+ */
+export function formatHudUsd(usd: number): string {
+  if (!Number.isFinite(usd) || usd < 0) return '—';
+  if (usd === 0) return '~$0.00';
+  if (usd < 0.01) return `~$${usd.toFixed(4)}`;
+  return `~$${usd.toFixed(2)}`;
+}
+
 
 
 export interface ComputeHudMetricsInput {
@@ -722,6 +739,7 @@ export interface ComputeHudMetricsInput {
   allowDbActiveStepInference?: boolean;
   modelId?: string;
   modelCapacity?: number;
+  pricingTable?: Record<string, ApiPricingEntry>;
   genMetadata?: ParsedGenMetadata;
   contextSteps?: ComputeHudMetricsInput['steps'];
   steps: Array<{
@@ -758,6 +776,8 @@ export interface ComputeHudMetricsInput {
 
 const NON_TOOL_STEP_TYPES = new Set([0, 1, 2, 14, 15, 23, 81, 98, 99, 101, 102, 104]);
 
+const TERMINAL_INACTIVE_STEP_STATUSES = new Set([3, 4, 6, 7]);
+
 function validSeconds(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0;
 }
@@ -765,18 +785,87 @@ function validSeconds(value: unknown): value is number {
 function safeTokens(value: number | undefined): number {
   return Number.isSafeInteger(value) && value! >= 0 ? value! : 0;
 }
+
+function isStepCompleted(step: ComputeHudMetricsInput['steps'][number]): boolean {
+  const rawStatus = step.status ?? 3;
+  return (
+    rawStatus === 3 ||
+    (rawStatus === 5 &&
+      (step.generation !== undefined ||
+        step.finishedGeneratingSeconds != null ||
+        step.completedAtSeconds != null ||
+        step.t_end != null))
+  );
+}
+
+function isStepActiveNow(
+  step: ComputeHudMetricsInput['steps'][number],
+  isStreaming: boolean,
+  allowActiveInference: boolean
+): boolean {
+  if (isStepCompleted(step)) return false;
+  const rawStatus = step.status ?? 3;
+  if (TERMINAL_INACTIVE_STEP_STATUSES.has(rawStatus) || rawStatus === 5) return false;
+  if (ACTIVE_STEP_STATUSES.has(rawStatus)) {
+    return allowActiveInference || isStreaming;
+  }
+  const end = step.t_end ?? step.endTimeSeconds;
+  return isStreaming && end == null;
+}
+
+function mergeDurationIntervals(intervals: ReadonlyArray<readonly [number, number]>): number {
+  const normalized: Array<[number, number]> = [];
+  for (const [start, end] of intervals) {
+    if (validSeconds(start) && validSeconds(end) && end > start) {
+      normalized.push([start, end]);
+    }
+  }
+  if (normalized.length === 0) return 0;
+  normalized.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  let total = 0;
+  let curStart = normalized[0]![0];
+  let curEnd = normalized[0]![1];
+  for (let i = 1; i < normalized.length; i++) {
+    const [nextStart, nextEnd] = normalized[i]!;
+    if (nextStart <= curEnd) {
+      if (nextEnd > curEnd) curEnd = nextEnd;
+    } else {
+      total += curEnd - curStart;
+      curStart = nextStart;
+      curEnd = nextEnd;
+    }
+  }
+  total += curEnd - curStart;
+  return total;
+}
+
 export function buildConversationHudMetrics(input: ComputeHudMetricsInput): ConversationHudMetrics {
   const steps = input.steps || [];
   const contextSteps = input.contextSteps ?? steps;
+  const contextStepSet = input.contextSteps ? new Set(contextSteps) : null;
   let modelSteps = 0;
   let toolSteps = 0;
-  let modelDurationSeconds = 0;
-  let toolDurationSeconds = 0;
+  let mainCompletedModelDuration = 0;
+  let unanchoredChildModelDuration = 0;
+  const childCompletedModelIntervals: Array<readonly [number, number]> = [];
+  const completedToolIntervals: Array<readonly [number, number]> = [];
   let timedOutputTokens = 0;
   let timedOutputSeconds = 0;
   let timedOutputCount = 0;
+  let latestForegroundStepTps: { outputTps: number; formatted: string } | null = null;
+  let latestAnyStepTps: { outputTps: number; formatted: string } | null = null;
+  let latestForegroundStepTtft: { seconds: number; formatted: string; formattedEn: string } | null = null;
+  let latestAnyStepTtft: { seconds: number; formatted: string; formattedEn: string } | null = null;
   let validTtftSum = 0;
   let validTtftCount = 0;
+  const usageStepsForCost: Array<{
+    step: ComputeHudMetricsInput['steps'][number];
+    isChildStep: boolean;
+    rawInput: number;
+    cached: number;
+    written: number;
+    output: number;
+  }> = [];
   let detectedSubagents = 0;
   let detectedRunningSubagents = 0;
   let uncachedInputTokens = 0;
@@ -793,15 +882,9 @@ export function buildConversationHudMetrics(input: ComputeHudMetricsInput): Conv
     const first = step.t_first_token ?? step.firstTokenSeconds;
     const end = step.t_end ?? step.endTimeSeconds;
     const rawStatus = step.status ?? 3;
-    // 纳管 status=3 (DONE) 以及上下文压缩归档为 status=5 (CLEARED) 且具备完成证据的历史模型步
-    const complete =
-      rawStatus === 3 ||
-      (rawStatus === 5 &&
-        (step.generation !== undefined ||
-          step.finishedGeneratingSeconds != null ||
-          step.completedAtSeconds != null ||
-          step.t_end != null));
+    const complete = isStepCompleted(step);
     const hasInterval = validSeconds(start) && validSeconds(end) && end > start;
+    const isChildStep = Boolean(contextStepSet && !contextStepSet.has(step));
     const subagent = Boolean(step.isSubagentStep) || stepType === 127 ||
       Boolean(step.toolCallName && SUBAGENT_TOOL_NAMES.has(step.toolCallName));
     if (subagent) {
@@ -820,6 +903,9 @@ export function buildConversationHudMetrics(input: ComputeHudMetricsInput): Conv
       outputTokens += output;
       reasoningTokens += safeTokens(step.reasoningTokens);
       candidateTokens += safeTokens(step.candidateTokens);
+      if (step.hasUsage !== false) {
+        usageStepsForCost.push({ step, isChildStep, rawInput, cached, written, output });
+      }
 
       const gen = step.generation;
       const rawTtft = gen?.timeToFirstTokenSeconds;
@@ -828,11 +914,27 @@ export function buildConversationHudMetrics(input: ComputeHudMetricsInput): Conv
         ? rawTtft + rawStreaming
         : hasInterval ? end! - start! : null;
       if (complete && duration !== null) {
-        modelDurationSeconds += duration;
+        if (isChildStep) {
+          if (validSeconds(start)) {
+            childCompletedModelIntervals.push([start, start + duration]);
+          } else {
+            unanchoredChildModelDuration += duration;
+          }
+        } else {
+          mainCompletedModelDuration += duration;
+        }
         if (step.hasUsage !== false && Number.isSafeInteger(step.outputTokens) && step.outputTokens! >= 0) {
           timedOutputTokens += output;
           timedOutputSeconds += duration;
           timedOutputCount++;
+          const stepTps = computeTps(duration, output);
+          if (stepTps.status === 'calculated') {
+            const snapshot = { outputTps: stepTps.outputTps, formatted: stepTps.formatted };
+            if (!isChildStep) {
+              latestForegroundStepTps = snapshot;
+            }
+            latestAnyStepTps = snapshot;
+          }
         }
       }
       const ttft = validSeconds(rawTtft)
@@ -842,14 +944,27 @@ export function buildConversationHudMetrics(input: ComputeHudMetricsInput): Conv
       if (complete && ttft !== null) {
         validTtftSum += ttft;
         validTtftCount++;
+        const ttftSnapshot = {
+          seconds: ttft,
+          formatted: `${ttft.toFixed(2)} 秒`,
+          formattedEn: `${ttft.toFixed(2)}s`,
+        };
+        if (!isChildStep) {
+          latestForegroundStepTtft = ttftSnapshot;
+        }
+        latestAnyStepTtft = ttftSnapshot;
       }
     } else if (!NON_TOOL_STEP_TYPES.has(stepType)) {
       toolSteps++;
       if (hasInterval && !ACTIVE_STEP_STATUSES.has(rawStatus)) {
-        toolDurationSeconds += end! - start!;
+        completedToolIntervals.push([start!, end!]);
       }
     }
   }
+  const childCompletedAnchoredTotal = mergeDurationIntervals(childCompletedModelIntervals);
+  const childCompletedModelDuration = childCompletedAnchoredTotal + unanchoredChildModelDuration;
+  const modelDurationSeconds = mainCompletedModelDuration + childCompletedModelDuration;
+  const toolDurationSeconds = mergeDurationIntervals(completedToolIntervals);
 
   let latestStep: ComputeHudMetricsInput['steps'][number] | undefined;
   let peakContextTokens = 0;
@@ -942,12 +1057,62 @@ export function buildConversationHudMetrics(input: ComputeHudMetricsInput): Conv
   }
   const tpsInfo = computeTps(timedOutputSeconds, timedOutputTokens);
   const outputTpsFormatted = timedOutputCount > 0 ? tpsInfo.formatted : isStreaming ? '计算中...' : '—';
+  const latestStepTpsInfo = timedOutputCount > 0 ? (latestForegroundStepTps ?? latestAnyStepTps) : null;
+  const latestStepTtftInfo = validTtftCount > 0 ? (latestForegroundStepTtft ?? latestAnyStepTtft) : null;
   const averageTtftSeconds = validTtftCount > 0 ? validTtftSum / validTtftCount : 0;
   const totalTokens = uncachedInputTokens + cachedReadTokens + cacheWriteTokens + outputTokens;
   const inputTokens = uncachedInputTokens + cachedReadTokens + cacheWriteTokens;
   const cacheHitRate = inputTokens > 0 ? cachedReadTokens / inputTokens : 0;
   const availability: HudDataAvailability = input.availability ?? 'ready';
   const nowMs = Date.now();
+  const pricingTable = input.pricingTable ?? DEFAULT_API_PRICES;
+  let estimatedCostUsd = 0;
+  let cacheSavedUsd = 0;
+  let pricedUsageSteps = 0;
+  let unpricedUsageSteps = 0;
+  const defaultFallbackModel =
+    (typeof historicalModel === 'string' && historicalModel.trim()) ||
+    (typeof input.modelId === 'string' && input.modelId.trim()) ||
+    '';
+  const defaultPriceTsSeconds = Math.floor(nowMs / 1000);
+  for (const item of usageStepsForCost) {
+    const step = item.step;
+    const stepModel =
+      step.generation?.responseModel ||
+      step.generation?.modelDisplayName ||
+      step.generation?.plannerModelName ||
+      step.modelName ||
+      (item.isChildStep ? '' : defaultFallbackModel);
+    const stepTs = [
+      step.t_start,
+      step.startTimeSeconds,
+      step.createdAtSeconds,
+      step.t_end,
+      step.endTimeSeconds,
+      step.completedAtSeconds,
+    ].find((ts) => validSeconds(ts) && ts > 0);
+    const price = stepModel
+      ? resolvePricingFromTable(pricingTable, stepModel, stepTs ?? defaultPriceTsSeconds)
+      : null;
+    if (!price || (item.written > 0 && !Number.isFinite(price.cacheWrite))) {
+      if (item.rawInput + item.cached + item.written + item.output > 0) {
+        unpricedUsageSteps++;
+      }
+      continue;
+    }
+    try {
+      estimatedCostUsd += calculateEstimatedUsd(item.rawInput, item.output, item.cached, price, item.written);
+      const unitSaved = Math.max(0, price.input - price.cached);
+      if (item.cached > 0 && unitSaved > 0) {
+        cacheSavedUsd += (item.cached * unitSaved) / 1_000_000;
+      }
+      pricedUsageSteps++;
+    } catch {
+      unpricedUsageSteps++;
+    }
+  }
+  estimatedCostUsd = Math.round(estimatedCostUsd * 1e8) / 1e8;
+  cacheSavedUsd = Math.round(cacheSavedUsd * 1e8) / 1e8;
   const observedAt = input.observedAt !== undefined ? input.observedAt : (availability === 'unavailable' ? null : nowMs);
   const lastSuccessAt = input.lastSuccessAt !== undefined ? input.lastSuccessAt : observedAt;
   const resolvedModelId = !hasExplicitModelEvidence ? 'unknown' : modelSpec.modelId;
@@ -968,54 +1133,19 @@ export function buildConversationHudMetrics(input: ComputeHudMetricsInput): Conv
   }
 
   const turnSteps = lastTurnStartIndex >= 0 ? contextSteps.slice(lastTurnStartIndex) : contextSteps;
-  let currentTurnModelDurationSeconds = 0;
-  let currentTurnToolDurationSeconds = 0;
+  const turnModelIntervals: Array<readonly [number, number]> = [];
+  const turnToolIntervals: Array<readonly [number, number]> = [];
+  const turnChildIntervals: Array<readonly [number, number]> = [];
+  let unanchoredTurnModelDuration = 0;
+  let currentTurnTimedOutputTokens = 0;
+  let currentTurnTimedOutputSeconds = 0;
+  let currentTurnTimedSamples = 0;
   let turnWallStart: number | null = null;
   let turnCompletedEnd: number | null = null;
   let hasActiveStepInTurn = false;
   let hasSubagentStepInTurn = false;
   const nowSeconds = nowMs / 1000;
   const allowActiveInference = input.allowDbActiveStepInference !== false;
-
-  let inFlightModelDurationSeconds = 0;
-  let activeModelStepCount = 0;
-  let inFlightToolDurationSeconds = 0;
-  let activeToolStepCount = 0;
-  for (let i = 0; i < steps.length; i++) {
-    const rawStep = steps[i]!;
-    const step =
-      i < contextSteps.length &&
-      contextSteps[i]?.idx === rawStep.idx &&
-      (contextSteps[i]?.step_type ?? contextSteps[i]?.stepType ?? 0) ===
-        (rawStep.step_type ?? rawStep.stepType ?? 0)
-        ? contextSteps[i]!
-        : rawStep;
-    const stepType = step.step_type ?? step.stepType ?? 0;
-    if (stepType === 14) continue;
-    const start = step.t_start ?? step.startTimeSeconds;
-    const end = step.t_end ?? step.endTimeSeconds;
-    const rawStatus = step.status ?? 3;
-    const complete =
-      rawStatus === 3 ||
-      (rawStatus === 5 &&
-        (step.generation !== undefined ||
-          step.finishedGeneratingSeconds != null ||
-          step.completedAtSeconds != null ||
-          step.t_end != null));
-    if (complete || !validSeconds(start)) continue;
-    const isStepActive = ACTIVE_STEP_STATUSES.has(rawStatus)
-      ? allowActiveInference || isStreaming
-      : isStreaming && rawStatus !== 4 && end == null;
-    if (!isStepActive) continue;
-    const elapsed = Math.max(0, nowSeconds - start);
-    if (stepType === 15) {
-      inFlightModelDurationSeconds += elapsed;
-      activeModelStepCount++;
-    } else if (!NON_TOOL_STEP_TYPES.has(stepType)) {
-      inFlightToolDurationSeconds += elapsed;
-      activeToolStepCount++;
-    }
-  }
 
   const trackWallStart = (ts: number | null | undefined) => {
     if (validSeconds(ts)) {
@@ -1044,20 +1174,12 @@ export function buildConversationHudMetrics(input: ComputeHudMetricsInput): Conv
     ) {
       hasSubagentStepInTurn = true;
     }
-    const complete =
-      rawStatus === 3 ||
-      (rawStatus === 5 &&
-        (step.generation !== undefined ||
-          step.finishedGeneratingSeconds != null ||
-          step.completedAtSeconds != null ||
-          step.t_end != null));
+    const complete = isStepCompleted(step);
+    const activeNow = isStepActiveNow(step, isStreaming, allowActiveInference);
     const hasInterval = validSeconds(start) && validSeconds(end) && end > start;
     if (complete) {
       trackWallEnd(end ?? step.finishedGeneratingSeconds ?? step.completedAtSeconds ?? start);
-    } else if (
-      (allowActiveInference && ACTIVE_STEP_STATUSES.has(rawStatus)) ||
-      (isStreaming && (ACTIVE_STEP_STATUSES.has(rawStatus) || end == null))
-    ) {
+    } else if (activeNow) {
       hasActiveStepInTurn = true;
     }
 
@@ -1069,23 +1191,24 @@ export function buildConversationHudMetrics(input: ComputeHudMetricsInput): Conv
         ? rawTtft + rawStreaming
         : hasInterval ? end! - start! : null;
       if (complete && duration !== null) {
-        currentTurnModelDurationSeconds += duration;
-      } else if (
-        validSeconds(start) &&
-        ((allowActiveInference && ACTIVE_STEP_STATUSES.has(rawStatus)) ||
-          (isStreaming && (ACTIVE_STEP_STATUSES.has(rawStatus) || end == null)))
-      ) {
-        currentTurnModelDurationSeconds += Math.max(0, nowSeconds - start);
+        if (validSeconds(start)) {
+          turnModelIntervals.push([start, start + duration]);
+        } else {
+          unanchoredTurnModelDuration += duration;
+        }
+        if (step.hasUsage !== false && Number.isSafeInteger(step.outputTokens) && step.outputTokens! >= 0) {
+          currentTurnTimedOutputTokens += safeTokens(step.outputTokens);
+          currentTurnTimedOutputSeconds += duration;
+          currentTurnTimedSamples++;
+        }
+      } else if (validSeconds(start) && activeNow) {
+        turnModelIntervals.push([start, Math.max(start, nowSeconds)]);
       }
     } else if (!NON_TOOL_STEP_TYPES.has(stepType)) {
       if (hasInterval && !ACTIVE_STEP_STATUSES.has(rawStatus)) {
-        currentTurnToolDurationSeconds += end! - start!;
-      } else if (
-        validSeconds(start) &&
-        ((allowActiveInference && ACTIVE_STEP_STATUSES.has(rawStatus)) ||
-          (isStreaming && (ACTIVE_STEP_STATUSES.has(rawStatus) || end == null)))
-      ) {
-        currentTurnToolDurationSeconds += Math.max(0, nowSeconds - start);
+        turnToolIntervals.push([start!, end!]);
+      } else if (validSeconds(start) && activeNow) {
+        turnToolIntervals.push([start, Math.max(start, nowSeconds)]);
       }
     }
   }
@@ -1102,28 +1225,72 @@ export function buildConversationHudMetrics(input: ComputeHudMetricsInput): Conv
     return isSubagentRunning;
   });
   for (const childStep of childStepsInTurn) {
+    const stepType = childStep.step_type ?? childStep.stepType ?? 0;
     const start = childStep.t_start ?? childStep.startTimeSeconds ?? childStep.createdAtSeconds;
     const end = childStep.t_end ?? childStep.endTimeSeconds ?? childStep.finishedGeneratingSeconds ?? childStep.completedAtSeconds;
-    const childStatus = childStep.status ?? 3;
+    const rawStart = childStep.t_start ?? childStep.startTimeSeconds;
+    const rawEnd = childStep.t_end ?? childStep.endTimeSeconds;
     trackWallStart(start);
-    if (!ACTIVE_STEP_STATUSES.has(childStatus)) {
-      trackWallEnd(end ?? start);
-    } else if (allowActiveInference) {
+    if (stepType !== 14 && isStepActiveNow(childStep, isStreaming, allowActiveInference)) {
       hasActiveStepInTurn = true;
+      if (validSeconds(rawStart)) {
+        turnChildIntervals.push([rawStart, Math.max(rawStart, nowSeconds)]);
+      }
+    } else {
+      trackWallEnd(end ?? start);
+      if (stepType !== 14 && validSeconds(rawStart) && validSeconds(rawEnd) && rawEnd > rawStart) {
+        turnChildIntervals.push([rawStart, rawEnd]);
+      }
     }
   }
 
+  // 仅统计当前轮次（主对话本轮 + 归属于本轮的子智能体）真实活跃步，隔离历史残留未闭合/中止步并合并并行重叠区间
+  const activeModelIntervals: Array<readonly [number, number]> = [];
+  const activeToolIntervals: Array<readonly [number, number]> = [];
+  let activeModelStepCount = 0;
+  let activeToolStepCount = 0;
+  for (const step of [...turnSteps, ...childStepsInTurn]) {
+    const stepType = step.step_type ?? step.stepType ?? 0;
+    if (stepType === 14) continue;
+    const start = step.t_start ?? step.startTimeSeconds;
+    if (!validSeconds(start)) continue;
+    if (!isStepActiveNow(step, isStreaming, allowActiveInference)) continue;
+    const interval: readonly [number, number] = [start, Math.max(start, nowSeconds)];
+    if (stepType === 15) {
+      activeModelIntervals.push(interval);
+      activeModelStepCount++;
+    } else if (!NON_TOOL_STEP_TYPES.has(stepType)) {
+      activeToolIntervals.push(interval);
+      activeToolStepCount++;
+    }
+  }
+  const inFlightModelDurationSeconds = Math.max(
+    0,
+    mergeDurationIntervals([...childCompletedModelIntervals, ...activeModelIntervals]) -
+      childCompletedAnchoredTotal
+  );
+  const inFlightToolDurationSeconds = Math.max(
+    0,
+    mergeDurationIntervals([...completedToolIntervals, ...activeToolIntervals]) -
+      toolDurationSeconds
+  );
+
+  const currentTurnModelDurationSeconds =
+    mergeDurationIntervals(turnModelIntervals) + unanchoredTurnModelDuration;
+  const currentTurnToolDurationSeconds = mergeDurationIntervals(turnToolIntervals);
   const hasSubagentInTurn = Boolean(isSubagentRunning || hasSubagentStepInTurn || childStepsInTurn.length > 0);
-  const stepDurationSum = currentTurnModelDurationSeconds + currentTurnToolDurationSeconds;
-  let currentTurnDurationSeconds = stepDurationSum;
+  const mergedTurnDuration =
+    mergeDurationIntervals([...turnModelIntervals, ...turnToolIntervals, ...turnChildIntervals]) +
+    unanchoredTurnModelDuration;
+  let currentTurnDurationSeconds = mergedTurnDuration;
   if (hasSubagentInTurn && turnWallStart !== null) {
     const completedWallSpan = turnCompletedEnd !== null && turnCompletedEnd > turnWallStart
       ? turnCompletedEnd - turnWallStart
       : 0;
     if (isStreaming || isSubagentRunning || hasActiveStepInTurn) {
-      currentTurnDurationSeconds = Math.max(0, nowSeconds - turnWallStart, completedWallSpan);
+      currentTurnDurationSeconds = Math.max(mergedTurnDuration, nowSeconds - turnWallStart, completedWallSpan);
     } else if (completedWallSpan > 0) {
-      currentTurnDurationSeconds = completedWallSpan;
+      currentTurnDurationSeconds = Math.max(mergedTurnDuration, completedWallSpan);
     }
   }
   const hasTurnDuration = turns > 0 || (turnSteps.length > 0 && currentTurnDurationSeconds > 0) || isStreaming;
@@ -1133,6 +1300,9 @@ export function buildConversationHudMetrics(input: ComputeHudMetricsInput): Conv
   const currentTurnDurationFormattedEn = hasTurnDuration
     ? formatTurnDurationCard(currentTurnDurationSeconds, 'en')
     : '—';
+  const currentTurnTpsInfo = computeTps(currentTurnTimedOutputSeconds, currentTurnTimedOutputTokens);
+  const currentTurnOutputTpsFormatted =
+    currentTurnTimedSamples > 0 ? currentTurnTpsInfo.formatted : isStreaming ? '计算中...' : '—';
   const currentTurnDurationCompactZh = hasTurnDuration
     ? formatTurnDurationCompact(currentTurnDurationSeconds, 'zh')
     : '本轮 0s';
@@ -1178,6 +1348,22 @@ export function buildConversationHudMetrics(input: ComputeHudMetricsInput): Conv
       averageTtftFormattedEn: validTtftCount > 0 ? `${averageTtftSeconds.toFixed(2)}s` : '—',
       outputTps: tpsInfo.outputTps,
       outputTpsFormatted,
+      ...(latestStepTpsInfo
+        ? {
+            latestStepOutputTps: latestStepTpsInfo.outputTps,
+            latestStepOutputTpsFormatted: latestStepTpsInfo.formatted,
+          }
+        : {}),
+      ...(latestStepTtftInfo
+        ? {
+            latestStepTtftSeconds: latestStepTtftInfo.seconds,
+            latestStepTtftFormatted: latestStepTtftInfo.formatted,
+            latestStepTtftFormattedEn: latestStepTtftInfo.formattedEn,
+          }
+        : {}),
+      currentTurnOutputTps: currentTurnTpsInfo.outputTps,
+      currentTurnOutputTpsFormatted,
+      currentTurnTimedSamples,
       currentTurnDurationSeconds,
       currentTurnDurationFormatted,
       currentTurnDurationFormattedEn,
@@ -1205,6 +1391,16 @@ export function buildConversationHudMetrics(input: ComputeHudMetricsInput): Conv
       outputFormatted: formatThousandsTokens(outputTokens),
       ...(reasoningTokens > 0 ? { reasoningTokens, reasoningFormatted: formatThousandsTokens(reasoningTokens) } : {}),
       ...(candidateTokens > 0 ? { candidateTokens, candidateFormatted: formatThousandsTokens(candidateTokens) } : {}),
+      ...(pricedUsageSteps > 0
+        ? {
+            estimatedCostUsd,
+            estimatedCostFormatted: formatHudUsd(estimatedCostUsd),
+            cacheSavedUsd,
+            cacheSavedFormatted: formatHudUsd(cacheSavedUsd),
+            pricedStepCount: pricedUsageSteps,
+            ...(unpricedUsageSteps > 0 ? { hasUnpricedSteps: true } : {}),
+          }
+        : {}),
     },
     context: {
       hasUsageData: Boolean(latestStep),
@@ -1286,15 +1482,48 @@ interface CachedConversationState {
  */
 export class ConversationMetricsEngine {
   private readonly conversationsDir: string;
+  private readonly remotePricingCachePath: string | null;
+  private readonly pricingCachePath: string | null;
+  private cachedPricingTable: { key: string; table: Record<string, ApiPricingEntry> } | null = null;
   private readonly cache = new Map<string, CachedConversationState>();
   private readonly pendingReads = new Map<string, Promise<CachedConversationState | null>>();
   private sniffDirCache: { at: number; recentIds: string[] } | null = null;
   private sniffDirListCache: { dirMtimeMs: number; dbEntries: Array<{ file: string; id: string }> } | null = null;
 
-  constructor(options?: { geminiDir?: string; conversationsDir?: string }) {
+  constructor(options?: { geminiDir?: string; conversationsDir?: string; stateDir?: string }) {
     const baseGemini = options?.geminiDir ?? join(homedir(), '.gemini');
     this.conversationsDir =
       options?.conversationsDir ?? join(baseGemini, 'antigravity', 'conversations');
+    const cleanStateDir = typeof options?.stateDir === 'string' && options.stateDir.trim()
+      ? options.stateDir.trim()
+      : null;
+    this.remotePricingCachePath = cleanStateDir ? join(cleanStateDir, 'remote_pricing.json') : null;
+    this.pricingCachePath = cleanStateDir ? join(cleanStateDir, 'api_pricing.json') : null;
+  }
+
+  private async resolveEffectivePricingTable(): Promise<Record<string, ApiPricingEntry>> {
+    if (!this.remotePricingCachePath || !this.pricingCachePath) {
+      return DEFAULT_API_PRICES;
+    }
+    const [remoteStat, customStat] = await Promise.all([
+      lstat(this.remotePricingCachePath).catch(() => null),
+      lstat(this.pricingCachePath).catch(() => null),
+    ]);
+    const key = `${remoteStat ? `${remoteStat.mtimeMs}:${remoteStat.size}` : 'none'}|${customStat ? `${customStat.mtimeMs}:${customStat.size}` : 'none'}`;
+    if (key === 'none|none') {
+      this.cachedPricingTable = null;
+      return DEFAULT_API_PRICES;
+    }
+    if (this.cachedPricingTable?.key === key) {
+      return this.cachedPricingTable.table;
+    }
+    try {
+      const { merged } = await loadRawPricingTable(this.remotePricingCachePath, this.pricingCachePath);
+      this.cachedPricingTable = { key, table: merged };
+      return merged;
+    } catch {
+      return DEFAULT_API_PRICES;
+    }
   }
 
   public resolveDbPath(conversationId: string): string {
@@ -1844,6 +2073,7 @@ export class ConversationMetricsEngine {
       ? 'partial'
       : 'ready';
 
+    const pricingTable = await this.resolveEffectivePricingTable();
     const metrics = buildConversationHudMetrics({
       conversationId,
       paneSlotId,
@@ -1863,6 +2093,7 @@ export class ConversationMetricsEngine {
       totalStepsOverride: mainState.steps.length + totalSubagentSteps,
       allowDbActiveStepInference: mainIsRecent || isStreaming || effectiveSubagentRunning,
       modelId,
+      pricingTable,
       genMetadata: mainState.genMetadata,
       contextSteps: normalizedContextSteps,
       steps: combinedSteps,

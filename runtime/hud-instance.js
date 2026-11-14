@@ -1,6 +1,10 @@
 import { compactNumber, durationText, formatTurnDurationCompact } from '../dist/metric-format.js';
 import { HUD_STYLES_CSS } from './hud-styles.js';
-import { computeUpwardPopoverPosition, applyPopoverGeometry } from './hud-popover.js';
+import {
+  computeUpwardPopoverPosition,
+  applyPopoverGeometry,
+  resetPopoverGeometryCache,
+} from './hud-popover.js';
 
 /**
  * 单分栏自治 HUD 实例 (HudInstance - Antigravity Native v2.1)
@@ -132,6 +136,14 @@ function createDefaultMetrics(conversationId = 'default', sessionRevision = 1) {
       averageTtftFormattedEn: '—',
       outputTps: 0,
       outputTpsFormatted: '—',
+      latestStepOutputTps: 0,
+      latestStepOutputTpsFormatted: '—',
+      latestStepTtftSeconds: 0,
+      latestStepTtftFormatted: '—',
+      latestStepTtftFormattedEn: '—',
+      currentTurnOutputTps: 0,
+      currentTurnOutputTpsFormatted: '—',
+      currentTurnTimedSamples: 0,
       currentTurnDurationSeconds: 0,
       currentTurnDurationFormatted: '0秒',
       currentTurnDurationFormattedEn: '0s',
@@ -156,6 +168,10 @@ function createDefaultMetrics(conversationId = 'default', sessionRevision = 1) {
       cachedReadFormatted: '0 tok',
       outputTokens: 0,
       outputFormatted: '0 tok',
+      estimatedCostUsd: undefined,
+      estimatedCostFormatted: '—',
+      cacheSavedUsd: undefined,
+      cacheSavedFormatted: '—',
     },
     context: {
       hasUsageData: false,
@@ -240,12 +256,14 @@ export class HudInstance {
     this.modelClockAnchor = null;
     this.toolClockAnchor = null;
     this.turnHighWaterMark = null;
+    this.frozenClockSnapshot = null;
     this.lastMetrics = createDefaultMetrics('default', 0);
   }
 
   resetToEmptyState() {
     this.stopTurnClock();
     this.turnHighWaterMark = null;
+    this.frozenClockSnapshot = null;
     this.currentConvId = null;
     this.currentModelId = '';
     this.domIsStreaming = false;
@@ -308,6 +326,7 @@ export class HudInstance {
     if (changed) {
       this.stopTurnClock();
       this.turnHighWaterMark = null;
+      this.frozenClockSnapshot = null;
       this.backendIsSubagentRunning = false;
       this.backendRunningSubagentCount = 0;
       this.backendActivityPhase = null;
@@ -412,20 +431,82 @@ export class HudInstance {
           (this.lastMetrics?.session?.activeToolStepCount || 0) > 0
       );
       this.activityPhase = this.computeMergedActivityPhase();
-      this.syncStreamingClass();
-      if (this.lastMetrics && this.shadow) {
-        this.applyMetricsToDom({
-          ...this.lastMetrics,
-          isStreaming: this.hasActiveWork,
-          activityPhase: this.activityPhase,
-          isSubagentRunning: this.isSubagentRunning,
-          runningSubagentCount: this.runningSubagentCount,
-        });
+      if (!this.hasActiveWork) {
+        this.freezeActiveClocksForPendingIdle();
+        this.syncStreamingClass();
+      } else {
+        this.syncStreamingClass();
+        if (this.lastMetrics && this.shadow) {
+          this.applyMetricsToDom({
+            ...this.lastMetrics,
+            isStreaming: this.hasActiveWork,
+            activityPhase: this.activityPhase,
+            isSubagentRunning: this.isSubagentRunning,
+            runningSubagentCount: this.runningSubagentCount,
+          });
+        }
       }
       changed = true;
       this.emitBridgeEvent('STREAMING_CHANGED');
     }
     return changed;
+  }
+
+  /**
+   * 当 DOM 先检测到轮次暂停/结束而后端权威包尚未抵达时，停止本地定时器并冻结当前高水位，
+   * 避免立刻用过期的 this.lastMetrics 刷旧 DOM，等待真实 updateMetrics 到来后再统一校准或恢复。
+   */
+  freezeActiveClocksForPendingIdle() {
+    const nowMs = Date.now();
+    const s = this.lastMetrics?.session || {};
+    const turns = this.turnClockAnchor?.turns ?? (isRawNumber(s.turns) ? s.turns : 0);
+    const hasSubagent = Boolean(
+      this.isSubagentRunning ||
+      this.lastMetrics?.isSubagentRunning ||
+      (isRawNumber(s.subagentCount) && s.subagentCount > 0) ||
+      (isRawNumber(s.subagentSteps) && s.subagentSteps > 0) ||
+      (this.turnHighWaterMark && this.turnHighWaterMark.turns === turns && this.turnHighWaterMark.hasSubagent)
+    );
+    const liveTurnSec = this.turnClockAnchor
+      ? Math.max(
+          this.turnClockAnchor.baseSeconds + (nowMs - this.turnClockAnchor.anchorMs) / 1000,
+          this.turnHighWaterMark?.turns === turns ? (this.turnHighWaterMark.seconds ?? 0) : 0
+        )
+      : Math.max(
+          this.frozenClockSnapshot?.convId === this.currentConvId ? (this.frozenClockSnapshot?.turnSeconds ?? 0) : 0,
+          isRawNumber(s.currentTurnDurationSeconds) ? s.currentTurnDurationSeconds : 0
+        );
+    const liveModelSec = this.modelClockAnchor
+      ? this.getLiveClockSeconds(this.modelClockAnchor, nowMs)
+      : Math.max(
+          this.frozenClockSnapshot?.convId === this.currentConvId ? (this.frozenClockSnapshot?.modelSeconds ?? 0) : 0,
+          (isRawNumber(s.modelDurationSeconds) ? s.modelDurationSeconds : 0) +
+            (isRawNumber(s.inFlightModelDurationSeconds) ? s.inFlightModelDurationSeconds : 0)
+        );
+    const liveToolSec = this.toolClockAnchor
+      ? this.getLiveClockSeconds(this.toolClockAnchor, nowMs)
+      : Math.max(
+          this.frozenClockSnapshot?.convId === this.currentConvId ? (this.frozenClockSnapshot?.toolSeconds ?? 0) : 0,
+          (isRawNumber(s.toolDurationSeconds) ? s.toolDurationSeconds : 0) +
+            (isRawNumber(s.inFlightToolDurationSeconds) ? s.inFlightToolDurationSeconds : 0)
+        );
+    this.frozenClockSnapshot = {
+      convId: this.currentConvId,
+      turns,
+      turnSeconds: Math.max(0, liveTurnSec),
+      modelSeconds: Math.max(0, liveModelSec),
+      toolSeconds: Math.max(0, liveToolSec),
+      hasSubagent,
+    };
+    if (this.turnClockAnchor || this.turnHighWaterMark) {
+      const prevHigh = this.turnHighWaterMark && this.turnHighWaterMark.turns === turns ? this.turnHighWaterMark.seconds : 0;
+      this.turnHighWaterMark = {
+        turns,
+        seconds: Math.max(liveTurnSec, prevHigh),
+        hasSubagent,
+      };
+    }
+    this.stopTurnClock();
   }
 
   requestRefresh() {
@@ -535,6 +616,10 @@ export class HudInstance {
       isSubagentRunning: mergedSubagentRunning,
       runningSubagentCount: mergedSubagentCount,
     };
+    if (!this.hasActiveWork) {
+      // 收到后端权威 idle 确认包，解除挂起冻结态，允许收敛到数据库权威耗时（子智能体高水位仍由 turnHighWaterMark 保护）
+      this.frozenClockSnapshot = null;
+    }
     this.applyMetricsToDom(this.lastMetrics);
     return true;
   }
@@ -805,9 +890,20 @@ export class HudInstance {
               <span class="hud-popover-label" id="lbl-tps">输出速度（TPS）</span>
               <span class="hud-popover-val" id="val-tps">—</span>
             </div>
+          </div>
+          <div class="hud-popover-divider-dashed" aria-hidden="true"></div>
+          <div class="hud-popover-grid">
             <div class="hud-popover-row" id="row-turn-dur">
               <span class="hud-popover-label" id="lbl-turn-dur">本轮用时</span>
               <span class="hud-popover-val" id="val-turn-dur">0秒</span>
+            </div>
+            <div class="hud-popover-row" id="row-ttft-latest">
+              <span class="hud-popover-label" id="lbl-ttft-latest">最近一步 TTFT</span>
+              <span class="hud-popover-val" id="val-ttft-latest">—</span>
+            </div>
+            <div class="hud-popover-row" id="row-tps-latest">
+              <span class="hud-popover-label" id="lbl-tps-latest">最近一步 TPS</span>
+              <span class="hud-popover-val" id="val-tps-latest">—</span>
             </div>
             <div class="hud-popover-row" id="row-subagent-status" hidden>
               <span class="hud-popover-label" id="lbl-subagent-status">子智能体状态</span>
@@ -861,6 +957,17 @@ export class HudInstance {
             <div class="hud-popover-row" id="row-reasoning-tok" hidden>
               <span class="hud-popover-label" id="lbl-reasoning-tok">思维链 / 回复</span>
               <span class="hud-popover-val" id="val-reasoning-tok">0 / 0 tok</span>
+            </div>
+          </div>
+          <div class="hud-popover-divider-dashed" aria-hidden="true"></div>
+          <div class="hud-popover-grid">
+            <div class="hud-popover-row" id="row-est-cost">
+              <span class="hud-popover-label" id="lbl-est-cost">估算费用</span>
+              <span class="hud-popover-val" id="val-est-cost">—</span>
+            </div>
+            <div class="hud-popover-row" id="row-cache-saved">
+              <span class="hud-popover-label" id="lbl-cache-saved">缓存节省</span>
+              <span class="hud-popover-val" id="val-cache-saved">—</span>
             </div>
           </div>
         </div>
@@ -981,6 +1088,11 @@ export class HudInstance {
       compBadgeEl.removeAttribute('data-compaction-tier');
       compBadgeEl.classList?.remove('is-compaction-low', 'is-compaction-warn', 'is-compaction-danger');
     }
+    const latestTpsEl = this.getShadowEl('#val-tps-latest');
+    if (latestTpsEl) {
+      latestTpsEl.textContent = '—';
+      latestTpsEl.removeAttribute('hidden');
+    }
     this.hideAllPopovers();
   }
 
@@ -1093,33 +1205,30 @@ export class HudInstance {
     return Math.max(0, anchor.baseSeconds + ((nowMs - anchor.anchorMs) / 1000) * anchor.rate);
   }
 
-  syncSubClock(anchorKey, backendTotal, completedBase, rate, isWorkingNow, nowMs) {
+  syncSubClock(anchorKey, backendTotal, completedBase, rate, isWorkingNow, nowMs, resumeFloor = 0) {
     if (!isWorkingNow || !this.shadow) {
       this[anchorKey] = null;
       return;
     }
+    const flooredBackend = Math.max(backendTotal, resumeFloor);
     const existing = this[anchorKey];
     if (!existing) {
       this[anchorKey] = {
-        baseSeconds: backendTotal,
+        baseSeconds: flooredBackend,
         anchorMs: nowMs,
         rate,
         lastCompletedBase: completedBase,
-        lastRenderedSec: Math.round(backendTotal),
+        lastRenderedSec: Math.max(0, Math.round(flooredBackend)),
       };
       return;
     }
     const prevElapsed = this.getLiveClockSeconds(existing, nowMs);
+    const monotonicFloor = Math.max(prevElapsed, flooredBackend);
     const completedAdvanced = completedBase > existing.lastCompletedBase + 1e-6;
     if (rate !== existing.rate) {
-      let nextBase = backendTotal;
-      if (rate === 0 && !completedAdvanced && backendTotal <= prevElapsed) {
-        nextBase = Math.max(backendTotal, prevElapsed);
-      } else if (rate > 0 && existing.rate === 0) {
-        nextBase = Math.max(backendTotal, prevElapsed);
-      }
+      // 运行期切换阶段时严格维持单调不减，杜绝因刚完结步骤略短于客户端预估而向回闪退 1 秒
       this[anchorKey] = {
-        baseSeconds: nextBase,
+        baseSeconds: monotonicFloor,
         anchorMs: nowMs,
         rate,
         lastCompletedBase: completedBase,
@@ -1129,11 +1238,11 @@ export class HudInstance {
     }
     if (rate > 0) {
       if (
-        backendTotal > prevElapsed + 0.6 ||
-        (completedAdvanced && Math.abs(backendTotal - prevElapsed) > 0.6)
+        flooredBackend > prevElapsed + 0.6 ||
+        (flooredBackend > prevElapsed && Math.round(flooredBackend) > Math.round(prevElapsed))
       ) {
         this[anchorKey] = {
-          baseSeconds: backendTotal,
+          baseSeconds: flooredBackend,
           anchorMs: nowMs,
           rate,
           lastCompletedBase: completedBase,
@@ -1142,14 +1251,19 @@ export class HudInstance {
       } else if (completedAdvanced) {
         existing.lastCompletedBase = completedBase;
       }
-    } else if (completedAdvanced || backendTotal > prevElapsed + 0.6) {
+    } else if (
+      flooredBackend > prevElapsed + 0.6 ||
+      (flooredBackend > prevElapsed && Math.round(flooredBackend) > Math.round(prevElapsed))
+    ) {
       this[anchorKey] = {
-        baseSeconds: backendTotal,
+        baseSeconds: monotonicFloor,
         anchorMs: nowMs,
         rate: 0,
         lastCompletedBase: completedBase,
         lastRenderedSec: existing.lastRenderedSec,
       };
+    } else if (completedAdvanced) {
+      existing.lastCompletedBase = completedBase;
     }
   }
 
@@ -1157,7 +1271,7 @@ export class HudInstance {
     if (!anchor || !this.shadow || anchor.rate <= 0) return;
     const elapsedSec = this.getLiveClockSeconds(anchor, nowMs);
     const roundedSec = Math.max(0, Math.round(elapsedSec));
-    if (roundedSec === anchor.lastRenderedSec) return;
+    if (roundedSec <= anchor.lastRenderedSec) return;
     anchor.lastRenderedSec = roundedSec;
     const el = this.getShadowEl(selector);
     if (el) {
@@ -1195,6 +1309,20 @@ export class HudInstance {
       return;
     }
     const nowMs = Date.now();
+    const frozenMatch =
+      this.frozenClockSnapshot &&
+      this.frozenClockSnapshot.convId === this.currentConvId &&
+      (this.frozenClockSnapshot.turns === turns ||
+        (this.frozenClockSnapshot.turns === 0 && turns === 1 && backendSec < this.frozenClockSnapshot.turnSeconds));
+    const frozenTurnFloor = frozenMatch ? this.frozenClockSnapshot.turnSeconds : 0;
+    const frozenModelFloor =
+      this.frozenClockSnapshot && this.frozenClockSnapshot.convId === this.currentConvId
+        ? this.frozenClockSnapshot.modelSeconds
+        : 0;
+    const frozenToolFloor =
+      this.frozenClockSnapshot && this.frozenClockSnapshot.convId === this.currentConvId
+        ? this.frozenClockSnapshot.toolSeconds
+        : 0;
     const modelBase = isRawNumber(s.modelDurationSeconds) ? Math.max(0, s.modelDurationSeconds) : 0;
     const modelInFlight = isRawNumber(s.inFlightModelDurationSeconds) ? Math.max(0, s.inFlightModelDurationSeconds) : 0;
     const modelBackendTotal = modelBase + modelInFlight;
@@ -1203,14 +1331,14 @@ export class HudInstance {
     const toolInFlight = isRawNumber(s.inFlightToolDurationSeconds) ? Math.max(0, s.inFlightToolDurationSeconds) : 0;
     const toolBackendTotal = toolBase + toolInFlight;
     const activeTools = isRawNumber(s.activeToolStepCount) ? Math.max(0, Math.floor(s.activeToolStepCount)) : 0;
-    let modelRate = activeModels;
-    let toolRate = activeTools;
-    if (activeModels === 0 && activeTools === 0) {
+    let modelRate = activeModels > 0 ? 1 : 0;
+    let toolRate = activeTools > 0 ? 1 : 0;
+    if (modelRate === 0 && toolRate === 0) {
       if (this.activityPhase === 'executing') toolRate = 1;
       else modelRate = 1;
     }
-    this.syncSubClock('modelClockAnchor', modelBackendTotal, modelBase, modelRate, isWorkingNow, nowMs);
-    this.syncSubClock('toolClockAnchor', toolBackendTotal, toolBase, toolRate, isWorkingNow, nowMs);
+    this.syncSubClock('modelClockAnchor', modelBackendTotal, modelBase, modelRate, isWorkingNow, nowMs, frozenModelFloor);
+    this.syncSubClock('toolClockAnchor', toolBackendTotal, toolBase, toolRate, isWorkingNow, nowMs, frozenToolFloor);
 
     if (!this.turnClockAnchor) {
       const sameTurnResumeFloor =
@@ -1219,7 +1347,7 @@ export class HudInstance {
         this.turnHighWaterMark.hasSubagent
           ? this.turnHighWaterMark.seconds
           : 0;
-      const startSec = Math.max(backendSec, sameTurnResumeFloor);
+      const startSec = Math.max(backendSec, sameTurnResumeFloor, frozenTurnFloor);
       this.turnClockAnchor = { baseSeconds: startSec, anchorMs: nowMs, turns, lastRenderedSec: Math.round(startSec) };
     } else if (turns > this.turnClockAnchor.turns) {
       const liveSec = this.turnClockAnchor.baseSeconds + (nowMs - this.turnClockAnchor.anchorMs) / 1000;
@@ -1232,10 +1360,21 @@ export class HudInstance {
       }
     } else {
       const liveSec = this.turnClockAnchor.baseSeconds + (nowMs - this.turnClockAnchor.anchorMs) / 1000;
-      if (backendSec > liveSec + 0.5) {
-        this.turnClockAnchor = { baseSeconds: backendSec, anchorMs: nowMs, turns, lastRenderedSec: Math.round(backendSec) };
+      const highFloor = this.turnHighWaterMark && this.turnHighWaterMark.turns === turns ? this.turnHighWaterMark.seconds : 0;
+      const effectiveLive = Math.max(liveSec, highFloor);
+      if (
+        backendSec > effectiveLive + 0.5 ||
+        (backendSec > effectiveLive && Math.round(backendSec) > Math.round(effectiveLive))
+      ) {
+        this.turnClockAnchor = {
+          baseSeconds: backendSec,
+          anchorMs: nowMs,
+          turns,
+          lastRenderedSec: this.turnClockAnchor.lastRenderedSec,
+        };
       }
     }
+    this.frozenClockSnapshot = null;
     const currentLive = this.turnClockAnchor.baseSeconds + (nowMs - this.turnClockAnchor.anchorMs) / 1000;
     const prevHigh = this.turnHighWaterMark && this.turnHighWaterMark.turns === turns
       ? this.turnHighWaterMark.seconds
@@ -1292,12 +1431,17 @@ export class HudInstance {
     const isEn = this.languageMode === 'en';
     this.updateSubClockDom(this.modelClockAnchor, '#val-model-dur', isEn, nowMs);
     this.updateSubClockDom(this.toolClockAnchor, '#val-tool-dur', isEn, nowMs);
-    const elapsedSec = this.turnClockAnchor.baseSeconds + (nowMs - this.turnClockAnchor.anchorMs) / 1000;
+    const anchorTurnSec = this.turnClockAnchor.baseSeconds + (nowMs - this.turnClockAnchor.anchorMs) / 1000;
+    const highTurnSec =
+      this.turnHighWaterMark && this.turnHighWaterMark.turns === this.turnClockAnchor.turns
+        ? this.turnHighWaterMark.seconds
+        : 0;
+    const elapsedSec = Math.max(anchorTurnSec, highTurnSec);
     if (this.turnHighWaterMark && this.turnHighWaterMark.turns === this.turnClockAnchor.turns) {
       this.turnHighWaterMark.seconds = Math.max(this.turnHighWaterMark.seconds, elapsedSec);
     }
     const roundedSec = Math.max(0, Math.round(elapsedSec));
-    if (roundedSec === this.turnClockAnchor.lastRenderedSec) return;
+    if (roundedSec <= this.turnClockAnchor.lastRenderedSec) return;
     this.turnClockAnchor.lastRenderedSec = roundedSec;
     this.setTurnDurationText(this.formatCompactTurnDuration(elapsedSec, isEn));
     const valTurnDurEl = this.getShadowEl('#val-turn-dur');
@@ -1313,6 +1457,12 @@ export class HudInstance {
     if (!this.shadow || !metrics) return;
     const isEn = this.languageMode === 'en';
     const q = (sel) => this.getShadowEl(sel);
+    const setElText = (el, val) => {
+      if (el && el.textContent !== val) el.textContent = val;
+    };
+    const setTxt = (sel, val) => {
+      setElText(q(sel), val);
+    };
 
     const capsules = this.getShadowCapsules();
     for (const c of capsules) {
@@ -1372,8 +1522,10 @@ export class HudInstance {
         : null;
     const liveElapsedSec = clockActive && this.turnClockAnchor
       ? Math.max(
-          rawBackendTurnSec ?? 0,
-          this.turnClockAnchor.baseSeconds + (clockNowMs - this.turnClockAnchor.anchorMs) / 1000
+          this.turnClockAnchor.baseSeconds + (clockNowMs - this.turnClockAnchor.anchorMs) / 1000,
+          this.turnHighWaterMark && this.turnHighWaterMark.turns === rawTurns
+            ? this.turnHighWaterMark.seconds
+            : 0
         )
       : effectiveIdleTurnSec;
     const liveModelSec = clockActive && this.modelClockAnchor
@@ -1382,15 +1534,29 @@ export class HudInstance {
     const liveToolSec = clockActive && this.toolClockAnchor
       ? this.getLiveClockSeconds(this.toolClockAnchor, clockNowMs)
       : s.toolDurationSeconds;
+    if (this.turnClockAnchor && isRawNumber(liveElapsedSec)) {
+      this.turnClockAnchor.lastRenderedSec = Math.max(
+        this.turnClockAnchor.lastRenderedSec ?? 0,
+        Math.round(liveElapsedSec)
+      );
+    }
     if (this.modelClockAnchor && isRawNumber(liveModelSec)) {
-      this.modelClockAnchor.lastRenderedSec = Math.max(0, Math.round(liveModelSec));
+      this.modelClockAnchor.lastRenderedSec = Math.max(
+        this.modelClockAnchor.lastRenderedSec ?? 0,
+        Math.round(liveModelSec)
+      );
     }
     if (this.toolClockAnchor && isRawNumber(liveToolSec)) {
-      this.toolClockAnchor.lastRenderedSec = Math.max(0, Math.round(liveToolSec));
+      this.toolClockAnchor.lastRenderedSec = Math.max(
+        this.toolClockAnchor.lastRenderedSec ?? 0,
+        Math.round(liveToolSec)
+      );
     }
-    const tpsText = (digits) =>
+    const isPendingTps =
       s.outputTpsFormatted === '计算中...' ||
-      (isWorkingNow && !(Number(s.samples?.timed) > 0) && s.outputTpsFormatted === '—')
+      (isWorkingNow && !(Number(s.samples?.timed) > 0) && s.outputTpsFormatted === '—');
+    const tpsText = (digits) =>
+      isPendingTps
         ? (isEn ? 'Measuring…' : '计算中...')
         : formatMetric(s.outputTps, s.outputTpsFormatted, digits, ' tok/s');
 
@@ -1413,7 +1579,7 @@ export class HudInstance {
       }
       this.setTurnDurationText(compactDur, Boolean(turnsEl?.textContent));
     }
-    if (speedEl) speedEl.textContent = ` · ${tpsText(0)}`;
+    setElText(speedEl, ` · ${tpsText(0)}`);
     if (subagentTagEl) {
       if (subagentRunning) {
         subagentTagEl.textContent = isEn
@@ -1433,10 +1599,13 @@ export class HudInstance {
     const cachePrefixEl = q('#hud-txt-tokens .hud-cache-prefix');
     const cacheLabelEl = q('#hud-txt-tokens .hud-cache-label');
     const cacheValEl = q('#hud-txt-tokens .hud-cache-val');
-    if (tokTotalEl) tokTotalEl.textContent = `${formatCompactCount(t.totalTokens, String(t.totalTokensCompact || '0').replace(/ tok$/, ''))} tok`;
+    setElText(
+      tokTotalEl,
+      `${formatCompactCount(t.totalTokens, String(t.totalTokensCompact || '0').replace(/ tok$/, ''))} tok`
+    );
     if (cachePrefixEl) cachePrefixEl.textContent = isEn ? 'Cache' : '缓存';
     if (cacheLabelEl) cacheLabelEl.textContent = isEn ? ' Hit' : '命中';
-    if (cacheValEl) cacheValEl.textContent = formatPercent(t.cacheHitRate, t.cacheHitRateFormatted, 0);
+    setElText(cacheValEl, formatPercent(t.cacheHitRate, t.cacheHitRateFormatted, 0));
 
     // 3. 更新分段 3 (上下文实况 + 左侧上下文压缩次数徽章)
     const ctxCapsule = q('.capsule-context');
@@ -1470,10 +1639,11 @@ export class HudInstance {
     const ratioClamped = hasContextUsage ? Math.min(1.0, Math.max(0, Number(c.usedRatio) || 0)) : 0;
     const usedCompact = hasContextUsage ? formatCompactCount(c.usedTokens, c.usedTokensCompact) : '—';
     const contextRatio = hasContextUsage ? c.usedRatio : undefined;
-    const pctText = `${hasContextUsage && isRawNumber(contextRatio) && c.isFallbackCapacity ? '~' : ''}${formatPercent(contextRatio, c.usedRatioFormatted, 0)}`;
+    const ctxPctPrefix = hasContextUsage && isRawNumber(contextRatio) && c.isFallbackCapacity ? '~' : '';
+    const pctText = `${ctxPctPrefix}${formatPercent(contextRatio, c.usedRatioFormatted, 0)}`;
 
     if (ctxTxtEl) {
-      ctxTxtEl.textContent = pctText;
+      setElText(ctxTxtEl, pctText);
       ctxTxtEl.setAttribute('data-used-tokens', usedCompact);
     }
 
@@ -1487,10 +1657,6 @@ export class HudInstance {
     }
 
     // 4. 更新 Popover 1 (会话统计 - 采用紧凑数字表示法)
-    const setTxt = (sel, val) => {
-      const el = q(sel);
-      if (el) el.textContent = val;
-    };
     setTxt('#pop-session-title', isEn ? 'Session Stats' : '会话统计');
     setTxt(
       '#pop-session-badge',
@@ -1525,6 +1691,27 @@ export class HudInstance {
         ? durationText(cardTurnSec, 'zh')
         : (s.currentTurnDurationFormatted || '—'));
     setTxt('#val-turn-dur', turnDurFormatted);
+    setTxt('#lbl-ttft-latest', isEn ? 'Latest Step TTFT' : '最近一步 TTFT');
+    const latestStepTtftRawFormatted = isEn ? s.latestStepTtftFormattedEn : s.latestStepTtftFormatted;
+    const hasLatestStepTtft =
+      !unavailable &&
+      isRawNumber(s.latestStepTtftSeconds) &&
+      Boolean(latestStepTtftRawFormatted) &&
+      latestStepTtftRawFormatted !== '—';
+    const latestStepTtftText = hasLatestStepTtft
+      ? formatMetric(s.latestStepTtftSeconds, latestStepTtftRawFormatted, 2, isEn ? 's' : ' 秒')
+      : '—';
+    setTxt('#val-ttft-latest', latestStepTtftText);
+    setTxt('#lbl-tps-latest', isEn ? 'Latest Step TPS' : '最近一步 TPS');
+    const hasLatestStepTps =
+      !unavailable &&
+      isRawNumber(s.latestStepOutputTps) &&
+      Boolean(s.latestStepOutputTpsFormatted) &&
+      s.latestStepOutputTpsFormatted !== '—';
+    const latestStepTpsText = hasLatestStepTps
+      ? formatMetric(s.latestStepOutputTps, s.latestStepOutputTpsFormatted, 2, ' tok/s')
+      : '—';
+    setTxt('#val-tps-latest', latestStepTpsText);
     const modelTurnSec = durationText(Number(s.currentTurnModelDurationSeconds || 0), isEn ? 'en' : 'zh');
     const toolTurnSec = durationText(Number(s.currentTurnToolDurationSeconds || 0), isEn ? 'en' : 'zh');
     q('#val-turn-dur')?.setAttribute(
@@ -1555,6 +1742,12 @@ export class HudInstance {
     q('#val-tps')?.setAttribute('aria-description', isEn
       ? 'Calculated from host generation time, including waiting time.'
       : '按宿主生成时间计算，包含等待时间。');
+    q('#val-ttft-latest')?.setAttribute('aria-description', isEn
+      ? 'Time to first token of the latest completed foreground model step.'
+      : '最近一次已完结前台模型步的首字延迟（TTFT）。');
+    q('#val-tps-latest')?.setAttribute('aria-description', isEn
+      ? 'Output speed of the latest completed foreground model step.'
+      : '最近一个已完结前台模型步的输出速度。');
 
     const subagentRow = q('#row-subagent-status');
     const subStepsCount = Math.max(0, Number(s.subagentSteps) || 0);
@@ -1626,9 +1819,35 @@ export class HudInstance {
       }
     }
 
+    const formatUsdDisplay = (usd, formatted) => {
+      if (unavailable) return '—';
+      if (typeof formatted === 'string' && formatted && formatted !== '—') return formatted;
+      if (isRawNumber(usd) && usd >= 0) {
+        if (usd === 0) return '~$0.00';
+        return usd < 0.01 ? `~$${usd.toFixed(4)}` : `~$${usd.toFixed(2)}`;
+      }
+      return '—';
+    };
+    setTxt('#lbl-est-cost', isEn ? 'Estimated Cost' : '估算费用');
+    setTxt('#val-est-cost', formatUsdDisplay(t.estimatedCostUsd, t.estimatedCostFormatted));
+    setTxt('#lbl-cache-saved', isEn ? 'Cache Saved' : '缓存节省');
+    setTxt('#val-cache-saved', formatUsdDisplay(t.cacheSavedUsd, t.cacheSavedFormatted));
+    q('#val-est-cost')?.setAttribute(
+      'aria-description',
+      isEn
+        ? 'Estimated API cost computed per step from matched model pricing tiers.'
+        : '按各模型步实际匹配费率区间估算的 API 等效费用。'
+    );
+    q('#val-cache-saved')?.setAttribute(
+      'aria-description',
+      isEn
+        ? 'Estimated input cost saved via prompt cache reads.'
+        : '通过上下文缓存读取所节省的等效输入费用估算。'
+    );
+
     // 6. 更新 Popover 3 (当前上下文实况 - 100% 真实底层数据)
     setTxt('#pop-ctx-prefix', isEn ? 'Current Context ' : '当前上下文 ');
-    setTxt('#pop-ctx-pct', `${hasContextUsage && isRawNumber(contextRatio) && c.isFallbackCapacity ? '~' : ''}${formatPopoverPercent(contextRatio, c.usedRatioFormatted)}`);
+    setTxt('#pop-ctx-pct', `${ctxPctPrefix}${formatPopoverPercent(contextRatio, c.usedRatioFormatted)}`);
     const capacityText = isRawNumber(c.capacityTokens) && c.capacityTokens > 0
       ? `${c.isFallbackCapacity ? '~' : ''}${formatDetailCompactNumber(c.capacityTokens)}` : '—';
     const usedText = hasContextUsage && isRawNumber(c.usedTokens) ? formatDetailCompactNumber(c.usedTokens) : '—';
@@ -1780,9 +1999,10 @@ export class HudInstance {
       setTxt('#hud-txt-session .hud-turns', '');
       this.setTurnDurationText(sessionEmptyLabel, false);
       setTxt('#hud-txt-session .hud-speed', '');
-      for (const sel of ['#hud-txt-tokens .hud-tok-total','#hud-txt-tokens .hud-cache-val','#hud-txt-context','#pop-session-badge','#pop-tokens-badge','#val-cache-hit','#val-uncached-in','#val-cached-read','#val-output-tok','#val-model-dur','#val-tool-dur','#val-ttft','#val-tps','#val-turn-dur','#val-ctx-peak']) setTxt(sel, '—');
+      q('#val-tps-latest')?.removeAttribute('hidden');
+      for (const sel of ['#hud-txt-tokens .hud-tok-total','#hud-txt-tokens .hud-cache-val','#hud-txt-context','#pop-session-badge','#pop-tokens-badge','#val-cache-hit','#val-uncached-in','#val-cached-read','#val-output-tok','#val-est-cost','#val-cache-saved','#val-model-dur','#val-tool-dur','#val-ttft','#val-tps','#val-ttft-latest','#val-tps-latest','#val-turn-dur','#val-ctx-peak']) setTxt(sel, '—');
     }
-    if (this.activePopoverId) this.repositionActivePopover();
+    if (this.activePopoverId) this.repositionActivePopover(false);
   }
 
   bindEvents(targetComposer) {
@@ -1883,7 +2103,7 @@ export class HudInstance {
     }
 
     if (this.activePopoverId) {
-      this.repositionActivePopover();
+      this.repositionActivePopover(true);
     }
   }
 
@@ -1899,7 +2119,7 @@ export class HudInstance {
       }
     }
     if (this.activePopoverId) {
-      this.repositionActivePopover();
+      this.repositionActivePopover(true);
     }
   }
 
@@ -2013,7 +2233,7 @@ export class HudInstance {
     });
 
     // 先在未激活过渡态完成定位与祖先包含块校准，触发一次布局后再附加 is-visible 以保留 130ms 入场过渡动画
-    this.repositionActivePopover();
+    this.repositionActivePopover(true);
     const activePop = this.shadow.querySelector(`#hud-popover-${id}`);
     if (activePop && activePop.classList) {
       void activePop.offsetWidth;
@@ -2021,7 +2241,7 @@ export class HudInstance {
     }
   }
 
-  repositionActivePopover() {
+  repositionActivePopover(force = false) {
     if (!this.shadow || !this.activePopoverId) return;
     const id = this.activePopoverId;
     const capsule = this.shadow.querySelector(`.capsule[data-capsule-id="${id}"]`);
@@ -2046,7 +2266,7 @@ export class HudInstance {
           : 195;
       const pos = calcFn(capsule, standardWidth, measuredHeight, 12, 8, 12);
       if (typeof applyFn === 'function') {
-        applyFn(popover, arrow, pos);
+        applyFn(popover, arrow, pos, { force });
       }
     }
   }
@@ -2055,6 +2275,10 @@ export class HudInstance {
     this.activePopoverId = null;
     this.pinnedPopoverId = null;
     if (!this.shadow || typeof this.shadow.querySelectorAll !== 'function') return;
+    const resetGeoFn =
+      typeof resetPopoverGeometryCache === 'function'
+        ? resetPopoverGeometryCache
+        : globalThis.__GRAVITYBOX_HUD_POPOVER__?.resetPopoverGeometryCache;
     const capsules = this.shadow.querySelectorAll('.capsule');
     capsules.forEach((cap) => {
       cap.setAttribute('aria-expanded', 'false');
@@ -2067,6 +2291,9 @@ export class HudInstance {
           pop.hidePopover();
         }
       } catch {}
+      if (typeof resetGeoFn === 'function') {
+        resetGeoFn(pop);
+      }
       if (pop.classList) pop.classList.remove('is-visible');
       pop.setAttribute('hidden', '');
     });

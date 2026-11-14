@@ -4,7 +4,7 @@ import { createServer } from 'node:http';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { UsageStatsManager } from '../dist/usage.js';
+import { UsageStatsManager, resolveDatabaseModelFullName } from '../dist/usage.js';
 import { resolvePricingForTimestamp, calculateEstimatedUsd, matchPricingKeys } from '../dist/pricing.js';
 import { ProtobufWriter } from '../dist/protobuf.js';
 import { MODEL_PRICES } from '../dist/model-catalog.js';
@@ -313,4 +313,73 @@ test('已下架历史模型从价格基准过滤后，历史 SQLite 用量费用
   assert.equal(byModel.get('gemini-3.8-flash-n')?.estimated_usd, 0.75);
   assert.equal(byModel.get('gemini-4-hydrogen-xhigh')?.estimated_usd, 1.5);
   assert.equal(summary.all_time.estimated_usd, 4.75);
+});
+
+test('Orchestrator 双阶段模型识别与合并计费（Argon / Carbon + 执行阶段 Flash Worker）', async t => {
+  // 1. resolveDatabaseModelFullName 映射验证
+  assert.equal(resolveDatabaseModelFullName('gemini-pro-orchestrator-g1-pro', 'Orchestrator (Argon)', 1668), 'gemini-4-argon');
+  assert.equal(resolveDatabaseModelFullName('gemini-pro-orchestrator-g1-pro', 'Orchestrator (Carbon)', 1667), 'gemini-4-carbon');
+  assert.equal(resolveDatabaseModelFullName('gemini-pro-orchestrator-g1-pro', null), 'gemini-4-argon');
+  assert.equal(resolveDatabaseModelFullName('gemini-flash-worker-agy', 'Gemini Flash', 1669), 'gemini-3.8-flash');
+  assert.equal(resolveDatabaseModelFullName('', 'Gemini Flash', 1669), 'gemini-3.8-flash');
+
+  // 2. matchPricingKeys 别名兜底验证
+  assert.equal(matchPricingKeys('gemini-pro-orchestrator-g1-pro'), 'gemini-4-argon');
+  assert.equal(matchPricingKeys('Orchestrator (Argon)'), 'gemini-4-argon');
+  assert.equal(matchPricingKeys('Orchestrator (Carbon)'), 'gemini-4-carbon');
+  assert.equal(matchPricingKeys('gemini-flash-worker-agy'), 'gemini-3.8-flash');
+  assert.equal(matchPricingKeys('Gemini Flash'), 'gemini-3.8-flash');
+
+  // 3. 端到端 SQLite 扫描 + 合并归类与计费验证
+  const temp = await mkdtemp(join(tmpdir(), 'gravitybox-orchestrator-usage-'));
+  t.after(() => rm(temp, { recursive: true, force: true }));
+  const convDir = join(temp, 'antigravity', 'conversations');
+  await mkdir(convDir, { recursive: true });
+  const dbPath = join(convDir, 'orchestrator-session.db');
+
+  const novSec = Math.floor(Date.parse('2026-11-14T12:00:00Z') / 1000);
+  const mkGenBlob = (modelEnum, modelId, displayLabel, inputTok, outputTok, cachedTok, stamp) => {
+    const usageMsg = Buffer.concat([
+      ProtobufWriter.encodeVarintField(1, modelEnum),
+      ProtobufWriter.encodeVarintField(2, inputTok),
+      ProtobufWriter.encodeVarintField(3, outputTok),
+      ProtobufWriter.encodeVarintField(5, cachedTok),
+    ]);
+    const timing = ProtobufWriter.encodeLengthDelimited(4, ProtobufWriter.encodeVarintField(1, stamp));
+    const wrapped = Buffer.concat([
+      ProtobufWriter.encodeVarintField(3, modelEnum),
+      ProtobufWriter.encodeString(19, modelId),
+      ProtobufWriter.encodeString(21, displayLabel),
+      ProtobufWriter.encodeLengthDelimited(4, usageMsg),
+      ProtobufWriter.encodeLengthDelimited(9, timing),
+    ]);
+    return ProtobufWriter.encodeLengthDelimited(1, wrapped).toString('hex');
+  };
+
+  await execFileAsync('/usr/bin/sqlite3', [
+    dbPath,
+    `CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER, metadata BLOB, status INTEGER, step_payload BLOB);
+     CREATE TABLE gen_metadata (idx INTEGER PRIMARY KEY, data BLOB);
+     INSERT INTO gen_metadata (idx, data) VALUES (1, X'${mkGenBlob(1668, 'gemini-pro-orchestrator-g1-pro', 'Orchestrator (Argon)', 1_000_000, 100_000, 0, novSec)}');
+     INSERT INTO gen_metadata (idx, data) VALUES (2, X'${mkGenBlob(1667, 'gemini-pro-orchestrator-g1-pro', 'Orchestrator (Carbon)', 500_000, 50_000, 0, novSec)}');
+     INSERT INTO gen_metadata (idx, data) VALUES (3, X'${mkGenBlob(1669, 'gemini-flash-worker-agy', 'Gemini Flash', 1_000_000, 100_000, 0, novSec)}');
+     INSERT INTO gen_metadata (idx, data) VALUES (4, X'${mkGenBlob(1528, 'gemini-4-argon', 'Gemini 4 Argon (High)', 500_000, 0, 0, novSec)}');`,
+  ]);
+
+  const manager = new UsageStatsManager({ geminiDir: temp, stateDir: temp });
+  const summary = await manager.getUsageSummary(true);
+  assert.equal(summary.all_time.unpriced_models, 0, 'Orchestrator 双阶段模型必须全部成功计价');
+  assert.equal(summary.all_time.priced_models, 3);
+  const byModel = new Map(summary.all_time.by_model.map(r => [r.model, r]));
+
+  // Argon: (1M + 0.5M) input @ $2.0 = $3.0 + 0.1M output @ $10.0 = $1.0 => $4.0
+  assert.equal(byModel.get('gemini-4-argon')?.request_count, 2);
+  assert.equal(byModel.get('gemini-4-argon')?.estimated_usd, 4.0);
+  // Carbon: 0.5M input @ $2.0 = $1.0 + 0.05M output @ $10.0 = $0.5 => $1.5
+  assert.equal(byModel.get('gemini-4-carbon')?.request_count, 1);
+  assert.equal(byModel.get('gemini-4-carbon')?.estimated_usd, 1.5);
+  // Execution Worker (Gemini Flash -> gemini-3.8-flash): 1M input @ $0.75 + 0.1M output @ $3.75 = $1.125
+  assert.equal(byModel.get('gemini-3.8-flash')?.request_count, 1);
+  assert.equal(byModel.get('gemini-3.8-flash')?.estimated_usd, 1.125);
+  assert.equal(summary.all_time.estimated_usd, 6.625);
 });

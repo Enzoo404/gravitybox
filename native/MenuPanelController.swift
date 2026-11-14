@@ -1137,7 +1137,7 @@ final class MenuPanelController: NSViewController {
                 accountsCardsStack.removeArrangedSubview($0)
                 $0.removeFromSuperview()
             }
-            let emptyLbl = text(app.reachable ? "尚未保存任何 Google 账号，可前往主界面账号页添加。" : "正在等待本机服务读取账号列表…", size: 11.5, color: Design.secondary, wrap: true)
+            let emptyLbl = text(app.reachable ? "暂无账号，请前往主界面添加" : "正在等待本机服务读取账号列表…", size: 11.5, color: Design.secondary, wrap: true)
             let box = group([emptyLbl], inset: 12)
             accountsCardsStack.addArrangedSubview(box)
             fillWidth(box, in: accountsCardsStack)

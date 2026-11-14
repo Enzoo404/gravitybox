@@ -323,7 +323,8 @@ async function scanDatabaseEventsOnce(ctx: UsageScanContext, dbPath: string, byp
     }
     if(!validTimestamp(timestamp))timestamp=0;
 
-    const assignedModel = resolveDatabaseModelFullName(modelId, label);
+    const modelEnum = ProtobufReader.findVarint(wrapped, 3) ?? ProtobufReader.findVarint(usage, 1) ?? null;
+    const assignedModel = resolveDatabaseModelFullName(modelId, label, modelEnum);
     const lockModelKey = modelId || label || '未知模型';
 
     // Only requests first observed after a positively observed identity can be attributed.

@@ -45,8 +45,11 @@ cd gravitybox
 npm ci
 npm run setup:dev
 
-# 3. 运行完整门禁（自动编译 TypeScript 与静态资源）
+# 3. 运行常规编译与单元/集成测试
 npm test
+
+# 4. 运行完整发布门禁（含浏览器回归、Swift -O 检查与全版本词典门禁）
+npm run verify
 ```
 
 ---
@@ -93,9 +96,9 @@ macOS ARM64 开发环境与 CI 使用固定版本的 Chrome Headless Shell，下
 
 ### 自动化发布门禁 (Release Gate)
 ```bash
-npm test
+npm run verify
 ```
-与 `npm run verify` 共用默认发布流水线：清理孤儿构建产物、编译 TypeScript、合并运行时、核对价格资产、单元/集成及小型原生行为测试、浏览器测试、发行版 Swift 原生编译、全部受支持版本的词典覆盖率门禁。可用 `npm test -- --no-vendor` 显式采用冻结快照校验。词典单项测试在无 vendor 时仅检查最新清单基本结构，全版本快照完整性与覆盖率在发布门禁检查一次。通过后可直接运行 `node tools/package-mac.mjs`，打包器会再次核对源码与产物指纹，无需重复测试。
+完整发布门禁流水线包含：清理孤儿构建产物、编译 TypeScript、合并运行时、核对价格资产、单元/集成及小型原生行为测试（`npm test` 聚焦这部分日常开发验证）、无头浏览器测试（`npm run test:browser`）、发行版 Swift 原生编译（`-O`）以及全部受支持版本的词典覆盖率门禁。可通过 `node tools/verify.mjs --target-app-version <x.y.z>` 做单版本定向验证，或默认自动对历史冻结版本启用免 vendor 校验。通过后可直接运行 `node tools/package-mac.mjs`（或 `npm run package:mac`），打包器会再次核对源码与产物指纹。
 
 ---
 
@@ -119,7 +122,7 @@ npm test
 1. Fork 官方仓库至个人账号。
 2. 基于 `main` 分支拉取开发分支（例如 `feat/your-feature-name`）。
 3. 编写代码并增加对应的单元测试或浏览器测试。
-4. 运行 `npm test`，确保完整门禁通过，无需再重复运行 `npm run verify`。
+4. 运行 `npm test`（日常单测）与 `npm run verify`（提交发布相关改动时），确保完整门禁通过。
 5. 推送至个人分支并向 `Enzoo404/gravitybox:main` 发起 Pull Request。
 6. CI 自动化检查通过后，核心维护者将对 PR 进行 Review 并合并。
 

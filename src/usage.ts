@@ -374,7 +374,7 @@ export class UsageStatsManager {
       const raw = JSON.parse(await readFile(this.persistCachePath, 'utf8'));
       if (raw && raw.version === 3 && typeof raw.entries === 'object' && raw.entries !== null) {
         for (const [k, v] of Object.entries(raw.entries as Record<string, any>)) {
-          if (v && typeof v.mtimeMs === 'number' && typeof v.size === 'number' && Array.isArray(v.events) && v.events.every((e: GenerationEvent) => typeof e.event_key === 'string') && !v.hasError && !this.fileCache.has(k)) {
+          if (v && typeof v.mtimeMs === 'number' && typeof v.size === 'number' && Array.isArray(v.events) && v.events.every((e: GenerationEvent) => typeof e.event_key === 'string' && !/\borchestrator\b|^gemini-flash-worker|^MODEL_PLACEHOLDER_M66[789]$|^Gemini\s+Flash$/i.test(e.model)) && !v.hasError && !this.fileCache.has(k)) {
             this.setFileCacheEntry(k, v);
           }
         }
@@ -436,6 +436,9 @@ export class UsageStatsManager {
           )
         );
         if (validEvents.length !== entry.events.length) throw Error('归档账本含无效事件');
+        for (const e of validEvents) {
+          e.model = resolveDatabaseModelFullName(e.model, null);
+        }
         this.archivedByDb.set(key, {
           archivedAt: typeof entry.archivedAt === 'string' ? entry.archivedAt : new Date(0).toISOString(),
           generationsScanned: Number.isFinite(entry.generationsScanned) ? Number(entry.generationsScanned) : validEvents.length,
@@ -559,6 +562,7 @@ export class UsageStatsManager {
           continue;
         }
         if (event.account_confidence === 'legacy') this.storageWarnings.add('旧JSON的账号归属缺少确证，已保留原件，仅计入全部账号；可在账本预览中核对');
+        event.model = resolveDatabaseModelFullName(event.model, null);
         this.usageLedgerEvents.set(event.event_key!, event);
       }
     } catch {

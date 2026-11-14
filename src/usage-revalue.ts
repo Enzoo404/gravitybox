@@ -4,6 +4,7 @@ import { join, dirname } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { aggregateLedger, type AggregateOptions } from './usage-aggregate.js';
 import { matchPricingKeys, resolvePricingForTimestamp } from './pricing.js';
+import { resolveDatabaseModelFullName } from './usage-types.js';
 function digest(value: unknown): string { return createHash('sha256').update(JSON.stringify(value)).digest('hex'); }
 function feesDigest(db: DatabaseSync): string {
     const hash = createHash('sha256');
@@ -82,7 +83,12 @@ export function revalueLedger(db: DatabaseSync, path: string, options: Aggregate
             const remove = next.prepare('DELETE FROM rate_locks WHERE event_key=?');
             for (const row of next.prepare('SELECT e.event_key,e.payload,l.unit_price,l.usd FROM events e LEFT JOIN rate_locks l ON l.event_key=e.event_key').iterate()) {
                 const event = JSON.parse(String(row.payload));
-                const price = resolvePricingForTimestamp(options.prices[event.model] ?? options.prices[matchPricingKeys(event.model)], event.timestamp_seconds, event.model);
+                const normalizedModel = resolveDatabaseModelFullName(event.model, null);
+                const price = resolvePricingForTimestamp(
+                    options.prices[normalizedModel] ?? options.prices[matchPricingKeys(normalizedModel)],
+                    event.timestamp_seconds,
+                    normalizedModel
+                );
                 if (!price) {
                     unknown++;
                     continue;

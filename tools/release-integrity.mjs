@@ -27,6 +27,9 @@ export async function sourceDigest(root) {
   for (const directory of ['src','runtime','native','tools','test','dict','ui-strings','assets','licenses']) await walk(directory);
   if (await exists(join(root, 'vendor'))) await walk('vendor');
   files.push('package.json','package-lock.json','tsconfig.json','README.md','THIRD_PARTY_NOTICES.md');
+  for (const doc of ['LICENSE', 'SECURITY.md']) {
+    if (await exists(join(root, doc))) files.push(doc);
+  }
   const hash = createHash('sha256'); for (const file of files.sort()) hash.update(file).update('\0').update(await readFile(join(root,file))).update('\0'); return hash.digest('hex');
 }
 

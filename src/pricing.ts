@@ -131,6 +131,7 @@ export function matchPricingKeys(modelName: string): string {
   if (Object.hasOwn(MODEL_PRICE_ALIASES, modelName)) return MODEL_PRICE_ALIASES[modelName]!;
   // Only audited aliases may inherit a public base price. Custom/experimental suffixes stay unknown.
   const lower = normalizeModelId(modelName);
+  if (Object.hasOwn(MODEL_PRICE_ALIASES, lower)) return MODEL_PRICE_ALIASES[lower]!;
   for (const key of SORTED_DEFAULT_PRICE_KEYS) {
     if (lower === key) return key;
     if (lower.startsWith(key + '-') && /^(?:xhigh|extra-high|extra-low|high|medium|low|thinking|latest|preview|trial|\d{8}|\d{4}-\d{2}-\d{2}|\d{3})(?:-thinking)?(?:-\d{2}-\d{2})?$/.test(lower.slice(key.length + 1))) return key;

@@ -47,7 +47,6 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPopo
     var cachePage: CachePage?
     var preferencesController: PreferencesController?
     var aboutPage: AboutPage?
-    var updateSheet: UpdateSheetController?
     var cachedAccounts: [[String: Any]] = []
     var activeAccountId: String = ""
     var pendingAccountTaskId: String?

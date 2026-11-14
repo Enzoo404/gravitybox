@@ -153,7 +153,7 @@ final class CachePage: NSObject {
 
     // Footer Recovery Card Controls
     let recoveryTitleLabel = text("废纸篓安全恢复", size: 13, weight: .semibold, color: .labelColor)
-    let recoverySubtitleLabel = text("清理项均移入系统废纸篓并保留恢复点，支持一键原位还原", size: 11, color: Design.secondary)
+    let recoverySubtitleLabel = text("清理项移入废纸篓，支持一键原位还原", size: 11, color: Design.secondary)
     let feedbackLabel = text("", size: 11.5, color: Design.secondary, wrap: true)
 
     // State
@@ -902,7 +902,7 @@ final class CachePage: NSObject {
                     minorGroupCheckbox = groupCheck
 
                     let gTitle = text("其余 \(minorSafeNames.count) 项底层编译与图形缓存", size: 13, weight: .semibold, color: .labelColor)
-                    let gSub = text("V8、Metal、WebGPU 等细碎加速缓存（可展开逐项勾选）", size: 11, color: Design.secondary)
+                    let gSub = text("V8、Metal、WebGPU 等无损加速缓存", size: 11, color: Design.secondary)
                     gSub.maximumNumberOfLines = 1
                     gSub.lineBreakMode = .byTruncatingTail
                     let gCaptions = vertical([gTitle, gSub], spacing: 2)
@@ -1063,7 +1063,7 @@ final class CachePage: NSObject {
                 : "近期"
             let restored = latestSnap["restoredAt"] != nil
             recoveryTitleLabel.stringValue = restored ? "最近清理（\(timeStr) · 已恢复）" : "废纸篓安全恢复"
-            recoverySubtitleLabel.stringValue = "清理项移入系统废纸篓并保留恢复点，支持一键原位还原"
+            recoverySubtitleLabel.stringValue = "清理项移入废纸篓，支持一键原位还原"
             recoverySubtitleLabel.toolTip = nil
             restoreLatestButton.isHidden = true
         } else {
@@ -1071,7 +1071,7 @@ final class CachePage: NSObject {
             snapshotPopup.removeAllItems()
             snapshotPopup.isHidden = true
             recoveryTitleLabel.stringValue = "废纸篓安全恢复"
-            recoverySubtitleLabel.stringValue = "清理项移入系统废纸篓并保留恢复点，支持一键原位还原"
+            recoverySubtitleLabel.stringValue = "清理项移入废纸篓，支持一键原位还原"
             recoverySubtitleLabel.toolTip = nil
             restoreLatestButton.isHidden = true
         }

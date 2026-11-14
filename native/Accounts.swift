@@ -810,7 +810,7 @@ final class AccountsPage: NSObject {
                     EmptyStateView(
                         icon: "person.crop.circle.badge.plus",
                         title: "尚未保存任何 Google 账号",
-                        subtitle: "保存 Antigravity 当前账号，或通过 Google 授权登录。",
+                        subtitle: "导入当前账号或通过 Google 授权登录",
                         buttonTitle: "添加账号…",
                         target: self,
                         action: #selector(addAccount)

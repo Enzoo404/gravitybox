@@ -109,7 +109,7 @@
 - **Instant toggle & clean fallback**: Switch localization on or off with millisecond responsiveness, reverting instantly to pristine stock English without restarting Antigravity.
 
 ### 2. ⚡️ In-IDE Conversation Telemetry HUD
-- **Tri-capsule status bar embedded right into the chat input**: Glances performance directly above your prompt editor;
+- **Tri-capsule status bar embedded right into the chat input**: Glances performance directly below your prompt editor;
 - **Essential real-time telemetry**:
   - **Turns & Latency**: Tracks turn numbers, agent tool execution steps, and **TTFT (Time-to-First-Token)**;
   - **Throughput Velocity**: Calculates true live **TPS (Tokens Per Second)** during streaming;
@@ -145,7 +145,7 @@
 Constructed natively with Swift / AppKit for 60 FPS performance and seamless macOS Light / Dark mode transitions:
 
 - **Menu Bar Quick Panel**: Resides permanently in the macOS menu bar with lightweight tabs for **Usage**, **Quotas**, and **Accounts**;
-- **Main Console**: A full-featured desktop window with a frosted-glass sidebar providing deep analytical views (`⌘1` Overview, `⌘2` Accounts, `⌘3` Usage, `⌘4` Settings).
+- **Main Console**: A full-featured desktop window with a frosted-glass sidebar providing deep analytical views (`⌘1` Overview, `⌘2` Accounts, `⌘3` Usage, `⌘4` Settings, `⌘5` About).
 
 ---
 
@@ -169,7 +169,7 @@ Constructed natively with Swift / AppKit for 60 FPS performance and seamless mac
 ### 2. Getting Started
 1. **Enable Localization**: Launch GravityBox, toggle **"界面汉化 (UI Localization)"** in the main window or menu bar, and Antigravity will instantly render in Chinese;
 2. **Onboard Active Account**: In the Accounts tab, click **"Add Account... -> Save Current Account"** to immediately monitor quotas;
-3. **Experience the Telemetry HUD**: Start any conversation in Antigravity to see live latency and velocity metrics above the prompt input.
+3. **Experience the Telemetry HUD**: Start any conversation in Antigravity to see live latency and velocity metrics below the prompt input.
 
 <details>
 <summary><strong>⚙️ Optional Configuration: Google OAuth Credentials for Standby Refresh (Click to expand)</strong></summary>
@@ -238,7 +238,7 @@ graph TD
     classDef ext fill:#F8FAFC,stroke:#64748B,stroke-width:1.5px,color:#0F172A;
 
     subgraph NativeUI["Native Frontend (Swift / AppKit - 60 FPS)"]
-        MW["Main Console (Overview / Accounts / Usage / Settings)"]:::native
+        MW["Main Console (Overview / Accounts / Usage / Settings / About)"]:::native
         MB["Menu Bar Panel (Usage / Quotas / Accounts)"]:::native
     end
 
@@ -266,6 +266,7 @@ graph TD
 - **Zero Telemetry**: Completely devoid of analytics, telemetry beacons, or crash reporters. All calculations stay on your Mac;
 - **Strict File Permissions**: Configurations and tokens are kept in `~/Library/Application Support/GravityBox` with `0600` user-only permissions;
 - **Read-Only SQLite Analysis**: Session analysis employs read-only SQLite transactions, ensuring Antigravity database consistency is never compromised;
+- **Transparent Network Boundaries**: Auto-update and pricing sync remain disabled by default; outbound calls only connect to official Google OAuth/quota endpoints on user action, or GitHub Releases and public pricing feeds (GitHub Raw with `cdn.jsdelivr.net` fallback) when explicitly enabled or triggered;
 - **Open & Transparent**: Source code is fully open for community inspection, with release DMG binaries verified via automated SHA-256 sidecars.
 
 ---
@@ -283,10 +284,13 @@ npm ci
 # 2. Check toolchains and local environment
 npm run doctor
 
-# 3. Execute quality gates (compilation, unit tests, Swift checks, headless browser regression)
+# 3. Run compilation, pricing consistency checks, and unit/integration tests
 npm test
 
-# 4. Produce native macOS DMG release installer
+# 4. Run full release gate (unit/integration, headless browser regression, Swift -O check, and dictionary gate)
+npm run verify
+
+# 5. Produce native macOS DMG release installer
 npm run package:mac
 ```
 

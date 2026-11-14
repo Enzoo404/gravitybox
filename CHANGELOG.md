@@ -6,6 +6,25 @@
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-14
+
+### Added
+- **In-IDE Telemetry HUD**：上线 Antigravity 输入框下方三联遥测胶囊（会话概览 / Token 消耗 / 上下文水位）及独立悬浮弹层；支持实时区分模型思考（实心蓝）与工具执行（呼吸蓝）状态、TTFT / 真实 TPS / 本轮用时与模型及工具耗时拆分、高对比度进度条及一键中英文双语独立开关。
+- **HUD Popover Redesign**：会话统计卡片引入虚线分隔总平均与本轮实时数据，新增「本轮输出速度（TPS）」并统一「最近一步（TPS）」等字段为固定占位格式。
+- **Storage & Maintenance v2**：新增存储与维护 v2（三分类缓存扫描、废纸篓软删除、7 天恢复点管理及账本数据维护），默认隔离核心 `state.vscdb` 与凭据。
+- **Pricing / Usage**：新增模型定价同步明细弹窗（`PricingSyncSheetController`），支持查看各官方模型时序定价、执行公开定价表（GitHub Raw / jsDelivr）同步与历史用量账本重估预览/应用。
+- **i18n / Dictionary**：新增对 Google Antigravity `2.31.0`、`2.31.2` 与 `2.32.1` 官方版本的指纹登记、文案抽取与分层词典适配（现已覆盖 `2.23.0` ~ `2.32.1` 全系列受支持版本）。
+- **Packaging / Compliance**：DMG 安装包内补充随附项目根 `LICENSE` 副本并纳入构建完整性校验清单。
+
+### Changed
+- **About & Updater UI**：移除独立更新弹窗（`UpdateSheetController`），将自动更新开关、检查更新、安装提示与版本信息内联整合至「关于 (`⌘5`)」侧栏页面；主窗口侧栏统一精简为 5 页交互结构并同步深浅色实机截图资产。
+- **Usage / Model Normalization**：统一用量看板、账本聚合与账本重估（`revalueLedger`）对 `MODEL_PLACEHOLDER_M667/668/669`、推理强度后缀（`high` / `medium` / `low`）及双阶段 Orchestrator / Worker 模型的原始机器学习模型名解析。
+
+### Fixed
+- **HUD / Duration & Clocks**：使用物理时间区间并集去重并发工具与并行子智能体的耗时统计，隔离历史轮次未闭合步与 `status=6/7` 终止态步对 `inFlight` 时长与活跃计数的污染，并将前端走表速率严格封顶为 1x 物理时间，解决并发工具/子智能体期间计时倍速快进的问题；保留真实活跃长耗时工具的占位 `end` 兼容。
+- **HUD / State Recovery**：修复 HUD 在 `unavailable` / `loading` 状态恢复为 `ready` 后 `#val-tps-latest` 残留 `hidden` 导致永久不可见的缺陷，确保固定占位值正确重置为 `—`。
+- **Accounts / Switch & Quota**：修复切号时 LaunchServices 退出等待与 Antigravity 重启核验重试逻辑；隔离菜单栏配额警告展示状态；将 Node 后端最大老生代内存限制提升至 256MB 以避免超大历史账本分析发生 OOM。
+
 ## [1.0.5] - 2026-11-09
 
 ### Added
@@ -117,7 +136,8 @@
 ### Fixed
 - **Native UI**：保持菜单栏状态图标在不同翻译开关状态下的不透明度一致（`b9921e8`，已包含于 1.0.0）。
 
-[Unreleased]: https://github.com/Enzoo404/gravitybox/compare/v1.0.5...HEAD
+[Unreleased]: https://github.com/Enzoo404/gravitybox/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/Enzoo404/gravitybox/compare/v1.0.5...v1.1.0
 [1.0.5]: https://github.com/Enzoo404/gravitybox/compare/v1.0.4...v1.0.5
 [1.0.4]: https://github.com/Enzoo404/gravitybox/compare/v1.0.3...v1.0.4
 [1.0.3]: https://github.com/Enzoo404/gravitybox/compare/v1.0.2...v1.0.3

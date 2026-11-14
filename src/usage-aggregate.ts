@@ -2,6 +2,7 @@ import type { LedgerEvent } from './usage-ledger.js';
 import type { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
 import type { TokenUsageSummary, TokenUsagePeriod, AvailableAccountUsageOption } from './usage.js';
+import { resolveDatabaseModelFullName } from './usage-types.js';
 import { resolvePricingForTimestamp, matchPricingKeys, calculateEstimatedUsd, priceStatus, type ApiPricingEntry } from './pricing.js';
 
 export function formatLocalDate(d: Date): string {
@@ -67,6 +68,7 @@ export function aggregateLedger(db: DatabaseSync, options: AggregateOptions): To
     try {
         for (const row of db.prepare('SELECT e.payload,l.unit_price,l.usd FROM events e LEFT JOIN rate_locks l ON l.event_key=e.event_key LEFT JOIN event_aliases a ON a.legacy_key=e.event_key WHERE a.legacy_key IS NULL').iterate()) {
             const event = JSON.parse(String(row.payload)) as LedgerEvent;
+            event.model = resolveDatabaseModelFullName(event.model, null);
             if (event.db_file === 'recovered_session.db' || event.db_file === 'recovered_enterprise_session.db' || (!event.source_id && event.db_file && liveFileSet?.has(event.db_file)))
                 continue;
             if (!event.account_id && !event.account_email) { unattributedRequests++; unattributedTokens += event.total_tokens; }

@@ -8,7 +8,7 @@ final class PricingSyncSheetController: NSObject, NSWindowDelegate {
     private let titleLabel = text("价格基准", size: 16, weight: .semibold, color: .labelColor)
     let subtitleLabel = text("", size: 11, color: Design.secondary, wrap: true)
     let summaryPill = pillBadge("", color: Design.blue)
-    let historicalNoteLabel = text("仅展示当前在用官方模型；已下架模型的历史费用仍按当时费率准确核算。", size: 11, color: Design.secondary, wrap: true)
+    let historicalNoteLabel = text("仅展示在用模型；已下架模型按历史费率核算", size: 11, color: Design.secondary, wrap: true)
     private let listStack = NSStackView()
     private let listScroll = NSScrollView()
     let recheckBtn = InlineRefreshButton("重新检查", width: 88, target: nil, action: #selector(recheck))

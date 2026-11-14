@@ -76,6 +76,22 @@ export interface ConversationHudMetrics {
     outputTps: number;
     /** 输出速度格式化展示 (如 "82 tok/s" 或 "—") */
     outputTpsFormatted: string;
+    /** 最近一个有效完结模型步骤的真实输出速度 (tok/s) */
+    latestStepOutputTps?: number;
+    /** 最近一个有效完结模型步骤的输出速度格式化展示 */
+    latestStepOutputTpsFormatted?: string;
+    /** 最近一个有效完结模型步骤的原始 TTFT (秒) */
+    latestStepTtftSeconds?: number;
+    /** 最近一步 TTFT 中文格式化展示 (如 "1.85 秒" 或 "—") */
+    latestStepTtftFormatted?: string;
+    /** 最近一步 TTFT 英文格式化展示 (如 "1.85s" 或 "—") */
+    latestStepTtftFormattedEn?: string;
+    /** 本轮完整有效请求的总输出 / 总耗时，保留未舍入 tok/s；缺失状态见格式化字段 */
+    currentTurnOutputTps?: number;
+    /** 本轮输出速度格式化展示 (如 "118.40 tok/s"、"计算中..." 或 "—") */
+    currentTurnOutputTpsFormatted?: string;
+    /** 本轮已完结并参与测速的模型步数量 */
+    currentTurnTimedSamples?: number;
     /** 本轮总用时 (秒，含模型生成思考与工具调用) */
     currentTurnDurationSeconds?: number;
     /** 本轮总用时中文卡片格式化 (如 "18.4 秒" 或 "—") */
@@ -136,6 +152,18 @@ export interface ConversationHudMetrics {
     candidateTokens?: number;
     /** 候选文本 Token 千分位读数 */
     candidateFormatted?: string;
+    /** 按模型与时序官方费率估算的会话参考总费用 (USD；无已匹配定价步时不设置) */
+    estimatedCostUsd?: number;
+    /** 估算参考总费用格式化展示 (如 "~$0.86" 或 "—") */
+    estimatedCostFormatted?: string;
+    /** 缓存读取相比未缓存输入单价所节省的估算金额 (USD) */
+    cacheSavedUsd?: number;
+    /** 缓存节省金额格式化展示 (如 "~$6.42" 或 "—") */
+    cacheSavedFormatted?: string;
+    /** 已匹配到有效定价并计入费用的模型步数量 */
+    pricedStepCount?: number;
+    /** 是否存在未匹配到定价的模型步（混用无公开费率模型时为 true） */
+    hasUnpricedSteps?: boolean;
   };
 
   /** 模块 3 & Popover 3: 当前上下文实况 (100% 源自最近一步生成记录与会话真实峰值，零虚构 1M/1.9K/7.6K) */

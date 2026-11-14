@@ -248,8 +248,8 @@ import Cocoa
             addSheet.window.contentView?.layoutSubtreeIfNeeded(); pump()
             func findLabels(_ v: NSView) -> [NSTextField] { (v as? NSTextField).map { [$0] } ?? v.subviews.flatMap { findLabels($0) } }
             let addLabels = findLabels(addSheet.window.contentView!)
-            check(addLabels.contains { $0.stringValue == "读取本机已登录的账号" && $0.lineBreakMode != .byTruncatingMiddle && $0.bounds.width >= 150 }, "AddAccountSheet current-account description must not middle-truncate")
-            check(addLabels.contains { $0.stringValue == "在浏览器中完成授权，凭据仅保存在本机" && $0.lineBreakMode != .byTruncatingMiddle && $0.bounds.width >= 180 }, "AddAccountSheet OAuth description must not middle-truncate")
+            check(addLabels.contains { $0.stringValue == "导入当前 Antigravity 登录账号" && $0.lineBreakMode != .byTruncatingMiddle && $0.bounds.width >= 150 }, "AddAccountSheet current-account description must not middle-truncate")
+            check(addLabels.contains { $0.stringValue == "通过浏览器授权，凭据仅存本机" && $0.lineBreakMode != .byTruncatingMiddle && $0.bounds.width >= 140 }, "AddAccountSheet OAuth description must not middle-truncate")
             try capture(addSheet.window.contentView!, output.appendingPathComponent("\(theme)-add-account.png"))
             addSheet.dismiss(); pump()
             let logSheet = UsageLogController(app:assistant,period:"today")
@@ -526,7 +526,7 @@ import Cocoa
         assistant.reachable = true
         menuPanel.selectTab(2, persist: false); pump()
         check(menuPanel.accountsCountLabel.stringValue == "0 个账号", "Empty accounts count must be 0 个账号")
-        check(allTextValues(menuPanel.accountsCardsStack).contains { $0.contains("尚未保存任何 Google 账号") }, "Empty accounts tab must show guidance")
+        check(allTextValues(menuPanel.accountsCardsStack).contains { $0.contains("暂无账号，请前往主界面添加") }, "Empty accounts tab must show guidance")
 
         assistant.reachable = false
         menuPanel.selectTab(2, persist: false); pump()
@@ -677,7 +677,7 @@ import Cocoa
         let aboutPage = assistant.aboutPage!
         check(assistant.names == ["总览", "账号", "用量", "设置", "关于"], "Sidebar must contain 5 top-level tabs ending with 关于")
         check(aboutPage.checkUpdateBtn.title == "检查更新", "About page must display 检查更新 button")
-        check(aboutPage.updateStatusLabel.stringValue.contains("检查更新") || aboutPage.updateStatusLabel.stringValue.contains("最新版本"), "About page must display update status copy when idle/up-to-date")
+        check(aboutPage.statusLine.isHidden && aboutPage.updateStatusLabel.stringValue.isEmpty, "About page must hide idle status subtitle line")
         check(assistant.installUpdateButton?.isHidden == true, "Sidebar installUpdateButton must stay hidden when no update is available")
         assistant.updateManager.simulateRelease(AppReleaseInfo(
             version: "1.1.0",
@@ -705,22 +705,14 @@ import Cocoa
             try capture(window.contentView!, output.appendingPathComponent("\(theme)-hero-install-update-capsule.png"))
         }
         assistant.selectPage(4); pump()
-        aboutPage.openUpdateSheet(); pump()
-        if let updateSheet = assistant.updateSheet {
-            check(updateSheet.primaryBtn.title == "立即更新", "Update sheet must display 立即更新 button when release is available")
-            check(updateSheet.primaryBtn.showsSpinner == false && updateSheet.spinner.isHidden == true, "Update sheet primaryBtn must hide inline spinner when updateAvailable")
-            check(updateSheet.closeBtn.isEnabled == true, "Update sheet closeBtn must be enabled in updateAvailable state")
-            let sheetTexts = allTextValues(updateSheet.sheet.contentView!)
-            check(!sheetTexts.contains { $0.hasPrefix("构建 ") }, "Update sheet header must not display 构建 pill")
-            check(!sheetTexts.contains { $0.contains("正在连接 GitHub Releases") }, "Update sheet header must not display 正在连接 GitHub Releases subtitle")
-            check(!sheetTexts.contains("正在检查") && !sheetTexts.contains("可升级") && !sheetTexts.contains("已是最新"), "Update sheet notes header must not display right-side state capsule")
-            updateSheet.sheet.contentView?.layoutSubtreeIfNeeded()
-            if let titleRow = updateSheet.titleLabel.superview {
-                check(abs(titleRow.frame.midY - updateSheet.githubBtn.frame.midY) <= 1.5, "GravityBox title and version pill must be vertically parallel with GitHub button")
-            }
-            check(updateSheet.changelogTextView.string.contains("• 新增 GitHub Release 检查更新"), "Update sheet must format markdown list items into bullets")
-            check(!updateSheet.changelogTextView.string.contains("```") && !updateSheet.changelogTextView.string.contains("###"), "Update sheet must strip raw markdown code fences and heading hashes")
-            check(!updateSheet.changelogTextView.string.contains("sudo xattr") && !updateSheet.changelogTextView.string.contains("SHA-256"), "Update sheet must strip terminal quarantine commands and SHA-256 footer blocks")
+        check(aboutPage.releaseNotesBtn.title == "更新日志 ↗" && !aboutPage.releaseNotesBtn.isHidden, "About page must display 更新日志 ↗ button when release is available")
+        if let rel = assistant.updateManager.availableRelease {
+            let formattedNotes = AppUpdateManager.formatReleaseNotes(rel.changelog)
+            check(formattedNotes.contains("• 新增 GitHub Release 检查更新"), "Release notes formatter must format markdown list items into bullets")
+            check(!formattedNotes.contains("```") && !formattedNotes.contains("###"), "Release notes formatter must strip raw markdown code fences and heading hashes")
+            check(!formattedNotes.contains("sudo xattr") && !formattedNotes.contains("SHA-256"), "Release notes formatter must strip terminal quarantine commands and SHA-256 footer blocks")
+        }
+        do {
             let updaterScript = AppUpdateManager.buildDetachedUpdaterScript(
                 myPid: 12345,
                 stagedAppPath: "/tmp/staged/GravityBox.app",
@@ -793,72 +785,27 @@ import Cocoa
             try? fm.removeItem(at: state.appendingPathComponent("updates"))
             try? fm.removeItem(at: fakeDownloadsDir)
 
-            for (theme, appearance) in [("light", NSAppearance.Name.aqua), ("dark", NSAppearance.Name.darkAqua)] {
-                updateSheet.sheet.appearance = NSAppearance(named: appearance)
-                updateSheet.sheet.contentView?.layoutSubtreeIfNeeded(); pump()
-                try capture(updateSheet.sheet.contentView!, output.appendingPathComponent("\(theme)-update-sheet-available.png"))
+            check(aboutPage.autoUpdateSwitch.state == .off, "Auto update switch on About page must default to off")
+            aboutPage.autoUpdateSwitch.state = .on
+            aboutPage.toggleAutoUpdate()
+            check(assistant.configuration.value.autoUpdateEnabled == true, "Toggling About autoUpdateSwitch to on must persist autoUpdateEnabled = true")
+            aboutPage.autoUpdateSwitch.state = .off
+            aboutPage.toggleAutoUpdate()
+            check(assistant.configuration.value.autoUpdateEnabled == false, "Toggling About autoUpdateSwitch to off must persist autoUpdateEnabled = false")
+            aboutPage.autoUpdateSwitch.state = .on
+            aboutPage.toggleAutoUpdate()
+            check(assistant.configuration.value.autoUpdateEnabled == true, "Toggling About autoUpdateSwitch back to on must persist autoUpdateEnabled = true")
+
+            assistant.selectPage(0); pump()
+            assistant.checkForUpdatesFromMenu(); pump()
+            check(assistant.currentPage == 4 && window.activeSheetWindow == nil, "checkForUpdatesFromMenu must navigate inline to About page without opening legacy update sheet")
+
+            if let maintSheet = assistant.preferencesController?.maintenanceSheet {
+                maintSheet.show(in: window); pump()
+                check(window.activeSheetWindow === maintSheet.sheet, "Maintenance sheet must attach before dismissAllSheetsAndPopovers verification")
+                assistant.dismissAllSheetsAndPopovers(); pump()
+                check(window.activeSheetWindow == nil, "dismissAllSheetsAndPopovers must cleanly end attached modal sheets")
             }
-            // Verify checking state spinner is embedded inside primaryBtn and exit button is 完成 at bottom-right
-            let savedRelease = assistant.updateManager.availableRelease
-            assistant.updateManager.simulateChecking()
-            updateSheet.sheet.contentView?.layoutSubtreeIfNeeded()
-            check(updateSheet.primaryBtn.title == "检查中…" && updateSheet.closeBtn.title == "完成" && updateSheet.changelogHeading.stringValue == "版本说明", "Checking state must render 版本说明 heading, 完成 button and 检查中… primary button")
-            check(updateSheet.closeBtn.frame.minX > updateSheet.primaryBtn.frame.maxX, "Checking state must place 完成 button at far bottom-right")
-            check(updateSheet.spinner.superview === updateSheet.primaryBtn && !updateSheet.spinner.isHidden, "Checking spinner must be embedded inside primaryBtn")
-            for (theme, appearance) in [("light", NSAppearance.Name.aqua), ("dark", NSAppearance.Name.darkAqua)] {
-                updateSheet.sheet.appearance = NSAppearance(named: appearance)
-                updateSheet.sheet.contentView?.layoutSubtreeIfNeeded(); pump()
-                try capture(updateSheet.sheet.contentView!, output.appendingPathComponent("\(theme)-update-sheet-checking.png"))
-            }
-            assistant.updateManager.simulateRelease(savedRelease)
-            updateSheet.sheet.contentView?.layoutSubtreeIfNeeded()
-            check(updateSheet.primaryBtn.frame.minX > updateSheet.closeBtn.frame.maxX, "Update available state must place primary update action at far bottom-right")
-
-            // Package B: UpdateSheetController 4 core states
-            if let rel = savedRelease {
-                // 1. .downloading state
-                assistant.updateManager.simulateDownloading(rel)
-                updateSheet.renderState()
-                check(updateSheet.closeBtn.title == "后台下载", "Downloading state must offer 后台下载")
-                check(updateSheet.primaryBtn.title == "取消下载" && updateSheet.primaryBtn.showsSpinner == true, "Downloading state must show 取消下载 with spinner")
-                updateSheet.primaryAction()
-
-                // 2. .readyToInstall state
-                let fakeReadyDMG = state.appendingPathComponent("fake-ready.dmg")
-                assistant.updateManager.simulateReadyToInstall(rel, dmgURL: fakeReadyDMG)
-                updateSheet.renderState()
-                check(updateSheet.primaryBtn.title == "立即更新" && updateSheet.primaryBtn.showsSpinner == false, "Ready to install state must show 立即更新 without spinner")
-                check(updateSheet.closeBtn.title == "稍后" && updateSheet.closeBtn.isEnabled == true, "Ready to install closeBtn must be 稍后")
-
-                // 3. .installing state
-                assistant.updateManager.simulateInstalling(rel)
-                updateSheet.renderState()
-                check(updateSheet.primaryBtn.title == "正在安装…" && updateSheet.primaryBtn.isEnabled == false, "Installing state must show disabled 正在安装…")
-                check(updateSheet.closeBtn.isEnabled == false, "Installing state must disable close button")
-                check(updateSheet.windowShouldClose(updateSheet.sheet) == false, "Installing state must prevent window close")
-
-                // 4. .failed state
-                assistant.updateManager.simulateFailed("网络连接中断 (ETIMEDOUT)")
-                updateSheet.renderState()
-                check(updateSheet.changelogHeading.stringValue == "检查结果", "Failed state heading must be 检查结果")
-                check(updateSheet.changelogTextView.string.contains("网络连接中断"), "Failed state changelog must contain error message")
-                check(updateSheet.primaryBtn.title == "重试" && updateSheet.primaryBtn.isEnabled == true, "Failed state primaryBtn must be 重试")
-                check(updateSheet.closeBtn.title == "完成" && updateSheet.closeBtn.isEnabled == true, "Failed state closeBtn must be 完成")
-
-                // Restore available state
-                assistant.updateManager.simulateRelease(rel)
-                updateSheet.renderState()
-            }
-
-            check(updateSheet.autoUpdateSwitch.state == .off, "Auto update switch in sheet footer must default to off")
-            updateSheet.autoUpdateSwitch.state = .off
-            updateSheet.toggleAutoUpdate()
-            check(assistant.configuration.value.autoUpdateEnabled == false, "Toggling autoUpdateSwitch must persist autoUpdateEnabled = false")
-            updateSheet.autoUpdateSwitch.state = .on
-            updateSheet.toggleAutoUpdate()
-            check(assistant.configuration.value.autoUpdateEnabled == true, "Toggling autoUpdateSwitch back must persist autoUpdateEnabled = true")
-            assistant.dismissAllSheetsAndPopovers(); pump()
-            check(window.activeSheetWindow == nil, "dismissAllSheetsAndPopovers must cleanly end attached modal update sheet before update restart")
         }
 
         // Package D: AboutPage states and system specs
@@ -883,27 +830,22 @@ import Cocoa
 
         assistant.updateManager.simulateFailed("本地校验异常")
         aboutPage.refreshUpdateState()
-        check(aboutPage.checkUpdateBtn.isHidden == false && aboutPage.updateMetaLabel.stringValue == "可重试", "About page failed state must show checkUpdateBtn and 可重试")
+        check(aboutPage.checkUpdateBtn.isHidden == false && aboutPage.updateMetaLabel.stringValue == "可重试" && aboutPage.releaseNotesBtn.isHidden, "About page failed state must show checkUpdateBtn, 可重试 and hide releaseNotesBtn")
 
         check(!aboutPage.versionSpecLabel.stringValue.isEmpty, "About page versionSpecLabel must not be empty")
-        check(aboutPage.osSpecLabel.stringValue.contains("arm64"), "About page osSpecLabel must contain arm64")
+        check(aboutPage.versionSpecLabel.stringValue.contains("Antigravity") && !aboutPage.versionSpecLabel.stringValue.contains("Build "), "About page versionSpecLabel must display Antigravity version without Build number")
+        let aboutTexts = allTextValues(aboutPage.view)
+        check(aboutTexts.contains("自动检查更新") && aboutTexts.contains("运行信息") && aboutTexts.contains("目标应用") && aboutTexts.contains("GravityBox 数据目录"), "Simplified About page must render 自动检查更新, 运行信息, 目标应用 and GravityBox 数据目录")
+        check(!aboutTexts.contains("系统环境") && !aboutTexts.contains("构建与环境") && !aboutTexts.contains("本地数据与隐私原则") && !aboutTexts.contains("macOS · arm64") && !aboutTexts.contains { $0.contains("查看历史发行版本") }, "Simplified About page must omit redundant OS, build, privacy, arm64 pill and Releases subtitle rows")
         check(aboutPage.revealDataBtn.title == "在访达中显示", "About page revealDataBtn title must be 在访达中显示")
         check(aboutPage.githubReleasesBtn.title == "GitHub ↗", "About page githubReleasesBtn title must be GitHub ↗")
 
         assistant.updateManager.simulateRelease(nil)
         aboutPage.refreshUpdateState()
         check(!aboutPage.checkUpdateBtn.isHidden && aboutPage.installNowBtn.isHidden, "Clearing available release must restore 检查更新 button on About page")
+        check(!aboutPage.statusLine.isHidden && aboutPage.updateStatusLabel.stringValue == "已是最新版本", "About page must display 已是最新版本 status after checking up-to-date")
         check(assistant.installUpdateButton?.isHidden == true, "Clearing available release must hide sidebar installUpdateButton again")
-        if let updateSheet = assistant.updateSheet {
-            check(updateSheet.closeBtn.isEnabled == true && updateSheet.primaryBtn.isEnabled == true && !updateSheet.primaryBtn.showsSpinner, "Transitioning to upToDate must keep closeBtn and primaryBtn enabled without spinner")
-            check(updateSheet.changelogHeading.stringValue == "当前版本状态", "Update sheet upToDate state must display 当前版本状态 heading")
-            check(updateSheet.changelogTextView.textContainer?.lineFragmentPadding == 0, "Update sheet changelogTextView must have zero lineFragmentPadding for flush-left alignment")
-            for (theme, appearance) in [("light", NSAppearance.Name.aqua), ("dark", NSAppearance.Name.darkAqua)] {
-                updateSheet.sheet.appearance = NSAppearance(named: appearance)
-                updateSheet.sheet.contentView?.layoutSubtreeIfNeeded(); pump()
-                try capture(updateSheet.sheet.contentView!, output.appendingPathComponent("\(theme)-update-sheet-uptodate.png"))
-            }
-        }
+        check(aboutPage.releaseNotesBtn.isHidden && window.activeSheetWindow == nil, "Clearing available release must hide releaseNotesBtn without opening modal update sheet")
         // Verify unified inactive PillBadge styling across neutral/secondary tints
         let lightApp = NSAppearance(named: .aqua)!
         let darkApp = NSAppearance(named: .darkAqua)!

@@ -82,14 +82,43 @@ export function computeUpwardPopoverPosition(
   };
 }
 
+const POPOVER_GEOMETRY_CACHE = typeof WeakMap === 'function' ? new WeakMap() : null;
+
+/**
+ * 清除指定 Popover 的布局几何缓存（应在弹窗隐藏或重新打开时调用）
+ * @param {HTMLElement} popoverEl
+ */
+export function resetPopoverGeometryCache(popoverEl) {
+  if (popoverEl && POPOVER_GEOMETRY_CACHE) {
+    POPOVER_GEOMETRY_CACHE.delete(popoverEl);
+  }
+}
+
 /**
  * 应用 Popover 定位并执行包含块零偏置补偿（应对宿主祖先元素存在 transform / contain 的场景）
  * @param {HTMLElement} popoverEl Popover 外层元素
  * @param {HTMLElement | null} arrowEl 小三角指示元素
  * @param {ReturnType<typeof computeUpwardPopoverPosition>} pos 计算坐标
+ * @param {{ force?: boolean }} [options]
  */
-export function applyPopoverGeometry(popoverEl, arrowEl, pos) {
+export function applyPopoverGeometry(popoverEl, arrowEl, pos, options = {}) {
   if (!popoverEl || !pos) return;
+  const force = Boolean(options?.force);
+  const prevCached = POPOVER_GEOMETRY_CACHE?.get(popoverEl);
+  if (
+    !force &&
+    prevCached &&
+    prevCached.width === pos.width &&
+    prevCached.maxHeight === pos.maxHeight &&
+    prevCached.direction === pos.direction &&
+    Math.abs(prevCached.left - pos.left) <= 3 &&
+    Math.abs((prevCached.top ?? 0) - (pos.top ?? 0)) <= 1 &&
+    Math.abs((prevCached.bottom ?? 0) - (pos.bottom ?? 0)) <= 1 &&
+    Math.abs(prevCached.arrowPixelOffset - pos.arrowPixelOffset) <= 3
+  ) {
+    return;
+  }
+
   popoverEl.style.width = `${pos.width}px`;
   popoverEl.style.maxHeight = `${pos.maxHeight}px`;
   popoverEl.style.left = `${pos.left}px`;
@@ -139,9 +168,22 @@ export function applyPopoverGeometry(popoverEl, arrowEl, pos) {
       }
     }
   }
+
+  if (POPOVER_GEOMETRY_CACHE) {
+    POPOVER_GEOMETRY_CACHE.set(popoverEl, {
+      width: pos.width,
+      maxHeight: pos.maxHeight,
+      left: pos.left,
+      top: pos.top,
+      bottom: pos.bottom,
+      direction: pos.direction,
+      arrowPixelOffset: pos.arrowPixelOffset,
+    });
+  }
 }
 
 globalThis.__GRAVITYBOX_HUD_POPOVER__ = {
   computeUpwardPopoverPosition,
   applyPopoverGeometry,
+  resetPopoverGeometryCache,
 };

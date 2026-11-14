@@ -359,7 +359,7 @@ final class DashboardPage: NSObject {
                 title: "查看更多模型统计",
                 badgeText: "单模型",
                 badgeTint: Design.inactivePill,
-                subtitle: "可在「用量」页查看全部历史趋势与按模型计价明细",
+                subtitle: "前往「用量」页查看全部历史明细",
                 trailingText: "-- Token",
                 trailingTint: Design.secondary
             )
@@ -373,7 +373,7 @@ final class DashboardPage: NSObject {
                 title: "今日暂无模型调用",
                 badgeText: "待运行",
                 badgeTint: Design.inactivePill,
-                subtitle: "在 IDE 中发起请求后，将在此实时呈现活跃模型",
+                subtitle: "在 IDE 发起请求后将在此显示",
                 trailingText: "-- Token",
                 trailingTint: Design.secondary
             )
@@ -384,7 +384,7 @@ final class DashboardPage: NSObject {
                 title: "模型用量明细",
                 badgeText: "用量分析",
                 badgeTint: Design.inactivePill,
-                subtitle: "可在「用量」页查阅完整模型分布与历史统计",
+                subtitle: "前往「用量」页查看完整分布",
                 trailingText: "-- 次",
                 trailingTint: Design.secondary
             )

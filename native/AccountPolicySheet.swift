@@ -164,11 +164,11 @@ final class AccountPolicySheet: NSObject {
         let fields = vertical([
             policyFormRow(title: "推荐排序方式", subtitle: "高阶订阅优先，同等级下按此规则排序", control: strategyPopup),
             divider(),
-            policyFormRow(title: "监测模型范围", subtitle: "按所选模型评估剩余配额并触发推荐", control: modelPopup),
+            policyFormRow(title: "监测模型范围", subtitle: "", control: modelPopup),
             divider(),
-            policyFormRow(title: "触发切换阈值", subtitle: "当前账号剩余配额低于或等于该值时提示", control: percentControl(reserve)),
+            policyFormRow(title: "触发切换阈值", subtitle: "当前配额 ≤ 此值时提示切换", control: percentControl(reserve)),
             divider(),
-            policyFormRow(title: "候选准入下限", subtitle: "备用账号剩余配额至少达到该值才参与推荐", control: percentControl(candidate))
+            policyFormRow(title: "候选准入下限", subtitle: "备用配额 ≥ 此值才参与推荐", control: percentControl(candidate))
         ], spacing: 12)
         for fieldRow in fields.arrangedSubviews { fillWidth(fieldRow, in: fields) }
 
@@ -180,14 +180,8 @@ final class AccountPolicySheet: NSObject {
         errorLabel.isHidden = true
 
         let headerBadge = iconBadge("arrow.triangle.2.circlepath", tint: Design.blue, size: 32)
-        let headerSub = text("当前账号配额偏低时，自动评估并推荐充裕备用账号", size: 11, color: Design.secondary, wrap: true)
-        let titleBlock = vertical([
-            text("智能切换配置", size: 16, weight: .semibold, color: .labelColor),
-            headerSub
-        ], spacing: 2)
-        titleBlock.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        fillWidth(headerSub, in: titleBlock)
-        let heading = horizontal([headerBadge, titleBlock, flexibleSpace()], spacing: 10)
+        let titleLabel = text("智能切换配置", size: 16, weight: .semibold, color: .labelColor)
+        let heading = horizontal([headerBadge, titleLabel, flexibleSpace()], spacing: 10)
         heading.alignment = .centerY
 
         let footer = horizontal([errorLabel, flexibleSpace(), cancel, saveButton], spacing: 8)

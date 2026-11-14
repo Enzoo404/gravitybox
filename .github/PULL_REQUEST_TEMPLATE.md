@@ -16,7 +16,7 @@
 
 提交 PR 前请确认已完成以下检查：
 
-- [ ] 本地运行 `npm test`，通过默认门禁（编译、单元/集成与小型原生行为、浏览器、发行版 Swift 与全版本词典；完整原生 UI 夹具按需执行）
+- [ ] 本地运行 `npm test` 通过常规编译、价格一致性与单元/集成测试（发布或涉及运行时/词典/原生改动时已运行 `npm run verify` 全量门禁；完整原生 UI 夹具按需运行 `npm run test:native-ui`）
 - [ ] 严守隐私与版权底线：未提交任何官方 `vendor/` 二进制包、未包含真实邮箱/Token/本机物理路径等敏感信息
 - [ ] 提交信息遵循 [Conventional Commits](https://www.conventionalcommits.org/) 规范
 

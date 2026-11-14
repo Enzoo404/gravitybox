@@ -387,25 +387,15 @@ extension Assistant {
         }
     }
 
-    @objc func showUpdateSheet() {
-        showPanel()
-        guard let window else { return }
-        if let active = window.activeSheetWindow, active !== updateSheet?.sheet { return }
-        if updateSheet == nil {
-            updateSheet = UpdateSheetController(app: self)
-        }
-        updateSheet?.show(in: window)
-    }
-
     @objc func installUpdateFromSidebar() {
         guard let release = updateManager.availableRelease else {
             checkForUpdatesFromMenu()
             return
         }
-        if let active = window?.activeSheetWindow, active !== updateSheet?.sheet {
+        if window?.activeSheetWindow != nil {
             dismissAllSheetsAndPopovers()
         }
-        showUpdateSheet()
+        showAbout()
         updateManager.installRelease(release)
     }
     func configureAutoUpdateTimer() {
@@ -433,11 +423,11 @@ extension Assistant {
         }
     }
     @objc func checkForUpdatesFromMenu() {
-        if let active = window?.activeSheetWindow, active !== updateSheet?.sheet {
+        if window?.activeSheetWindow != nil {
             dismissAllSheetsAndPopovers()
         }
         showAbout()
-        showUpdateSheet()
+        updateManager.checkForUpdates(silent: false)
     }
     @objc func quit() {
         performQuit()

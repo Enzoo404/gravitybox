@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { HudInstance } from '../runtime/hud-instance.js';
 import { AntigravityHudManager } from '../runtime/hud-manager.js';
+import { applyPopoverGeometry, resetPopoverGeometryCache } from '../runtime/hud-popover.js';
 
 class FakeStyleDeclaration {
   constructor() {
@@ -248,6 +249,12 @@ class FakeShadowRoot {
       '#row-turn-dur',
       '#lbl-turn-dur',
       '#val-turn-dur',
+      '#row-ttft-latest',
+      '#lbl-ttft-latest',
+      '#val-ttft-latest',
+      '#row-tps-latest',
+      '#lbl-tps-latest',
+      '#val-tps-latest',
       '#row-subagent-status',
       '#lbl-subagent-status',
       '#val-subagent-status',
@@ -268,6 +275,12 @@ class FakeShadowRoot {
       '#row-reasoning-tok',
       '#lbl-reasoning-tok',
       '#val-reasoning-tok',
+      '#row-est-cost',
+      '#lbl-est-cost',
+      '#val-est-cost',
+      '#row-cache-saved',
+      '#lbl-cache-saved',
+      '#val-cache-saved',
       '#pop-ctx-prefix',
       '#pop-ctx-pct',
       '#pop-ctx-capacity',
@@ -342,6 +355,10 @@ describe('HUD raw 数值精度与缺值展示', () => {
   const metrics = {
     session: {
       turns: 12, steps: 1234, outputTps: 82.7364, outputTpsFormatted: '82.74 tok/s',
+      latestStepOutputTps: 171.174, latestStepOutputTpsFormatted: '171.17 tok/s',
+      latestStepTtftSeconds: 1.244, latestStepTtftFormatted: '1.24 秒', latestStepTtftFormattedEn: '1.24s',
+      currentTurnOutputTps: 118.404, currentTurnOutputTpsFormatted: '118.40 tok/s',
+      currentTurnTimedSamples: 3,
       averageTtftSeconds: 3.8462, averageTtftFormatted: '3.85 秒',
       modelDurationSeconds: 1348.126, modelDurationFormatted: '22分28秒',
       toolDurationSeconds: 59.999, toolDurationFormatted: '1分',
@@ -359,6 +376,8 @@ describe('HUD raw 数值精度与缺值展示', () => {
       cacheHitRate: 0.96943, cacheHitRateFormatted: '96.94%',
       uncachedInputTokens: 1234567, cachedReadTokens: 59876543, outputTokens: 123457,
       cacheWriteTokens: 1001, reasoningTokens: 12345, candidateTokens: 111112,
+      estimatedCostUsd: 0.423, estimatedCostFormatted: '~$0.42',
+      cacheSavedUsd: 2.154, cacheSavedFormatted: '~$2.15',
     },
     context: {
       hasUsageData: true, usedTokens: 226412, usedTokensCompact: '226.4K',
@@ -387,6 +406,10 @@ describe('HUD raw 数值精度与缺值展示', () => {
       assert.equal(instance.shadow.querySelector('.capsule-context').classList.contains('has-compaction'), true);
       assert.equal(text('#hud-txt-context'), '~113%');
       assert.equal(text('#val-tps'), '82.74 tok/s');
+      assert.equal(text('#lbl-ttft-latest'), languageMode === 'en' ? 'Latest Step TTFT' : '最近一步 TTFT');
+      assert.equal(text('#val-ttft-latest'), languageMode === 'en' ? '1.24s' : '1.24 秒');
+      assert.equal(text('#lbl-tps-latest'), languageMode === 'en' ? 'Latest Step TPS' : '最近一步 TPS');
+      assert.equal(text('#val-tps-latest'), '171.17 tok/s');
       assert.equal(text('#val-turn-dur'), languageMode === 'en' ? '18s' : '18秒');
       assert.equal(text('#val-ttft'), languageMode === 'en' ? '3.85s' : '3.85 秒');
       assert.equal(text('#val-model-dur'), languageMode === 'en' ? '22m28s' : '22分28秒');
@@ -398,6 +421,10 @@ describe('HUD raw 数值精度与缺值展示', () => {
       assert.equal(text('#val-output-tok'), '123K tok');
       assert.equal(text('#val-cache-write'), '1K tok');
       assert.equal(text('#val-reasoning-tok'), '12.3K / 111K tok');
+      assert.equal(text('#lbl-est-cost'), languageMode === 'en' ? 'Estimated Cost' : '估算费用');
+      assert.equal(text('#val-est-cost'), '~$0.42');
+      assert.equal(text('#lbl-cache-saved'), languageMode === 'en' ? 'Cache Saved' : '缓存节省');
+      assert.equal(text('#val-cache-saved'), '~$2.15');
       assert.equal(text('#pop-ctx-pct'), '~113%');
       assert.equal(text('#pop-ctx-capacity'), '226K / ~200K');
       assert.equal(text('#val-seg-sys'), '218K tok');
@@ -410,9 +437,14 @@ describe('HUD raw 数值精度与缺值展示', () => {
       assert.equal(instance.shadow.querySelector('#pop-ctx-track').getAttribute('aria-valuenow'), '100');
       assert.equal(instance.shadow.querySelector('#pop-ctx-track').getAttribute('aria-valuetext'), '113%');
       assert.match(instance.shadow.querySelector('#val-tps').getAttribute('aria-description'), /等待|waiting/);
+      assert.match(instance.shadow.querySelector('#val-ttft-latest').getAttribute('aria-description'), /首字延迟|Time to first token/);
+      assert.match(instance.shadow.querySelector('#val-tps-latest').getAttribute('aria-description'), /最近|latest/);
       assert.match(instance.shadow.querySelector('#val-ttft').getAttribute('aria-description'), /原始|original/);
+      assert.match(instance.shadow.querySelector('#val-est-cost').getAttribute('aria-description'), /费率|pricing/);
+      assert.match(instance.shadow.querySelector('#val-cache-saved').getAttribute('aria-description'), /缓存|cache/);
       const builtHtml = instance.buildHudHtml();
-      assert.equal((builtHtml.match(/class="hud-popover-row"/g) || []).length, 17);
+      assert.equal((builtHtml.match(/class="hud-popover-row"/g) || []).length, 21);
+      assert.equal(builtHtml.includes('hud-popover-divider-dashed'), true);
       assert.equal(builtHtml.includes('hud-data-state'), false, 'HUD 展开卡片不应包含时间与计时请求数行');
       assert.equal(builtHtml.includes('hud-copy-stats'), false, 'HUD 展开卡片不应包含复制精确统计按钮');
       assert.equal(builtHtml.includes('复制精确统计'), false);
@@ -435,27 +467,73 @@ describe('HUD raw 数值精度与缺值展示', () => {
   it('缺失与实测零严格区分，流式 measuring 信号保持双语', () => {
     for (const missing of [null, undefined, NaN, Infinity]) {
       const { text } = render({
-        session: { outputTps: missing, averageTtftSeconds: missing },
-        tokens: { cacheHitRate: missing }, context: { usedRatio: missing },
+        session: {
+          outputTps: missing,
+          latestStepTtftSeconds: missing,
+          latestStepOutputTps: missing,
+          averageTtftSeconds: missing,
+        },
+        tokens: { cacheHitRate: missing, estimatedCostUsd: missing, cacheSavedUsd: missing },
+        context: { usedRatio: missing },
       });
-      for (const selector of ['#val-tps', '#val-ttft', '#val-cache-hit', '#pop-ctx-pct']) {
+      for (const selector of ['#val-tps', '#val-ttft-latest', '#val-tps-latest', '#val-ttft', '#val-cache-hit', '#val-est-cost', '#val-cache-saved', '#pop-ctx-pct']) {
         assert.equal(text(selector), '—');
       }
     }
-    const zero = render({ session: { outputTps: 0, averageTtftSeconds: 0, modelDurationSeconds: 0 },
-      tokens: { cacheHitRate: 0 }, context: { usedRatio: 0 } });
+    const zero = render({
+      session: {
+        outputTps: 0,
+        latestStepTtftSeconds: 0,
+        latestStepTtftFormatted: '0.00 秒',
+        latestStepTtftFormattedEn: '0.00s',
+        latestStepOutputTps: 0,
+        latestStepOutputTpsFormatted: '0.00 tok/s',
+        averageTtftSeconds: 0,
+        modelDurationSeconds: 0,
+      },
+      tokens: {
+        cacheHitRate: 0,
+        estimatedCostUsd: 0,
+        estimatedCostFormatted: '~$0.00',
+        cacheSavedUsd: 0,
+        cacheSavedFormatted: '~$0.00',
+      },
+      context: { usedRatio: 0 },
+    });
     assert.equal(zero.text('#val-tps'), '0.00 tok/s');
+    assert.equal(zero.text('#val-ttft-latest'), '0.00 秒');
+    assert.equal(zero.text('#val-tps-latest'), '0.00 tok/s');
     assert.equal(zero.text('#val-ttft'), '0.00 秒');
     assert.equal(zero.text('#val-model-dur'), '0秒');
     assert.equal(zero.text('#val-cache-hit'), '0%');
+    assert.equal(zero.text('#val-est-cost'), '~$0.00');
+    assert.equal(zero.text('#val-cache-saved'), '~$0.00');
     assert.equal(zero.text('#pop-ctx-pct'), '0%');
-    const absent = render({ session: { outputTps: 0, outputTpsFormatted: '—',
-      averageTtftSeconds: 0, averageTtftFormatted: '—' } });
+    const absent = render({
+      session: {
+        outputTps: 0, outputTpsFormatted: '—',
+        latestStepTtftSeconds: 0, latestStepTtftFormatted: '—', latestStepTtftFormattedEn: '—',
+        latestStepOutputTps: 0, latestStepOutputTpsFormatted: '—',
+        averageTtftSeconds: 0, averageTtftFormatted: '—',
+      },
+      tokens: {
+        estimatedCostFormatted: '—',
+        cacheSavedFormatted: '—',
+      },
+    });
     assert.equal(absent.text('#val-tps'), '—');
+    assert.equal(absent.text('#val-ttft-latest'), '—');
+    assert.equal(absent.text('#val-tps-latest'), '—');
     assert.equal(absent.text('#val-ttft'), '—');
+    assert.equal(absent.text('#val-est-cost'), '—');
+    assert.equal(absent.text('#val-cache-saved'), '—');
     for (const lang of ['zh', 'en']) {
-      const { text } = render({ session: { outputTps: 0, outputTpsFormatted: '计算中...' } }, lang);
+      const { text } = render({
+        session: { outputTps: 0, outputTpsFormatted: '计算中...' },
+      }, lang);
       assert.equal(text('#val-tps'), lang === 'en' ? 'Measuring…' : '计算中...');
+      assert.equal(text('#val-ttft-latest'), '—');
+      assert.equal(text('#val-tps-latest'), '—');
     }
   });
 
@@ -1167,6 +1245,60 @@ describe('HudInstance 与 AntigravityHudManager 生产模块生命周期、垂�
     inst.dispose();
   });
 
+  it('并行多活跃步时（activeModelStepCount=3, activeToolStepCount=5）前端走表严格封顶 1x 物理时钟，不倍速快进', async () => {
+    const inst = new HudInstance({ cascadeId: 'pane-rate-cap', isPrimaryPane: true });
+    const composer = new FakeElement('div');
+    composer.setAttribute('data-testid', 'agent-input-box');
+    inst.mount(composer);
+    const sr = inst.host.shadowRoot;
+
+    inst.switchConversation('conv-rate-cap', 'gemini-3.8-flash', true, false, 0, null, 'executing');
+    inst.updateMetrics({
+      conversationId: 'conv-rate-cap',
+      sessionRevision: inst.getSessionRevision(),
+      metricsSequence: 1,
+      isStreaming: true,
+      activityPhase: 'executing',
+      session: {
+        turns: 1,
+        steps: 10,
+        modelDurationSeconds: 10,
+        modelDurationFormatted: '10秒',
+        modelDurationFormattedEn: '10s',
+        inFlightModelDurationSeconds: 2,
+        activeModelStepCount: 3,
+        toolDurationSeconds: 20,
+        toolDurationFormatted: '20秒',
+        toolDurationFormattedEn: '20s',
+        inFlightToolDurationSeconds: 5,
+        activeToolStepCount: 5,
+        currentTurnDurationSeconds: 17,
+        currentTurnDurationFormatted: '17秒',
+        currentTurnDurationFormattedEn: '17s',
+        currentTurnDurationCompactZh: '本轮 17s',
+        currentTurnDurationCompactEn: 'Turn 17s',
+      },
+      tokens: { totalTokens: 100 },
+      context: { hasUsageData: true, usedRatio: 0.1 },
+    });
+
+    assert.equal(inst.modelClockAnchor.rate, 1);
+    assert.equal(inst.toolClockAnchor.rate, 1);
+    assert.equal(sr.querySelector('#val-model-dur').textContent, '12秒');
+    assert.equal(sr.querySelector('#val-tool-dur').textContent, '25秒');
+
+    await new Promise((resolve) => setTimeout(resolve, 1150));
+    assert.ok(
+      ['13秒', '14秒'].includes(sr.querySelector('#val-model-dur').textContent),
+      `模型用时 1.15s 后应只推进约 1s，不得 3x 快进，实际 ${sr.querySelector('#val-model-dur').textContent}`
+    );
+    assert.ok(
+      ['26秒', '27秒'].includes(sr.querySelector('#val-tool-dur').textContent),
+      `工具用时 1.15s 后应只推进约 1s，不得 5x 快进，实际 ${sr.querySelector('#val-tool-dur').textContent}`
+    );
+    inst.dispose();
+  });
+
   it('独立子智能体分栏 (isSubpane) 采用同一套小圆点状态机语义，且不自报嵌套子智能体', () => {
     const doc = new FakeElement('document');
     doc.body = new FakeElement('body', doc);
@@ -1271,5 +1403,387 @@ describe('HudInstance 与 AntigravityHudManager 生产模块生命周期、垂�
     assert.equal(badge0.getAttribute('data-compaction-tier'), null);
     assert.equal(badge0.classList.contains('is-compaction-warn'), false);
     assert.equal(badge0.classList.contains('is-compaction-danger'), false);
+  });
+
+  it('紧凑指标同步直达渲染、禁用输出速度呼吸态与 Popover 最近一步真实速度副标保持真实与生命周期安全', () => {
+    const prevWindow = globalThis.window;
+    const prevDocument = globalThis.document;
+    const prevRaf = globalThis.requestAnimationFrame;
+    const prevCaf = globalThis.cancelAnimationFrame;
+
+    let nextRafId = 1;
+    const rafQueue = new Map();
+    const fakeRaf = (cb) => {
+      const id = nextRafId++;
+      rafQueue.set(id, cb);
+      return id;
+    };
+    const fakeCaf = (id) => {
+      rafQueue.delete(id);
+    };
+
+    try {
+      const doc = { hidden: false };
+      globalThis.document = doc;
+      globalThis.requestAnimationFrame = fakeRaf;
+      globalThis.cancelAnimationFrame = fakeCaf;
+      globalThis.window = {
+        matchMedia: () => ({ matches: false }),
+        requestAnimationFrame: fakeRaf,
+        cancelAnimationFrame: fakeCaf,
+        innerWidth: 1200,
+        innerHeight: 800,
+        addEventListener() {},
+        removeEventListener() {},
+      };
+
+      const instance = new HudInstance();
+      const host = new FakeElement('div', doc);
+      const shadow = host.attachShadow({ mode: 'open' });
+      host.shadowRoot = shadow;
+      instance.host = host;
+      instance.shadow = shadow;
+      const builtHtml = instance.buildHudHtml();
+      assert.equal((builtHtml.match(/class="hud-popover-row"/g) || []).length, 21);
+      shadow.innerHTML = builtHtml;
+      instance.switchConversation('conv-smooth');
+
+      const baseMetrics = (tps, latestTps, timed, phase, totalTokens = 1000, cacheHitRate = 0.5, usedRatio = 0.25, latestTtft = undefined, estCost = undefined, cacheSaved = undefined) => ({
+        conversationId: 'conv-smooth',
+        sessionRevision: instance.getSessionRevision(),
+        updatedAt: Date.now(),
+        isStreaming: phase !== 'idle',
+        activityPhase: phase,
+        availability: 'ready',
+        session: {
+          turns: 2,
+          steps: 4,
+          compactionCount: 0,
+          modelDurationSeconds: 10,
+          modelDurationFormatted: '10秒',
+          modelDurationFormattedEn: '10s',
+          toolDurationSeconds: 2,
+          toolDurationFormatted: '2秒',
+          toolDurationFormattedEn: '2s',
+          averageTtftSeconds: 1.5,
+          averageTtftFormatted: '1.50 秒',
+          averageTtftFormattedEn: '1.50s',
+          latestStepTtftSeconds: latestTtft,
+          latestStepTtftFormatted: latestTtft !== undefined ? `${latestTtft.toFixed(2)} 秒` : undefined,
+          latestStepTtftFormattedEn: latestTtft !== undefined ? `${latestTtft.toFixed(2)}s` : undefined,
+          outputTps: tps,
+          outputTpsFormatted: timed > 0 ? `${tps.toFixed(2)} tok/s` : phase !== 'idle' ? '计算中...' : '—',
+          currentTurnOutputTps: tps,
+          currentTurnOutputTpsFormatted: timed > 0 ? `${tps.toFixed(2)} tok/s` : phase !== 'idle' ? '计算中...' : '—',
+          currentTurnTimedSamples: timed,
+          latestStepOutputTps: latestTps,
+          latestStepOutputTpsFormatted: latestTps > 0 ? `${latestTps.toFixed(2)} tok/s` : undefined,
+          samples: { timed },
+        },
+        tokens: {
+          totalTokens,
+          totalTokensCompact: `${totalTokens} tok`,
+          totalTokensFormatted: `${totalTokens} tok`,
+          cacheHitRate,
+          cacheHitRateFormatted: `${(cacheHitRate * 100).toFixed(2)}%`,
+          uncachedInputTokens: 500,
+          uncachedInputFormatted: '500 tok',
+          cachedReadTokens: 500,
+          cachedReadFormatted: '500 tok',
+          outputTokens: 200,
+          outputFormatted: '200 tok',
+          estimatedCostUsd: estCost,
+          estimatedCostFormatted: estCost !== undefined ? `~$${estCost.toFixed(2)}` : undefined,
+          cacheSavedUsd: cacheSaved,
+          cacheSavedFormatted: cacheSaved !== undefined ? `~$${cacheSaved.toFixed(2)}` : undefined,
+        },
+        context: {
+          hasUsageData: true,
+          modelId: 'gemini-4-hydrogen',
+          modelDisplayName: 'Gemini 4 Hydrogen',
+          usedTokens: Math.round(100000 * usedRatio),
+          usedTokensCompact: '25K',
+          capacityTokens: 100000,
+          isFallbackCapacity: false,
+          usedRatio,
+          usedRatioFormatted: `${Math.round(usedRatio * 100)}%`,
+          breakdown: {},
+        },
+      });
+
+      const speedEl = shadow.querySelector('#hud-txt-session .hud-speed');
+      const tokEl = shadow.querySelector('#hud-txt-tokens .hud-tok-total');
+      const cacheEl = shadow.querySelector('#hud-txt-tokens .hud-cache-val');
+      const ctxEl = shadow.querySelector('#hud-txt-context');
+      const popTpsEl = shadow.querySelector('#val-tps');
+      const popLatestTtftEl = shadow.querySelector('#val-ttft-latest');
+      const popLatestTtftLbl = shadow.querySelector('#lbl-ttft-latest');
+      const popLatestTpsEl = shadow.querySelector('#val-tps-latest');
+      const popLatestTpsLbl = shadow.querySelector('#lbl-tps-latest');
+      const popEstCostEl = shadow.querySelector('#val-est-cost');
+      const popCacheSavedEl = shadow.querySelector('#val-cache-saved');
+
+      // 1. 首次从 计算中... / 骨架进入无真实读数状态 -> 同步直接写入、不启动 rAF、不挂载呼吸类
+      instance.applyMetricsToDom(baseMetrics(0, 0, 0, 'generating', 0, 0, 0.1));
+      assert.equal(speedEl.textContent, ' · 计算中...');
+      assert.equal(speedEl.classList.contains('is-tps-measuring'), false);
+      assert.equal(popLatestTtftEl.textContent, '—');
+      assert.equal(popLatestTpsEl.textContent, '—', '固定占位行无样本时应展示 —');
+      assert.equal(popEstCostEl.textContent, '—');
+      assert.equal(popCacheSavedEl.textContent, '—');
+      assert.equal(rafQueue.size, 0);
+
+      // 2. 首个真实数值落盘 (44 tok/s, TTFT 1.12s) -> 全部指标同步直达且 generating 期间不开启呼吸类
+      instance.applyMetricsToDom(baseMetrics(44, 44, 1, 'generating', 1000, 0.5, 0.2, 1.12, 0.05, 0.12));
+      assert.equal(speedEl.textContent, ' · 44 tok/s');
+      assert.equal(tokEl.textContent, '1K tok');
+      assert.equal(cacheEl.textContent, '50%');
+      assert.equal(ctxEl.textContent, '20%');
+      assert.equal(popTpsEl.textContent, '44.00 tok/s');
+      assert.equal(popLatestTtftEl.textContent, '1.12 秒');
+      assert.equal(popLatestTpsEl.textContent, '44.00 tok/s', '固定占位方式下即使只有 1 步也固定展示最近一步速度');
+      assert.equal(popEstCostEl.textContent, '~$0.05');
+      assert.equal(popCacheSavedEl.textContent, '~$0.12');
+      assert.equal(speedEl.classList.contains('is-tps-measuring'), false);
+      assert.equal(popTpsEl.classList.contains('is-tps-measuring'), false);
+      assert.equal(rafQueue.size, 0, '禁用数值 Tween 后不得启动 requestAnimationFrame');
+
+      // 3. 工具执行期间 (executing) 与新步骤落盘 (117 tok/s, 最近一步 179.27 tok/s, TTFT 0.85s) 均同步直达终点，无任何过渡帧
+      instance.applyMetricsToDom(baseMetrics(117, 179.27, 7, 'executing', 5000, 0.9, 0.6, 0.85, 0.24, 1.35));
+      assert.equal(speedEl.textContent, ' · 117 tok/s');
+      assert.equal(tokEl.textContent, '5K tok');
+      assert.equal(cacheEl.textContent, '90%');
+      assert.equal(ctxEl.textContent, '60%');
+      assert.equal(popTpsEl.textContent, '117.00 tok/s');
+      assert.equal(popLatestTtftEl.textContent, '0.85 秒');
+      assert.equal(popLatestTpsEl.textContent, '179.27 tok/s');
+      assert.equal(popEstCostEl.textContent, '~$0.24');
+      assert.equal(popCacheSavedEl.textContent, '~$1.35');
+      assert.equal(speedEl.classList.contains('is-tps-measuring'), false);
+      assert.equal(rafQueue.size, 0);
+
+      // 4. 连续更新 (130 tok/s) 与展开 Popover 1 时 (160 tok/s) 同样同步直达终点，切换语言同步更新
+      instance.applyMetricsToDom(baseMetrics(130, 179.27, 8, 'idle', 6000, 0.92, 0.65, 0.91, 0.30, 1.50));
+      assert.equal(speedEl.textContent, ' · 130 tok/s');
+      assert.equal(tokEl.textContent, '6K tok');
+      assert.equal(cacheEl.textContent, '92%');
+      assert.equal(ctxEl.textContent, '65%');
+      assert.equal(rafQueue.size, 0);
+
+      instance.activePopoverId = 'session';
+      const popMetrics = baseMetrics(160, 179.27, 8, 'generating', 6000, 0.92, 0.65, 0.91, 0.30, 1.50);
+      instance.lastMetrics = popMetrics;
+      instance.applyMetricsToDom(popMetrics);
+      assert.equal(popTpsEl.textContent, '160.00 tok/s');
+      assert.equal(speedEl.classList.contains('is-tps-measuring'), false);
+      assert.equal(popTpsEl.classList.contains('is-tps-measuring'), false);
+      assert.equal(rafQueue.size, 0);
+      instance.activePopoverId = null;
+
+      instance.setLanguage('en');
+      assert.equal(popLatestTtftLbl.textContent, 'Latest Step TTFT');
+      assert.equal(popLatestTtftEl.textContent, '0.91s');
+      assert.equal(popLatestTpsLbl.textContent, 'Latest Step TPS');
+      assert.equal(popLatestTpsEl.textContent, '179.27 tok/s');
+      assert.equal(rafQueue.size, 0);
+      instance.setLanguage('zh');
+
+      // 5. unavailable -> ready 恢复路径：#val-tps-latest、#val-ttft-latest、#val-est-cost、#val-cache-saved 必须保持固定占位且不得永久隐藏
+      const loadingMetrics = {
+        ...baseMetrics(0, 0, 0, 'idle', 0, 0, 0),
+        availability: 'loading',
+        session: { ...baseMetrics(0, 0, 0, 'idle', 0, 0, 0).session, turns: 0, steps: 0 },
+      };
+      instance.applyMetricsToDom(loadingMetrics);
+      assert.equal(popLatestTpsEl.hasAttribute('hidden'), false, 'unavailable/loading 分支不得隐藏 #val-tps-latest');
+      assert.equal(popLatestTpsEl.textContent, '—');
+      assert.equal(popLatestTtftEl.textContent, '—');
+      assert.equal(popEstCostEl.textContent, '—');
+      assert.equal(popCacheSavedEl.textContent, '—');
+
+      instance.applyMetricsToDom(baseMetrics(120, 188.8, 9, 'idle', 6500, 0.93, 0.7, 1.42, 0.55, 2.20));
+      assert.equal(popLatestTpsEl.hasAttribute('hidden'), false, '恢复 ready 后 #val-tps-latest 必须保持可见');
+      assert.equal(popLatestTpsEl.textContent, '188.80 tok/s');
+      assert.equal(popLatestTtftEl.textContent, '1.42 秒');
+      assert.equal(popEstCostEl.textContent, '~$0.55');
+      assert.equal(popCacheSavedEl.textContent, '~$2.20');
+
+      instance.switchConversation('conv-other');
+      assert.equal(rafQueue.size, 0);
+      instance.dispose();
+    } finally {
+      globalThis.window = prevWindow;
+      globalThis.document = prevDocument;
+      globalThis.requestAnimationFrame = prevRaf;
+      globalThis.cancelAnimationFrame = prevCaf;
+    }
+  });
+
+  it('展开卡片计时器在双时钟边界、步完结偏小及 DOM 闪断恢复时保持单调稳定不闪回，且无位置变化时不强触发回流', () => {
+    const inst = new HudInstance({ cascadeId: 'pane-anti-flicker', isPrimaryPane: true });
+    const composer = new FakeElement('div');
+    composer.setAttribute('data-testid', 'agent-input-box');
+    inst.mount(composer);
+    const sr = inst.host.shadowRoot;
+
+    // 1. 启动活跃轮次：初始锚点 12.4s，后端随后推来 12.6s（领先 0.2s 且跨过 12.5 四舍五入边界）
+    inst.switchConversation('conv-anti-flicker', 'gemini-3.8-flash', true, false, 0, null, 'generating');
+    inst.updateMetrics({
+      conversationId: 'conv-anti-flicker',
+      sessionRevision: inst.getSessionRevision(),
+      metricsSequence: 1,
+      isStreaming: true,
+      activityPhase: 'generating',
+      session: {
+        turns: 1,
+        steps: 2,
+        modelDurationSeconds: 10,
+        modelDurationFormatted: '10秒',
+        inFlightModelDurationSeconds: 2.4,
+        activeModelStepCount: 1,
+        toolDurationSeconds: 2,
+        toolDurationFormatted: '2秒',
+        inFlightToolDurationSeconds: 0,
+        activeToolStepCount: 0,
+        currentTurnDurationSeconds: 12.4,
+        currentTurnDurationFormatted: '12秒',
+        currentTurnDurationCompactZh: '本轮 12s',
+      },
+      tokens: { totalTokens: 100 },
+      context: { hasUsageData: true, usedRatio: 0.1 },
+    });
+    assert.equal(sr.querySelector('#val-turn-dur').textContent, '12秒');
+
+    // 后端推来 12.6s：syncTurnClock 同步前推并对齐 lastRenderedSec=13，随后立即执行 tickTurnClock 绝不能回退到 12秒
+    inst.updateMetrics({
+      conversationId: 'conv-anti-flicker',
+      sessionRevision: inst.getSessionRevision(),
+      metricsSequence: 2,
+      isStreaming: true,
+      activityPhase: 'generating',
+      session: {
+        turns: 1,
+        steps: 2,
+        modelDurationSeconds: 10,
+        modelDurationFormatted: '10秒',
+        inFlightModelDurationSeconds: 2.4,
+        activeModelStepCount: 1,
+        toolDurationSeconds: 2,
+        toolDurationFormatted: '2秒',
+        inFlightToolDurationSeconds: 0,
+        activeToolStepCount: 0,
+        currentTurnDurationSeconds: 12.6,
+        currentTurnDurationFormatted: '13秒',
+        currentTurnDurationCompactZh: '本轮 13s',
+      },
+      tokens: { totalTokens: 110 },
+      context: { hasUsageData: true, usedRatio: 0.1 },
+    });
+    assert.equal(sr.querySelector('#val-turn-dur').textContent, '13秒');
+    inst.tickTurnClock();
+    assert.equal(sr.querySelector('#val-turn-dur').textContent, '13秒', 'tickTurnClock 不得因双时钟误差把 13秒 闪回 12秒');
+
+    // 2. 模拟前端模型钟先走到 16.8s (17秒)，随后旧模型步落盘完成但宿主耗时仅 15.9s（completedBase 前进且差值 >0.6s），切工具或继续模型步均不可向回跌落
+    inst.modelClockAnchor.anchorMs = Date.now() - 4400; // 12.4 + 4.4 = 16.8s -> 17秒
+    inst.tickTurnClock();
+    assert.equal(sr.querySelector('#val-model-dur').textContent, '17秒');
+    inst.updateMetrics({
+      conversationId: 'conv-anti-flicker',
+      sessionRevision: inst.getSessionRevision(),
+      metricsSequence: 3,
+      isStreaming: true,
+      activityPhase: 'executing',
+      session: {
+        turns: 1,
+        steps: 3,
+        modelDurationSeconds: 15.9,
+        modelDurationFormatted: '16秒',
+        inFlightModelDurationSeconds: 0,
+        activeModelStepCount: 0,
+        toolDurationSeconds: 2,
+        toolDurationFormatted: '2秒',
+        inFlightToolDurationSeconds: 1.0,
+        activeToolStepCount: 1,
+        currentTurnDurationSeconds: 17.0,
+        currentTurnDurationFormatted: '17秒',
+        currentTurnDurationCompactZh: '本轮 17s',
+      },
+      tokens: { totalTokens: 150 },
+      context: { hasUsageData: true, usedRatio: 0.15 },
+    });
+    assert.equal(sr.querySelector('#val-model-dur').textContent, '17秒', '活跃期步骤完结即使差值 >0.6s 也不得倒退闪烁');
+
+    // 3a. 后端仍有活跃步时 DOM 闪断：不回退过期 lastMetrics，保持高水位
+    inst.notifyModelOrStreamingChange(null, false, false, 0, null, 'idle');
+    assert.equal(sr.querySelector('#val-model-dur').textContent, '17秒', 'DOM 闪断时不得用过期 lastMetrics (15.9) 刷低');
+    assert.equal(sr.querySelector('#val-turn-dur').textContent, '17秒');
+    inst.notifyModelOrStreamingChange(null, true, false, 0, null, 'executing');
+
+    // 3b. 步切换空档期（DB activeModel=0, activeTool=0）叠加 DOM 短暂 idle 闪断后恢复：应冻结保持高水位，不回退不丢秒
+    inst.updateMetrics({
+      conversationId: 'conv-anti-flicker',
+      sessionRevision: inst.getSessionRevision(),
+      metricsSequence: 4,
+      isStreaming: true,
+      activityPhase: 'executing',
+      session: {
+        turns: 1,
+        steps: 3,
+        modelDurationSeconds: 15.9,
+        modelDurationFormatted: '16秒',
+        inFlightModelDurationSeconds: 0,
+        activeModelStepCount: 0,
+        toolDurationSeconds: 3.0,
+        toolDurationFormatted: '3秒',
+        inFlightToolDurationSeconds: 0,
+        activeToolStepCount: 0,
+        currentTurnDurationSeconds: 17.0,
+        currentTurnDurationFormatted: '17秒',
+        currentTurnDurationCompactZh: '本轮 17s',
+      },
+      tokens: { totalTokens: 150 },
+      context: { hasUsageData: true, usedRatio: 0.15 },
+    });
+    assert.equal(sr.querySelector('#val-model-dur').textContent, '17秒');
+    inst.notifyModelOrStreamingChange(null, false, false, 0, null, 'idle');
+    assert.equal(inst.turnClockTimer, null);
+    assert.equal(sr.querySelector('#val-model-dur').textContent, '17秒', '冻结期间未收权威终态包前不得闪回旧 snapshot');
+    assert.equal(sr.querySelector('#val-turn-dur').textContent, '17秒');
+    inst.notifyModelOrStreamingChange(null, true, false, 0, null, 'executing');
+    assert.equal(sr.querySelector('#val-model-dur').textContent, '17秒', '恢复活跃应从冻结高水位无缝续走');
+    assert.ok(inst.turnClockTimer !== null);
+
+    // 4. applyPopoverGeometry 在位置与尺寸稳定时 (!force) 应幂等跳过同步 reflow，避免卡片每 250ms 抖动
+    let rectCalls = 0;
+    const prevWin = globalThis.window;
+    globalThis.window = { innerHeight: 900 };
+    try {
+      const pop = new FakeElement('div');
+      const arrow = new FakeElement('div');
+      pop.getBoundingClientRect = () => {
+        rectCalls += 1;
+        return { left: 100, top: 200, bottom: 380, width: 296, height: 180 };
+      };
+      const pos = {
+        width: 296,
+        maxHeight: 480,
+        left: 100,
+        bottom: 520,
+        top: 200,
+        direction: 'up',
+        arrowPixelOffset: 80,
+      };
+      applyPopoverGeometry(pop, arrow, pos, { force: true });
+      assert.equal(rectCalls, 1);
+      // 胶囊中心微移 1px 导致 left 变化 1px（在 3px 滞后容差内），!force 必须跳过 DOM 写回与 reflow
+      applyPopoverGeometry(pop, arrow, { ...pos, left: 101, arrowPixelOffset: 81 }, { force: false });
+      assert.equal(rectCalls, 1, '位置微变 <=3px 时应跳过同步 reflow');
+      resetPopoverGeometryCache(pop);
+      applyPopoverGeometry(pop, arrow, pos, { force: false });
+      assert.equal(rectCalls, 2, 'resetPopoverGeometryCache 后应重新校准');
+    } finally {
+      globalThis.window = prevWin;
+      inst.dispose();
+    }
   });
 });

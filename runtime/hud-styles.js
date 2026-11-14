@@ -330,7 +330,7 @@ export const HUD_STYLES_CSS = `
 }
 
 #hud-meter-fill {
-  transition: width 150ms ease, fill 180ms ease;
+  transition: width 350ms cubic-bezier(0.22, 1, 0.36, 1), fill 220ms ease;
 }
 
 .capsule-context.has-compaction {
@@ -668,6 +668,13 @@ export const HUD_STYLES_CSS = `
   margin: 8px 0;
 }
 
+.hud-popover-divider-dashed {
+  height: 0;
+  width: 100%;
+  border-top: 1px dashed var(--hud-divider);
+  margin: 8px 0;
+}
+
 .hud-popover-grid {
   display: flex;
   flex-direction: column;
@@ -711,11 +718,24 @@ export const HUD_STYLES_CSS = `
   overflow-wrap: anywhere;
 }
 
+#val-model-dur,
+#val-tool-dur,
+#val-turn-dur,
+#val-ttft,
+#val-tps,
+#val-ttft-latest,
+#val-tps-latest,
+#val-est-cost,
+#val-cache-saved {
+  white-space: nowrap;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .capsule,
   .hud-status-dot,
   .hud-popover,
-  .hud-progress-seg {
+  .hud-progress-seg,
+  #hud-meter-fill {
     transition: none !important;
   }
   .capsule.is-skeleton,

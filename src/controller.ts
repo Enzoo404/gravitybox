@@ -93,7 +93,10 @@ export class Controller {
   }) {
     this.paused = options.initiallyPaused === true;
     this.hudEnabled = options.hudEnabled !== false;
-    this.hudBridge = new CdpHudBridge({ geminiDir: options.geminiDir || process.env.GRAVITYBOX_GEMINI_DIR || process.env.GEMINI_DIR });
+    this.hudBridge = new CdpHudBridge({
+      geminiDir: options.geminiDir || process.env.GRAVITYBOX_GEMINI_DIR || process.env.GEMINI_DIR,
+      stateDir: options.stateDir,
+    });
     this.status = { schema: 1, mode: 'starting', message: '正在初始化', windows: 0, dictionaryVersion: options.dictionary.version, entries: Object.keys(options.dictionary.entries).length, errors: [], rssMB: 0, updatedAt: '', pid: process.pid, menuHooked: false, translationEnabled: !this.paused, hudEnabled: this.hudEnabled };
   }
   private publish(mode?: string, message?: string) {
