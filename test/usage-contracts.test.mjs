@@ -62,7 +62,15 @@ test('明细固定快照经历多次后台刷新保持稳定，同ID生成时间
   manager.releaseSnapshot(first.snapshot_id);
 });
 
-test('今日统计与明细采用自然日半开边界，未来一日不能归入今日', async () => {
+test('今日统计与明细采用自然日半开边界，未来一日不能归入今日', async (t) => {
+  const RealDate = Date;
+  const fixedNow = new RealDate(2026, 9, 23, 12, 0, 0, 0).getTime();
+  class FixedDate extends RealDate {
+    constructor(...args) { super(...(args.length ? args : [fixedNow])); }
+    static now() { return fixedNow; }
+  }
+  globalThis.Date = FixedDate;
+  t.after(() => { globalThis.Date = RealDate; });
   const manager=new UsageStatsManager({geminiDir:'/synthetic'}), date=new Date();date.setHours(0,0,0,0);
   const begin=date.getTime()/1000;date.setDate(date.getDate()+1);const end=date.getTime()/1000;
   const make=timestamp_seconds=>({model:'custom',input_tokens:1,output_tokens:0,cached_tokens:0,total_tokens:1,timestamp_seconds});
@@ -355,7 +363,15 @@ test('阶段2验证 - B07: 缺少模型名的记录分配为未知模型且未�
 
 // Fixture state and hooks are scoped to this group; child cases run serially.
 describeContractGroup("用量与历史 · preview-usage-events", { concurrency: false }, async () => {
-test('请求明细：本地自然日边界、搜索、倒序分页、未知时间、未计价模型与隐私范围', async () => {
+test('请求明细：本地自然日边界、搜索、倒序分页、未知时间、未计价模型与隐私范围', async (t) => {
+  const RealDate = Date;
+  const fixedNow = new RealDate(2026, 9, 23, 12, 0, 0, 0).getTime();
+  class FixedDate extends RealDate {
+    constructor(...args) { super(...(args.length ? args : [fixedNow])); }
+    static now() { return fixedNow; }
+  }
+  globalThis.Date = FixedDate;
+  t.after(() => { globalThis.Date = RealDate; });
   const manager = new UsageStatsManager({geminiDir: '/synthetic/unused'});
   const now = Math.floor(Date.now()/1000);
   const start = new Date(); start.setHours(0,0,0,0);

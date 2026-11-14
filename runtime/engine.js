@@ -2073,8 +2073,9 @@
       return {busy:draft||attachments||unsaved||generating,draft,attachments,unsaved,generating};
     },
     maintenanceState(){const state=api.draftState();return{...state,busy:state.busy||[...document.querySelectorAll('[role="dialog"],[role="menu"]')].some(visibleUi)};},
-    collectUntranslated() {
+    collectUntranslated(options = {}) {
       if(languageMode==='en'||routeExcluded||restrictedAdaptiveRoute())return [];
+      const budgetMs = options?.fullScan ? Infinity : 12;
       const collectStarted=performance.now();lastCollectionTruncated=false;
       const rows=new Map(),scan=++scanCount;refreshProjectNames(scan);
       const add=(raw,el,kind,attribute,template=false,layoutWarning)=>{
@@ -2093,12 +2094,12 @@
           ...(layoutWarning?{layoutWarning}:{})});
       };
       collectRoots: for(const root of observed){
-        if(performance.now()-collectStarted>12){lastCollectionTruncated=true;break;}
+        if(performance.now()-collectStarted>budgetMs){lastCollectionTruncated=true;break;}
         if(root!==document&&!root.host?.isConnected)continue;
         const walker=document.createTreeWalker(root===document?(document.body||document.documentElement):root,NodeFilter.SHOW_TEXT);
         let visited=0;const handledGroups=new Set();
         while(walker.nextNode()&&rows.size<500&&++visited<15000){
-          if(performance.now()-collectStarted>12){lastCollectionTruncated=true;break collectRoots;}
+          if(performance.now()-collectStarted>budgetMs){lastCollectionTruncated=true;break collectRoots;}
           const n=walker.currentNode;
           /* J04: report one whole-sentence key for an inline group instead of its fragments. */
           const group=inlineGroupFor(n,scan);
@@ -2119,7 +2120,7 @@
           add(n.textContent,n.parentElement,inferKind(n.parentElement));
         }
         for(const el of root.querySelectorAll('[title],[aria-label],[placeholder],[data-tooltip]')){
-          if(performance.now()-collectStarted>12){lastCollectionTruncated=true;break collectRoots;}
+          if(performance.now()-collectStarted>budgetMs){lastCollectionTruncated=true;break collectRoots;}
           for(const attr of TRANSLATABLE_ATTRS)if(el.hasAttribute(attr)&&attributeAllowed(el,attr))add(el.getAttribute(attr),el,attr==='placeholder'?'placeholder':inferKind(el),attr);
         }
       }maxSliceMs=Math.max(maxSliceMs,performance.now()-collectStarted);return [...rows.values()];

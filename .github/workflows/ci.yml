@@ -1,59 +1,225 @@
-name: CI
+name: CI Verification
 
 on:
-  push:
-    branches:
-      - main
-      - 'feature/**'
   pull_request:
-    branches:
-      - main
+    branches: [main, 'feature/**']
+  push:
+    branches: [main, 'feature/**']
   workflow_dispatch:
-
-permissions:
-  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-jobs:
-  test:
-    name: Build & Verify (macOS)
-    runs-on: macos-latest
-    timeout-minutes: 15
-    env:
-      CI: 'true'
-      GRAVITYBOX_CI_HEADLESS: '1'
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+env:
+  CI: true
+  GRAVITYBOX_CI_HEADLESS: '1'
+  TZ: UTC
 
-      - name: Setup Node.js 22
-        uses: actions/setup-node@v4
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    name: Detect Changed Scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Classify Changed Files
+        id: filter
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          BASE="${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}"
+          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          CHANGED=$(git diff --name-only "$BASE" HEAD)
+          if [ -z "$CHANGED" ]; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          while IFS= read -r file; do
+            [ -z "$file" ] && continue
+            case "$file" in
+              README.md|README_EN.md|CHANGELOG.md|LICENSE|LICENSE.*|docs/*|assets/*|.github/ISSUE_TEMPLATE/*|.github/PULL_REQUEST_TEMPLATE/*)
+                ;;
+              *)
+                echo "Code-affecting change detected: $file"
+                echo "code=true" >> "$GITHUB_OUTPUT"
+                exit 0
+                ;;
+            esac
+          done <<< "$CHANGED"
+          echo "Docs/assets-only change detected; skipping code & E2E jobs."
+          echo "code=false" >> "$GITHUB_OUTPUT"
+
+  docs-check:
+    name: Docs & Markdown Links
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: 'npm'
 
       - name: Install Dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
 
-      - name: Check Development Environment
-        run: npm run doctor
+      - name: Source Docs Consistency Check
+        run: node tools/check-docs.mjs --source-only
+
+      - name: Verify Markdown Local Media Links
+        run: |
+          node -e "
+            const fs = require('node:fs');
+            const path = require('node:path');
+            for (const doc of ['README.md', 'README_EN.md']) {
+              if (!fs.existsSync(doc)) continue;
+              const text = fs.readFileSync(doc, 'utf8');
+              for (const m of text.matchAll(/(?:src=|!\[[^\]]*\]\()([\"']?)(?:\.\/)?(assets\/[^\"')\s>#]+)/g)) {
+                const target = m[2];
+                if (!fs.existsSync(path.resolve(target))) {
+                  console.error('Missing asset referenced in ' + doc + ': ' + target);
+                  process.exit(1);
+                }
+              }
+            }
+            console.log('Markdown media links verified.');
+          "
+
+  unit-and-dict:
+    name: Unit Tests & Dictionary Gates
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Check Development Environment (Node & Dictionaries)
+        run: node tools/doctor.mjs --skip-native
+
+      - name: Build TypeScript & Runtime
+        run: npm run build
+
+      - name: Fast Unit & Integration Tests
+        run: node tools/run-tests.mjs --fast
+
+      - name: Supported Dictionary Gates
+        run: node tools/verify.mjs --dict-only --no-vendor
+
+      - name: Upload Dictionary Gate Reports on Failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-dict-logs
+          path: 质检报告/
+          if-no-files-found: ignore
+
+  browser-e2e:
+    name: Browser CDP E2E
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Build TypeScript & Runtime
+        run: npm run build
+
+      - name: Cache Pinned Test Browser
+        uses: actions/cache@v4
+        with:
+          path: .cache/test-chrome-*
+          key: ${{ runner.os }}-${{ runner.arch }}-chrome-${{ hashFiles('tools/setup-test-browser.mjs') }}
 
       - name: Setup Pinned Test Browser
         run: node tools/setup-test-browser.mjs
 
-      - name: Run Full Release Gate (Build, Unit, Browser, Swift & i18n Gate)
-        env:
-          CI: 'true'
-          GRAVITYBOX_CI_HEADLESS: '1'
-        run: node tools/verify.mjs --no-vendor
+      - name: Headless Browser Regression Suite
+        run: node test/browser.mjs
 
-      - name: Preserve Verification Reports
-        if: always()
-        uses: actions/upload-artifact@v4
+  native-swift:
+    name: Native Swift Compile & Tests
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
         with:
-          name: ci-verification-${{ github.run_id }}
-          path: 质检报告/
-          retention-days: 7
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Check Development Environment
+        run: node tools/doctor.mjs
+
+      - name: Build TypeScript & Runtime
+        run: npm run build
+
+      - name: Release-Mode Swift (-O) Build Check
+        run: |
+          mkdir -p .cache
+          node -e "import('./tools/native-build.mjs').then(async m => { const { execFileSync } = await import('node:child_process'); execFileSync('/usr/bin/swiftc', await m.nativeBuildArgs(process.cwd(), '.cache/GravityBox-native-verified'), { stdio: 'inherit', maxBuffer: 4e6 }); })"
+
+      - name: Native Swift Unit Tests
+        run: node tools/run-tests.mjs --native
+
+  ci-gate:
+    name: CI Gate
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [changes, docs-check, unit-and-dict, browser-e2e, native-swift]
+    steps:
+      - name: Evaluate Required Gate Status
+        shell: bash
+        run: |
+          if [ "${{ needs.changes.result }}" != "success" ] || [ "${{ needs.docs-check.result }}" != "success" ]; then
+            echo "Changes/Docs check did not succeed: changes=${{ needs.changes.result }}, docs-check=${{ needs.docs-check.result }}"
+            exit 1
+          fi
+          if [ "${{ needs.changes.outputs.code }}" = "true" ]; then
+            for res in "${{ needs.unit-and-dict.result }}" "${{ needs.browser-e2e.result }}" "${{ needs.native-swift.result }}"; do
+              if [ "$res" != "success" ]; then
+                echo "Code verification job failed or skipped: $res"
+                exit 1
+              fi
+            done
+          fi
+          echo "All CI gates passed (code=${{ needs.changes.outputs.code }})."

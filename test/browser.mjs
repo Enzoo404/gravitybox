@@ -27,13 +27,14 @@ const server = createServer((req, res) => {
 });
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const origin = `http://127.0.0.1:${server.address().port}`;
-let chrome, backend, browserEndpoint, main, second;
+let chrome, backend, browserEndpoint, port, main, second;
 let backendErrors = ''; let chromeErrors = '';
 const checks = [];
-async function until(fn, timeout = 6000) {
+async function until(fn, timeout = 8000, label = '') {
   const deadline = Date.now() + timeout; let last;
   while (Date.now() < deadline) { try { const result = await fn(); if (result) return result; } catch (error) { last = error; } await new Promise(resolve => setTimeout(resolve, 40)); }
-  throw new Error(`等待条件超时${last ? ': ' + last.message : ''}`);
+  const hint = label ? ` [${label}]` : '';
+  throw new Error(`等待条件超时${hint}${last ? ': ' + last.message : ''}`);
 }
 async function command(command) {
   return new Promise((resolve, reject) => {
@@ -52,10 +53,41 @@ async function override(entries, atomic = false) {
   if (atomic) { await writeFile(file + '.tmp', JSON.stringify(entries)); await rename(file + '.tmp', file); }
   else await writeFile(file, JSON.stringify(entries));
 }
-async function check(name, fn) { await fn(); checks.push({ name, passed: true }); console.log('PASS', name); }
+async function check(name, fn) {
+  try {
+    await fn();
+    checks.push({ name, passed: true });
+    console.log('PASS', name);
+  } catch (error) {
+    const diagParts = [`FAIL ${name}: ${error?.message || error}`];
+    if (backendErrors.trim()) diagParts.push(`backendErrors(tail): ${backendErrors.trim().slice(-600)}`);
+    if (chromeErrors.trim()) diagParts.push(`chromeErrors(tail): ${chromeErrors.trim().slice(-600)}`);
+    console.error(diagParts.join('\n'));
+    throw error;
+  }
+}
 // A body can exist in the initial about:blank document before the requested navigation commits.
 async function documentReady(cdp) {
-  await until(async () => cdp.evaluate(`document.readyState === 'complete' && !!document.body && location.origin === ${JSON.stringify(origin)}`).catch(() => false));
+  await until(async () => cdp.evaluate(`document.readyState === 'complete' && !!document.body && location.origin === ${JSON.stringify(origin)}`).catch(() => false), 8000, 'documentReady');
+}
+async function normalizePage(cdp, { width = 1280, height = 800 } = {}) {
+  await cdp.send('Page.enable').catch(() => {});
+  await cdp.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false }).catch(() => {});
+  await cdp.send('Page.bringToFront').catch(() => {});
+  await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] }).catch(() => {});
+}
+async function openIsolatedPage(path = '/', viewport = {}) {
+  const target = await browserCommand('Target.createTarget', { url: origin + path });
+  const page = await until(async () => (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find(t => t.id === target.targetId), 8000, `target ${path}`);
+  const cdp = new CDP(page.webSocketDebuggerUrl);
+  await cdp.connect();
+  await normalizePage(cdp, viewport);
+  await documentReady(cdp);
+  return { target, cdp };
+}
+async function collectUntranslatedFull(cdp, executionContextId) {
+  await until(async () => (await cdp.evaluate('globalThis.__GRAVITYBOX_ENGINE_V1__?.state?.()?.pending ?? 0', executionContextId).catch(() => 0)) === 0, 8000, 'engine pending === 0');
+  return cdp.evaluate('globalThis.__GRAVITYBOX_ENGINE_V1__.collectUntranslated({ fullScan: true })', executionContextId);
 }
 // Keep browser-control transports scoped to one command, independent of page reloads and idle time.
 async function browserCommand(method, params) {
@@ -69,11 +101,11 @@ try {
   // These fixtures exercise DOM behavior with software rendering, not GPU behavior.
   chrome = spawn(chromeBin, ['--headless=new', '--disable-gpu', `--user-data-dir=${profile}`, '--remote-debugging-port=0', '--no-first-run', '--no-default-browser-check', '--disable-background-networking', '--disable-extensions', `${origin}/fixture`], { stdio: ['ignore', 'ignore', 'pipe'] });
   chrome.stderr.on('data', chunk => { chromeErrors = (chromeErrors + chunk.toString()).slice(-16000); });
-  const port = await until(async () => { if (chrome.exitCode !== null) throw new Error(`测试浏览器提前退出 (${chrome.exitCode}): ${chromeErrors.slice(-600)}`); return Number((await readFile(join(profile, 'DevToolsActivePort'), 'utf8')).split('\n')[0]); }, 20000);
+  port = await until(async () => { if (chrome.exitCode !== null) throw new Error(`测试浏览器提前退出 (${chrome.exitCode}): ${chromeErrors.slice(-600)}`); return Number((await readFile(join(profile, 'DevToolsActivePort'), 'utf8')).split('\n')[0]); }, 20000);
   const version = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json();
   browserEndpoint = version.webSocketDebuggerUrl;
   const page = await until(async () => (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find(target => target.url === `${origin}/fixture`));
-  main = new CDP(page.webSocketDebuggerUrl); await main.connect(); await main.send('Page.enable');
+  main = new CDP(page.webSocketDebuggerUrl); await main.connect(); await normalizePage(main); await documentReady(main);
   const initialHeap = await main.send('Runtime.getHeapUsage');
   backend = spawn(process.execPath, ['--max-old-space-size=48', '--max-semi-space-size=2', join(root, 'dist/main.js'), '--state-dir', state, '--fixture-port', String(port), '--fixture-origin', origin,'--home-dir',temp,'--app-support-dir',temp,'--gemini-dir',join(temp,'gemini')], { stdio: ['ignore', 'ignore', 'pipe'],env:{...process.env,GRAVITYBOX_PROBE_LS:'false'} });
   backend.stderr.on('data', chunk => { backendErrors += chunk.toString(); });
@@ -170,8 +202,10 @@ try {
     /* 采集侧复用同一判定：用户命名不进候选，普通界面文案仍被采集 */
     await main.evaluate('document.querySelector("#user-content-card").insertAdjacentHTML("beforeend",\'<button id="collect-probe">Inspect dynamic widget</button>\')');
     await main.evaluate('document.querySelector("#collect-probe").scrollIntoView({block:"center"})');
-    await new Promise(resolve => setTimeout(resolve, 150));
-    const rows = await main.evaluate('globalThis.__GRAVITYBOX_ENGINE_V1__.collectUntranslated()', context.executionContextId);
+    const rows = await until(async () => {
+      const list = await collectUntranslatedFull(main, context.executionContextId);
+      if (list.some(row => row.key === 'Inspect dynamic widget')) return list;
+    }, 8000, 'collect-probe');
     assert.ok(rows.some(row => row.key === 'Inspect dynamic widget'), JSON.stringify(rows));
     for (const key of ['Synthetic Private Project Name', 'Synthetic private automation description', 'History']) assert.equal(rows.some(row => row.key === key), false, key);
     await main.evaluate('document.querySelector("#collect-probe").remove();window.scrollTo(0,0)');
@@ -238,7 +272,7 @@ try {
   await check('第二窗口自动连接并接收词典更新', async () => {
     const target = await browserCommand('Target.createTarget', { url: `${origin}/fixture` });
     const page = await until(async () => (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find(page => page.id === target.targetId));
-    second = new CDP(page.webSocketDebuggerUrl); await second.connect();
+    second = new CDP(page.webSocketDebuggerUrl); await second.connect(); await normalizePage(second); await documentReady(second);
     await until(async () => (await status()).windows === 2);
     await override({ Settings: '窗口同步设置' });
     await until(async () => await text(second, '#settings') === '窗口同步设置');
@@ -276,9 +310,10 @@ try {
   });
   await check('暂停恢复英文；恢复连接后重新汉化', async () => {
     assert.equal((await command('pause')).ok, true);
+    await until(async () => await text(main, '#settings') === 'Settings' && await text(second, '#settings') === 'Settings', 8000, 'pause restore English');
     assert.equal(await text(main, '#settings'), 'Settings');
     assert.equal(await text(second, '#settings'), 'Settings');
-    await command('resume'); await until(async () => await text(main, '#settings') === '设置第11版');
+    await command('resume'); await until(async () => await text(main, '#settings') === '设置第11版', 8000, 'resume restore Chinese');
   });
   await check('未知页面不注入，返回受支持页面后恢复', async () => {
     await main.send('Page.navigate', { url: `${origin}/external` });
@@ -302,13 +337,13 @@ try {
     const context = await main.send('Page.createIsolatedWorld', { frameId: tree.frameTree.frame.id, worldName: 'GRAVITYBOX-localization-v1' });
     const toggleToEn = await main.evaluate('globalThis.__GRAVITYBOX_ENGINE_V1__.toggleLanguage("en")', context.executionContextId);
     assert.equal(toggleToEn.mode, 'en');
-    assert.equal(await text(main, '#settings'), 'Settings');
+    await until(async () => await text(main, '#settings') === 'Settings', 8000, 'toggleLanguage en');
     const btnLocEn = await main.evaluate('document.querySelector("#plain-btn")?.dataset?.gravityboxLoc');
     assert.equal(btnLocEn, undefined);
 
     const toggleToZh = await main.evaluate('globalThis.__GRAVITYBOX_ENGINE_V1__.toggleLanguage("zh")', context.executionContextId);
     assert.equal(toggleToZh.mode, 'zh');
-    assert.equal(await text(main, '#settings'), '设置第11版');
+    await until(async () => await text(main, '#settings') === '设置第11版', 8000, 'toggleLanguage zh');
     const btnLocZh = await main.evaluate('document.querySelector("#plain-btn")?.dataset?.gravityboxLoc');
     assert.equal(btnLocZh, '1');
   });
@@ -357,8 +392,10 @@ try {
     assert.equal(await main.evaluate('!!document.querySelector("#j04-reorder").dataset.gravityboxLoc || !!document.querySelector("#j04-omit").dataset.gravityboxLoc'), false);
     /* 仍整句采集：unsupported 也给出整句 key + layoutWarning，不产生碎片 */
     await main.evaluate('document.querySelector("#j04-probe").scrollIntoView({block:"center"})');
-    await new Promise(resolve => setTimeout(resolve, 150));
-    const rows = await main.evaluate('globalThis.__GRAVITYBOX_ENGINE_V1__.collectUntranslated()', context.executionContextId);
+    const rows = await until(async () => {
+      const list = await collectUntranslatedFull(main, context.executionContextId);
+      if (list.some(item => item.key === 'Blorp {0} zib {1}.') && list.some(item => item.key === 'Glim {0} zorp.')) return list;
+    }, 8000, 'j04 unsupported inline keys');
     for (const key of ['Blorp {0} zib {1}.', 'Glim {0} zorp.']) {
       const row = rows.find(item => item.key === key);
       assert.ok(row, key + ' missing: ' + JSON.stringify(rows).slice(0, 400));
@@ -398,8 +435,10 @@ try {
     assert.ok(await main.evaluate('document.querySelector("#j04-tailmiss-link").getClientRects().length > 0'));
     assert.equal(await main.evaluate('!!document.querySelector("#j04-tailmiss").dataset.gravityboxLoc'), false);
     await main.evaluate('document.querySelector("#j04-notail-probe").scrollIntoView({block:"center"})');
-    await new Promise(resolve => setTimeout(resolve, 150));
-    const tailRows = await main.evaluate('globalThis.__GRAVITYBOX_ENGINE_V1__.collectUntranslated()', context.executionContextId);
+    const tailRows = await until(async () => {
+      const list = await collectUntranslatedFull(main, context.executionContextId);
+      if (list.some(item => item.key === 'Gronk {0}')) return list;
+    }, 8000, 'j04 missing-tail key');
     const tailRow = tailRows.find(item => item.key === 'Gronk {0}');
     assert.ok(tailRow, 'missing-tail whole key absent: ' + JSON.stringify(tailRows).slice(0, 400));
     assert.ok(tailRow.layoutWarning && tailRow.layoutWarning.includes('内联'), 'missing-tail layoutWarning');
@@ -420,8 +459,10 @@ try {
     assert.ok(/\{N\}/.test(caps.placeholders.supported.join()));
     assert.equal(await text(main, '#percent-placeholder'), '%s items selected');
     await main.evaluate('document.querySelector("#percent-placeholder").scrollIntoView({block:"center"})');
-    await new Promise(resolve => setTimeout(resolve, 120));
-    const rows = await main.evaluate('globalThis.__GRAVITYBOX_ENGINE_V1__.collectUntranslated()', context.executionContextId);
+    const rows = await until(async () => {
+      const list = await collectUntranslatedFull(main, context.executionContextId);
+      if (list.some(row => row.key === '%s items selected') && list.some(row => /plural/.test(row.key))) return list;
+    }, 8000, 'percent and icu placeholders');
     const percent = rows.find(row => row.key === '%s items selected');
     assert.ok(percent, JSON.stringify(rows).slice(0, 400));
     assert.ok(percent.formatWarning && percent.formatWarning.includes('%s'));
@@ -494,7 +535,7 @@ try {
     const context = await main.send('Page.createIsolatedWorld', { frameId: tree.frameTree.frame.id, worldName: 'GRAVITYBOX-localization-v1' });
 
     // 1. 验证 collectUntranslated 返回包含 { key, kind }
-    const uncollected = await main.evaluate('globalThis.__GRAVITYBOX_ENGINE_V1__.collectUntranslated()', context.executionContextId);
+    const uncollected = await collectUntranslatedFull(main, context.executionContextId);
     assert.ok(Array.isArray(uncollected));
     if (uncollected.length > 0) {
       assert.ok('key' in uncollected[0]);
@@ -544,9 +585,9 @@ try {
   await check('采集候选重新检查保护状态，排除句中的路径与邮箱', async () => {
     const tree = await main.send('Page.getFrameTree'); const context = await main.send('Page.createIsolatedWorld', { frameId: tree.frameTree.frame.id, worldName: 'GRAVITYBOX-localization-v1' });
     await main.evaluate(`document.body.insertAdjacentHTML('beforeend', '<button id="candidate">Synthetic Private Project Name</button><button id="candidate-path">Open /Users/demo/Private.txt</button><button id="candidate-email">Email person@example.test</button>')`);
-    await until(async () => (await main.evaluate('globalThis.__GRAVITYBOX_ENGINE_V1__.collectUntranslated()', context.executionContextId)).some(e => e.key === 'Synthetic Private Project Name'));
+    await until(async () => (await collectUntranslatedFull(main, context.executionContextId)).some(e => e.key === 'Synthetic Private Project Name'), 8000, 'candidate Synthetic Private Project Name');
     await main.evaluate('document.querySelector("#candidate").setAttribute("data-gravitybox-protect", "true")');
-    const candidates = await main.evaluate('globalThis.__GRAVITYBOX_ENGINE_V1__.collectUntranslated()', context.executionContextId);
+    const candidates = await collectUntranslatedFull(main, context.executionContextId);
     for (const key of ['Synthetic Private Project Name', 'Open /Users/demo/Private.txt', 'Email person@example.test']) assert.equal(candidates.some(e => e.key === key), false);
     await main.evaluate('["candidate","candidate-path","candidate-email"].forEach(id=>document.getElementById(id).remove())');
   });
@@ -567,7 +608,7 @@ try {
     await override({'@ui:/fixture|button|Open resource':'打开资源','@ui:/fixture|heading|Open resource':'资源开放状态'});
     await main.evaluate(`(()=>{const el=document.createElement('section');el.id='context-test';el.innerHTML='<button id="ctx-button">Open resource</button><h2 id="ctx-heading">Open resource</h2><button id="ctx-new">Inspect dynamic widget</button><button style="display:none">Hidden private widget</button><div data-message-id="private"><button>Private account content</button></div>';document.body.prepend(el)})()`);
     await until(async()=>await text(main,'#ctx-button')==='打开资源');await main.evaluate('window.scrollTo(0,0)');assert.equal(await text(main,'#ctx-heading'),'资源开放状态');
-    const rows=await main.evaluate('globalThis.__GRAVITYBOX_ENGINE_V1__.collectUntranslated()',ctx.executionContextId);const row=rows.find(r=>r.key==='Inspect dynamic widget');assert.equal(row.kind,'button');assert.equal(row.route,'/fixture');assert.equal(row.source,'runtime-ui');assert.equal(JSON.stringify(rows).includes('Hidden private'),false);assert.equal(JSON.stringify(rows).includes('Private account'),false);
+    const rows=await until(async()=>{const list=await collectUntranslatedFull(main,ctx.executionContextId);if(list.some(r=>r.key==='Inspect dynamic widget'))return list;},8000,'ctx Inspect dynamic widget');const row=rows.find(r=>r.key==='Inspect dynamic widget');assert.equal(row.kind,'button');assert.equal(row.route,'/fixture');assert.equal(row.source,'runtime-ui');assert.equal(JSON.stringify(rows).includes('Hidden private'),false);assert.equal(JSON.stringify(rows).includes('Private account'),false);
     await main.evaluate('document.querySelector("#context-test").remove()');await override({});
   });
   await check('动态规则和内联模板记录真实命中，英文对照不被报告为漏译',async()=>{
@@ -588,9 +629,9 @@ ${engine}`,ctx.executionContextId);
     await until(async()=>await text(main,'#conservative-known')==='已知操作');assert.equal(await text(main,'#conservative-dynamic'),'已用时 91秒');assert.equal(await text(main,'#conservative-private'),'Known action');await main.evaluate('globalThis.__GRAVITYBOX_ENGINE_V1__.dispose()',ctx.executionContextId);await main.evaluate('document.querySelector("#conservative-test").remove()');await command('resume');await until(async()=>(await status()).mode==='connected');
   });
   await check('插件说明仅在明确的目录卡片应用场景译文，不翻译同文普通段落',async()=>{
-    const target=await browserCommand('Target.createTarget',{url:origin+'/customizations'});let cdp;
+    let target,cdp;
     try{
-      const page=await until(async()=>(await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find(t=>t.id===target.targetId));cdp=new CDP(page.webSocketDebuggerUrl);await cdp.connect();await documentReady(cdp);const tree=await cdp.send('Page.getFrameTree'),ctx=await cdp.send('Page.createIsolatedWorld',{frameId:tree.frameTree.frame.id,worldName:'GRAVITYBOX-plugin-test'});
+      ({target,cdp}=await openIsolatedPage('/customizations'));const tree=await cdp.send('Page.getFrameTree'),ctx=await cdp.send('Page.createIsolatedWorld',{frameId:tree.frameTree.frame.id,worldName:'GRAVITYBOX-plugin-test'});
       await cdp.evaluate(`document.body.innerHTML='<main><div><a href="/customizations/plugins/public-plugin">Public Plugin</a><p id="plugin-desc">Read and draft public documents.</p><button>Install</button></div><p id="outside-desc">Read and draft public documents.</p></main>'`);
       const engine=await readFile(join(root,'dist/engine.js'),'utf8');await cdp.evaluate(`globalThis.__GRAVITYBOX_BOOT__=${JSON.stringify({origin,path:'/customizations',dictionary:{schema:1,version:'plugin',entries:{'@ui:/customizations|description|Read and draft public documents.':'阅读并起草公共文档。'}}})};
 ${engine}`,ctx.executionContextId);await until(async()=>await text(cdp,'#plugin-desc')==='阅读并起草公共文档。');assert.equal(await text(cdp,'#outside-desc'),'Read and draft public documents.');await cdp.evaluate('globalThis.__GRAVITYBOX_ENGINE_V1__.dispose()',ctx.executionContextId);
@@ -603,11 +644,11 @@ ${engine}`,gate.executionContextId);assert.equal(await text(cdp,'#gate-known'),'
       await cdp.evaluate(`globalThis.__GRAVITYBOX_BOOT__=${JSON.stringify({origin,path:'/login',dictionary:{schema:1,version:'guard',entries:{Settings:'设置'}}})};
 ${engine}`,login.executionContextId);assert.equal(await text(cdp,'button'),'Settings');assert.equal(await cdp.evaluate('!!globalThis.__GRAVITYBOX_ENGINE_V1__',login.executionContextId),false);
 
-    }finally{cdp?.close();await browserCommand('Target.closeTarget',{targetId:target.targetId}).catch(error => { chromeErrors += '\nTarget cleanup: ' + error.message; });}
+    }finally{cdp?.close();if(target?.targetId)await browserCommand('Target.closeTarget',{targetId:target.targetId}).catch(error => { chromeErrors += '\nTarget cleanup: ' + error.message; });}
   });
   await check('模型关闭使用受控事件序列，设置关闭只操作本轮容器',async()=>{
-    const target=await browserCommand('Target.createTarget',{url:origin+'/customizations'});let isolated;
-    try { const page=await until(async()=>(await(await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find(t=>t.id===target.targetId));isolated=new CDP(page.webSocketDebuggerUrl);await isolated.connect();await documentReady(isolated);await isolated.evaluate("document.body.innerHTML=''");const tree=await isolated.send('Page.getFrameTree'),ctx=await isolated.send('Page.createIsolatedWorld',{frameId:tree.frameTree.frame.id,worldName:'GRAVITYBOX-close-guards-test'});
+    let target,isolated;
+    try { ({target,cdp:isolated}=await openIsolatedPage('/customizations'));await isolated.evaluate("document.body.innerHTML=''");const tree=await isolated.send('Page.getFrameTree'),ctx=await isolated.send('Page.createIsolatedWorld',{frameId:tree.frameTree.frame.id,worldName:'GRAVITYBOX-close-guards-test'});
     const engine=await readFile(join(root,'dist/engine.js'),'utf8');
     await isolated.evaluate(`globalThis.__GRAVITYBOX_BOOT__=${JSON.stringify({origin,path:'/customizations',dictionary:{schema:1,version:'close',entries:{}}})};
 ${engine}`,ctx.executionContextId);
@@ -619,12 +660,12 @@ ${engine}`,ctx.executionContextId);
     assert.equal((await isolated.evaluate('globalThis.__GRAVITYBOX_ENGINE_V1__.deepScan.step("settings-open")',ctx.executionContextId)).ok,true);
     assert.equal((await isolated.evaluate('globalThis.__GRAVITYBOX_ENGINE_V1__.deepScan.step("settings-close")',ctx.executionContextId)).ok,true);
     assert.equal((await isolated.evaluate('globalThis.__GRAVITYBOX_ENGINE_V1__.deepScan.finish()',ctx.executionContextId)).editorsMatch,true);
-    await isolated.evaluate('globalThis.__GRAVITYBOX_ENGINE_V1__.dispose()',ctx.executionContextId);await isolated.evaluate('document.querySelector("#close-guards").remove()');} finally { isolated?.close();await browserCommand('Target.closeTarget',{targetId:target.targetId}).catch(error => { chromeErrors += '\nTarget cleanup: ' + error.message; });}
+    await isolated.evaluate('globalThis.__GRAVITYBOX_ENGINE_V1__.dispose()',ctx.executionContextId);await isolated.evaluate('document.querySelector("#close-guards").remove()');} finally { isolated?.close();if(target?.targetId)await browserCommand('Target.closeTarget',{targetId:target.targetId}).catch(error => { chromeErrors += '\nTarget cleanup: ' + error.message; });}
   });
   await check('插件说明多文本节点与场景译文粒度一致，普通段落仍受保护',async()=>{
-    const target=await browserCommand('Target.createTarget',{url:origin+'/customizations'});let cdp;
+    let target,cdp;
     try{
-      const page=await until(async()=>(await(await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find(t=>t.id===target.targetId));cdp=new CDP(page.webSocketDebuggerUrl);await cdp.connect();await documentReady(cdp);
+      ({target,cdp}=await openIsolatedPage('/customizations'));
       await cdp.evaluate(`document.body.innerHTML='<div><a href="/customizations/plugins/chunks">Chunked Plugin</a><p id="block-one">Read public documents.</p><p id="block-two"><span>Draft public documents.</span> Review public documents.</p><button>Install</button></div><p id="not-card">Read public documents.</p>'`);
       const tree=await cdp.send('Page.getFrameTree'),ctx=await cdp.send('Page.createIsolatedWorld',{frameId:tree.frameTree.frame.id,worldName:'GRAVITYBOX-plugin-chunks'}),engine=await readFile(join(root,'dist/engine.js'),'utf8');
       const entries={'@ui:/customizations|description|Read public documents.':'阅读公共文档。','@ui:/customizations|description|Draft public documents.':'起草公共文档。','@ui:/customizations|description|Review public documents.':'审查公共文档。'};
@@ -633,12 +674,12 @@ ${engine}`,ctx.executionContextId);
       await until(async()=>await text(cdp,'#block-one')==='阅读公共文档。');assert.equal((await text(cdp,'#block-two')).replace(/\s/g,''),'起草公共文档。审查公共文档。');assert.equal(await text(cdp,'#not-card'),'Read public documents.');
       const catalogue=await cdp.evaluate('globalThis.__GRAVITYBOX_ENGINE_V1__.pluginCatalog()',ctx.executionContextId);assert.deepEqual(catalogue.map(x=>x.description).sort(),['Read public documents.','Draft public documents.','Review public documents.'].sort());
       await cdp.evaluate('globalThis.__GRAVITYBOX_ENGINE_V1__.dispose()',ctx.executionContextId);
-    }finally{cdp?.close();await browserCommand('Target.closeTarget',{targetId:target.targetId}).catch(error => { chromeErrors += '\nTarget cleanup: ' + error.message; });}
+    }finally{cdp?.close();if(target?.targetId)await browserCommand('Target.closeTarget',{targetId:target.targetId}).catch(error => { chromeErrors += '\nTarget cleanup: ' + error.message; });}
   });
   await check('独立设置壳可保守汉化提示与占位符，引导页仍拒绝注入',async()=>{
-    const target=await browserCommand('Target.createTarget',{url:origin+'/settings-standalone'});let cdp;
+    let target,cdp;
     try{
-      const page=await until(async()=>(await(await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find(t=>t.id===target.targetId));cdp=new CDP(page.webSocketDebuggerUrl);await cdp.connect();await documentReady(cdp);const engine=await readFile(join(root,'dist/engine.js'),'utf8');
+      ({target,cdp}=await openIsolatedPage('/settings-standalone'));const engine=await readFile(join(root,'dist/engine.js'),'utf8');
       await cdp.evaluate(`document.body.innerHTML='<section data-testid="settings-root"><nav role="tablist"><button>General</button></nav><input id="standalone-input" placeholder="Find settings" value="Private draft"><div role="tooltip" id="standalone-tooltip">Worked for 12s</div><div class="monaco-editor">Settings</div></section>'`);
       const tree=await cdp.send('Page.getFrameTree'),ctx=await cdp.send('Page.createIsolatedWorld',{frameId:tree.frameTree.frame.id,worldName:'GRAVITYBOX-standalone-test'});
       const boot={origin,path:'/settings-standalone',conservative:true,dictionary:{schema:1,version:'standalone',entries:{General:'通用','Find settings':'查找设置',Settings:'设置'}}};
@@ -649,7 +690,7 @@ ${engine}`,ctx.executionContextId);
       const authTree=await cdp.send('Page.getFrameTree'),auth=await cdp.send('Page.createIsolatedWorld',{frameId:authTree.frameTree.frame.id,worldName:'GRAVITYBOX-onboarding-test'});
       await cdp.evaluate(`document.body.innerHTML='<nav aria-label="Sidebar"><a href="/history">History</a></nav><button>Settings</button>'`);await cdp.evaluate(`globalThis.__GRAVITYBOX_BOOT__=${JSON.stringify({...boot,path:'/onboarding'})};
 ${engine}`,auth.executionContextId);assert.equal(await cdp.evaluate('!!globalThis.__GRAVITYBOX_ENGINE_V1__',auth.executionContextId),false);assert.equal(await text(cdp,'button'),'Settings');
-    }finally{cdp?.close();await browserCommand('Target.closeTarget',{targetId:target.targetId}).catch(error => { chromeErrors += '\nTarget cleanup: ' + error.message; });}
+    }finally{cdp?.close();if(target?.targetId)await browserCommand('Target.closeTarget',{targetId:target.targetId}).catch(error => { chromeErrors += '\nTarget cleanup: ' + error.message; });}
   });
   await check('class 抖动不触发全量 reconcile/重建，保护状态变化仍能纠正', async () => {
     const tree = await main.send('Page.getFrameTree');const context = await main.send('Page.createIsolatedWorld', { frameId: tree.frameTree.frame.id, worldName: 'GRAVITYBOX-localization-v1' });
@@ -705,12 +746,12 @@ ${engine}`,auth.executionContextId);assert.equal(await cdp.evaluate('!!globalThi
       await until(async()=>await text(cdp,'#settings-queued')==='排队消息');assert.equal(await text(cdp,'#settings-policy'),'权限预设');assert.equal(await text(cdp,'#settings-description'),'配置智能体执行、排队消息发送及权限。');
       assert.equal(await text(cdp,'#settings-inline'),'输入 / 并选择 plan，让智能体生成规划。');assert.equal(await cdp.evaluate('document.querySelector("input").value'),'Queued Messages');assert.equal(await text(cdp,'#settings-project'),'Queued Messages');assert.equal(await text(cdp,'#settings-expand'),'显示全部');assert.equal(await text(cdp,'#settings-expand-sm'),'显示全部');assert.equal(await text(cdp,'#settings-expand-less'),'收起');assert.equal(await text(cdp,'#settings-code-name'),'Name');assert.equal(await text(cdp,'#settings-private'),'Permission Preset');assert.equal(await text(cdp,'#settings-outside'),'Permission Preset');assert.equal(await text(cdp,'code'),' /'.trim());
       await cdp.evaluate('globalThis.__GRAVITYBOX_ENGINE_V1__.dispose()');assert.equal(await text(cdp,'#settings-queued'),'Queued Messages');assert.equal(await text(cdp,'#settings-inline'),'Type / and select plan to have the agent generate a plan.');
-    }finally{cdp?.close();await browserCommand('Target.closeTarget',{targetId:target.targetId}).catch(error => { chromeErrors += '\nTarget cleanup: ' + error.message; });}
+    }finally{cdp?.close();if(target?.targetId)await browserCommand('Target.closeTarget',{targetId:target.targetId}).catch(error => { chromeErrors += '\nTarget cleanup: ' + error.message; });}
   });
   await check('2.31-2.32 适配：新交互卡片选择性保护、新版实体路由、长文案采集与新动态模板', async () => {
-    const target=await browserCommand('Target.createTarget',{url:origin+'/'});let cdp;
+    let target,cdp;
     try {
-      const page=await until(async()=>(await(await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find(t=>t.id===target.targetId));cdp=new CDP(page.webSocketDebuggerUrl);await cdp.connect();await cdp.send('Page.bringToFront');await documentReady(cdp);
+      ({target,cdp}=await openIsolatedPage('/'));
       const longCopy='Run a swarm: several agents working in parallel on one task, each in its own conversation, collaborating through a shared message board. Use when work splits cleanly.';
       const html=`<main><div data-testid="coordinator-worker-card" role="button"><span id="v232-worker-name" class="text-sm truncate">Settings</span><div id="v232-worker-latest" data-testid="coordinator-card-latest-line">Settings</div><button id="v232-worker-stop" title="Stop Subagent">Stop Subagent</button></div><button id="v232-side-popout" data-testid="side-question-popout" aria-label="Open in full conversation"></button><div id="v232-side-user" data-testid="side-question-followup-user">Settings</div><div id="v232-side-thinking" data-testid="side-question-followup-thinking">Thinking...</div><div id="v232-voice-summary" data-testid="voice-transcript-summary">Settings</div><nav aria-label="Sidebar"><a id="v232-link-skill" href="/customizations/marketplaces/official/skills/my-skill">Settings</a><a id="v232-link-bundle" href="/customizations/marketplaces/official/bundles/my-bundle">Settings</a><a id="v232-link-sidecar" href="/customizations/sidecars/my-sidecar">Settings</a><a id="v232-link-trigger" href="/sidecars/triggers/my-trigger">Settings</a><a id="v232-link-nav" href="/customizations">Customizations</a></nav><div role="menu"><div data-testid="model-selector-panel"><span id="v232-model-weekly">Gemini Flash Next Weekly Limit</span><span id="v232-model-daily">Gemini Flash Next Daily Limit</span></div></div><div role="tooltip" id="v232-cancel-q">Cancel Questionnaire and Stop the Agent (Esc)</div><button id="v232-long-btn">${longCopy}</button></main>`;
       await cdp.evaluate('document.body.innerHTML='+JSON.stringify(html));
@@ -730,16 +771,19 @@ ${engine}`,auth.executionContextId);assert.equal(await cdp.evaluate('!!globalThi
       assert.equal(await text(cdp,'#v232-model-weekly'),'Gemini Flash Next 每周限额');
       assert.equal(await text(cdp,'#v232-model-daily'),'Gemini Flash Next 每日限额');
       assert.equal(await text(cdp,'#v232-cancel-q'),'取消问卷并停止智能体 (Esc)');
-      const collected=await cdp.evaluate('globalThis.__GRAVITYBOX_ENGINE_V1__.collectUntranslated()');
+      await cdp.evaluate('document.querySelector("#v232-long-btn")?.scrollIntoView({block:"center"})');
+      const collected=await until(async()=>{
+        const list=await collectUntranslatedFull(cdp);
+        if(list.some(item=>item.key===longCopy))return list;
+      },8000,'v232 longCopy collectUntranslated');
       assert.equal(collected.some(item=>item.key===longCopy),true,'超过 120 字符的安全界面文案应被 collectUntranslated 采集');
       await cdp.evaluate('globalThis.__GRAVITYBOX_ENGINE_V1__.dispose()');
-    }finally{cdp?.close();await browserCommand('Target.closeTarget',{targetId:target.targetId}).catch(error => { chromeErrors += '\nTarget cleanup: ' + error.message; });}
+    }finally{cdp?.close();if(target?.targetId)await browserCommand('Target.closeTarget',{targetId:target.targetId}).catch(error => { chromeErrors += '\nTarget cleanup: ' + error.message; });}
   });
   await check('设置首帧、同词典刷新、热更新和退出动画保持译文，不跨帧回写英文', async () => {
-    const target=await browserCommand('Target.createTarget',{url:origin+'/'});let cdp;
+    let target,cdp;
     try {
-      const page=await until(async()=>(await(await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find(t=>t.id===target.targetId));
-      cdp=new CDP(page.webSocketDebuggerUrl);await cdp.connect();await cdp.send('Page.bringToFront');await documentReady(cdp);
+      ({target,cdp}=await openIsolatedPage('/'));
       const rows=Array.from({length:320},(_,i)=>`<div data-testid="conversation-row-sidebar"><span class="truncate">Private conversation ${i}</span><span>1d</span></div>`).join('');
       const html='<div role="dialog" aria-label="Settings" id="flash-root"><button aria-label="Close">Close</button><aside><h1 id="flash-heading">Settings</h1><button id="flash-general">General</button><button id="flash-app">Application</button><button>Appearance</button><h2>Project list</h2><button id="flash-project">Application</button>'+rows+'</aside><main><h2>General</h2><span id="flash-label">Permission Preset</span><div id="flash-description">Configure agent execution, queued message delivery, and permissions.</div><p id="flash-inline">Type <code>/</code> and select <code>plan</code> to have the agent generate a plan.</p><input id="flash-input" value="Permission Preset"><div data-gravitybox-user-content id="flash-private">Permission Preset</div></main></div>';
       const entries={Settings:'设置',Close:'关闭',General:'通用',Application:'应用设置','App Settings':'应用设置',Appearance:'外观','Permission Preset':'权限预设','Configure agent execution, queued message delivery, and permissions.':'配置智能体执行、排队消息发送及权限。','Type {0} and select {1} to have the agent generate a plan.':'输入 {0} 并选择 {1}，让智能体生成规划。'};
@@ -774,7 +818,7 @@ ${engine}`,auth.executionContextId);assert.equal(await cdp.evaluate('!!globalThi
       assert.ok(returned.every(Boolean),'Unsupported screen must invalidate the scope and revalidate on return');
       await cdp.evaluate('globalThis.__GRAVITYBOX_ENGINE_V1__.dispose()');
       assert.equal(await text(cdp,'#flash-inline'),'Type / and select plan to have the agent generate a plan.');
-    } finally { cdp?.close();await browserCommand('Target.closeTarget',{targetId:target.targetId}).catch(error => { chromeErrors += '\nTarget cleanup: ' + error.message; }); }
+    } finally { cdp?.close();if(target?.targetId)await browserCommand('Target.closeTarget',{targetId:target.targetId}).catch(error => { chromeErrors += '\nTarget cleanup: ' + error.message; }); }
   });
   await check('HUD 独立挂载不覆盖输入区、窄屏单行、向上弹出及输入框零焦点争夺', async () => {
     await main.send('Page.bringToFront');

@@ -86,10 +86,20 @@ jobs:
       - name: Check Development Environment
         run: npm run doctor
 
+      - name: Cache Pinned Test Browser
+        uses: actions/cache@v4
+        with:
+          path: .cache/test-chrome-*
+          key: ${{ runner.os }}-${{ runner.arch }}-chrome-${{ hashFiles('tools/setup-test-browser.mjs') }}
+
       - name: Setup Pinned Test Browser
         run: node tools/setup-test-browser.mjs
 
       - name: Verify & Package DMG
+        env:
+          CI: true
+          GRAVITYBOX_CI_HEADLESS: '1'
+          TZ: UTC
         run: |
           node tools/verify.mjs --no-vendor
           node tools/package-mac.mjs

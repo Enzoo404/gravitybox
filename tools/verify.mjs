@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { cpus } from 'node:os';
 import { promisify } from 'node:util';
 import { readdir, mkdir, readFile, writeFile, appendFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -118,13 +119,14 @@ async function main() {
   const startedAt = performance.now();
   /* 先做参数格式/重复校验，避免跑完构建才发现 CLI 写错。 */
   const earlyTarget = parseTargetAppVersionArg(argv);
+  const dictOnly = argv.includes('--dict-only');
   if (argv.includes('--auto-extract')) throw Error('验证不修改适配输入；请先显式运行 i18n:extract -- --register-bundle，审阅后再验证');
   const initialDigest = await sourceDigest(root);
   const version = JSON.parse(await readFile(join(root, 'package.json'))).version;
   const out = join(root, '质检报告', `${version}-改造验收`); await mkdir(out, { recursive: true });
   const completedSteps = [];
   const timings = [];
-  process.stdout.write('[verify] 原生 UI 夹具不纳入默认门禁；按需运行 npm run test:native-ui，安装后另行人工验收\n');
+  if (!dictOnly) process.stdout.write('[verify] 原生 UI 夹具不纳入默认门禁；按需运行 npm run test:native-ui，安装后另行人工验收\n');
   async function step(name, binary, args) {
     process.stdout.write(`检查：${name}\n`);
     const started = performance.now();
@@ -147,10 +149,12 @@ async function main() {
   await step('构建', process.execPath, [join(root, 'node_modules/typescript/bin/tsc')]);
   await step('运行时', process.execPath, [join(root, 'tools/copy-runtime.mjs')]);
   await step('价格资产', process.execPath, [join(root, 'tools/sync-pricing-feed.mjs')]);
-  await step('单元与集成', process.execPath, [join(root, 'tools/run-tests.mjs')]);
-  await step('浏览器回归', process.execPath, [join(root, 'test/browser.mjs')]);
-  await mkdir(join(root, '.cache'), { recursive: true });
-  await step('Swift检查', '/usr/bin/swiftc', await nativeBuildArgs(root, join(root, '.cache/GravityBox-native-verified')));
+  if (!dictOnly) {
+    await step('单元与集成', process.execPath, [join(root, 'tools/run-tests.mjs')]);
+    await step('浏览器回归', process.execPath, [join(root, 'test/browser.mjs')]);
+    await mkdir(join(root, '.cache'), { recursive: true });
+    await step('Swift检查', '/usr/bin/swiftc', await nativeBuildArgs(root, join(root, '.cache/GravityBox-native-verified')));
+  }
 
   const { SUPPORTED_BUNDLES } = await import(pathToFileURL(join(root, 'dist', 'bundle.js')).href);
   const supportedVersions = [...SUPPORTED_BUNDLES.keys()];
@@ -174,13 +178,18 @@ async function main() {
     if (shouldVerifyVendor) vendorVersions.push({ targetVersion, cachedBundle });
     else lightweightVersions.push(targetVersion);
   }
-  await Promise.all(lightweightVersions.map(async targetVersion => {
-    const file = `${targetVersion}.json`, expected = SUPPORTED_BUNDLES.get(targetVersion);
-    const gateArgs = [join(root, 'tools/coverage-report.mjs'), '--strings', join(root, 'ui-strings', file), '--gate', '--out', join(out, `coverage-${file}`)];
-    if (expected) gateArgs.push('--expect-bundle-sha256', expected);
-    gateArgs.push('--no-vendor');
-    process.stdout.write(`[verify] ${targetVersion} 启用免 vendor 校验模式（基于 ui-strings/${file} 验证词典）\n`);
-    await step(`词典门禁-${targetVersion}`, process.execPath, gateArgs);
+  const concurrency = Math.max(1, Math.min(4, cpus().length || 2));
+  let cursor = 0;
+  await Promise.all(Array.from({ length: Math.min(concurrency, lightweightVersions.length) }, async () => {
+    while (cursor < lightweightVersions.length) {
+      const targetVersion = lightweightVersions[cursor++];
+      const file = `${targetVersion}.json`, expected = SUPPORTED_BUNDLES.get(targetVersion);
+      const gateArgs = [join(root, 'tools/coverage-report.mjs'), '--strings', join(root, 'ui-strings', file), '--gate', '--out', join(out, `coverage-${file}`)];
+      if (expected) gateArgs.push('--expect-bundle-sha256', expected);
+      gateArgs.push('--no-vendor');
+      process.stdout.write(`[verify] ${targetVersion} 启用免 vendor 校验模式（基于 ui-strings/${file} 验证词典）\n`);
+      await step(`词典门禁-${targetVersion}`, process.execPath, gateArgs);
+    }
   }));
   for (const { targetVersion, cachedBundle } of vendorVersions) {
     const file = `${targetVersion}.json`, expected = SUPPORTED_BUNDLES.get(targetVersion);
@@ -194,6 +203,12 @@ async function main() {
   }
 
   const digest = await sourceDigest(root); if (digest !== initialDigest) throw new Error('验证期间源码发生变化，请重新检查');
+  if (dictOnly) {
+    await reportSuccessToStepSummary({ version, scope, digest, steps: completedSteps });
+    await writeFile(join(out, 'gate-timings.json'), JSON.stringify({ totalMs: performance.now() - startedAt, steps: timings }, null, 2) + '\n');
+    process.stdout.write('全部词典门禁检查通过\n');
+    return;
+  }
   await mkdir(join(root, '.cache'), { recursive: true });
   await writeFile(join(root, '.cache/verified-release.json'), JSON.stringify({
     digest,
