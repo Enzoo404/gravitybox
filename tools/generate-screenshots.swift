@@ -5,7 +5,16 @@ import CoreGraphics
 // 支持 2x Retina 超高清渲染、交通灯按钮增强、深浅双主题以及全景 Hero 合成
 
 let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-let sourceDir = root.appendingPathComponent("质检报告/1.0.5-改造验收/原生布局")
+let appVersion: String = {
+    let pkgURL = root.appendingPathComponent("package.json")
+    if let data = try? Data(contentsOf: pkgURL),
+       let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+       let version = json["version"] as? String, !version.isEmpty {
+        return version
+    }
+    return "1.1.0"
+}()
+let sourceDir = root.appendingPathComponent("质检报告/\(appVersion)-改造验收/原生布局")
 let targetDir = root.appendingPathComponent("assets/screenshots")
 
 try? FileManager.default.createDirectory(at: targetDir, withIntermediateDirectories: true)
@@ -33,7 +42,6 @@ func savePNG(_ rep: NSBitmapImageRep, to url: URL) throws {
 func polishMainWindow(_ sourceRep: NSBitmapImageRep, isDark: Bool) -> NSBitmapImageRep {
     let width = sourceRep.pixelsWide
     let height = sourceRep.pixelsHigh
-    let colorSpace = NSColorSpace.sRGB
     
     let targetRep = NSBitmapImageRep(
         bitmapDataPlanes: nil,
@@ -52,7 +60,6 @@ func polishMainWindow(_ sourceRep: NSBitmapImageRep, isDark: Bool) -> NSBitmapIm
     NSGraphicsContext.saveGraphicsState()
     let context = NSGraphicsContext(bitmapImageRep: targetRep)!
     NSGraphicsContext.current = context
-    let cg = context.cgContext
     
     let logicalW = CGFloat(width) / 2.0
     let logicalH = CGFloat(height) / 2.0
@@ -131,6 +138,12 @@ func polishMenuPanel(_ sourceRep: NSBitmapImageRep, isDark: Bool) -> NSBitmapIma
     
     let clip = NSBezierPath(roundedRect: bounds, xRadius: 10.0, yRadius: 10.0)
     clip.addClip()
+    // 垫一层实心底色，避免原图毛玻璃半透明通道在不同背景上产生阴影噪点
+    let backdropColor = isDark
+        ? NSColor(srgbRed: 0.16, green: 0.17, blue: 0.19, alpha: 1.0)
+        : NSColor(srgbRed: 0.95, green: 0.96, blue: 0.97, alpha: 1.0)
+    backdropColor.setFill()
+    bounds.fill()
     sourceRep.draw(in: bounds)
     
     let strokeColor = isDark ? NSColor(white: 1.0, alpha: 0.18) : NSColor(white: 0.0, alpha: 0.12)
@@ -194,10 +207,21 @@ func composeHero(mainWin: NSBitmapImageRep, menuWin: NSBitmapImageRep, isDark: B
     let mainY: CGFloat = (logicalH - mainH) / 2.0 - 15.0
     let mainRect = NSRect(x: mainX, y: mainY, width: mainW, height: mainH)
     
-    // 主窗口阴影与绘制
+    // 主窗口阴影（仅对实心圆角背板投射阴影，避免半透明像素产生噪点）与绘制
+    let mainCorner = 11.0 * mainScale
+    let mainBackdrop = isDark
+        ? NSColor(srgbRed: 0.12, green: 0.13, blue: 0.15, alpha: 1.0)
+        : NSColor(srgbRed: 0.97, green: 0.98, blue: 0.99, alpha: 1.0)
+    let mainPath = NSBezierPath(roundedRect: mainRect, xRadius: mainCorner, yRadius: mainCorner)
     cg.saveGState()
-    let shadowColor = isDark ? NSColor(white: 0.0, alpha: 0.65).cgColor : NSColor(white: 0.0, alpha: 0.22).cgColor
+    let shadowColor = isDark ? NSColor(white: 0.0, alpha: 0.60).cgColor : NSColor(white: 0.0, alpha: 0.20).cgColor
     cg.setShadow(offset: CGSize(width: 0, height: -18), blur: 36, color: shadowColor)
+    mainBackdrop.setFill()
+    mainPath.fill()
+    cg.restoreGState()
+
+    cg.saveGState()
+    mainPath.addClip()
     mainWin.draw(in: mainRect)
     cg.restoreGState()
     
@@ -210,10 +234,21 @@ func composeHero(mainWin: NSBitmapImageRep, menuWin: NSBitmapImageRep, isDark: B
     let menuY: CGFloat = 60.0
     let menuRect = NSRect(x: menuX, y: menuY, width: menuW, height: menuH)
     
-    // 菜单栏面板阴影与绘制
+    // 菜单栏面板阴影（仅对实心圆角背板投射阴影）与绘制
+    let menuCorner = 10.0 * menuScale
+    let menuBackdrop = isDark
+        ? NSColor(srgbRed: 0.16, green: 0.17, blue: 0.19, alpha: 1.0)
+        : NSColor(srgbRed: 0.95, green: 0.96, blue: 0.97, alpha: 1.0)
+    let menuPath = NSBezierPath(roundedRect: menuRect, xRadius: menuCorner, yRadius: menuCorner)
     cg.saveGState()
-    let menuShadowColor = isDark ? NSColor(white: 0.0, alpha: 0.75).cgColor : NSColor(white: 0.0, alpha: 0.28).cgColor
-    cg.setShadow(offset: CGSize(width: -6, height: -22), blur: 44, color: menuShadowColor)
+    let menuShadowColor = isDark ? NSColor(white: 0.0, alpha: 0.72).cgColor : NSColor(white: 0.0, alpha: 0.26).cgColor
+    cg.setShadow(offset: CGSize(width: -6, height: -20), blur: 42, color: menuShadowColor)
+    menuBackdrop.setFill()
+    menuPath.fill()
+    cg.restoreGState()
+
+    cg.saveGState()
+    menuPath.addClip()
     menuWin.draw(in: menuRect)
     cg.restoreGState()
     

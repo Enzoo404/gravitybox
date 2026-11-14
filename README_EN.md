@@ -1,192 +1,286 @@
 <div align="center">
   <a href="https://github.com/Enzoo404/gravitybox">
-    <img src="assets/master-1024.png" width="96" height="96" alt="GravityBox Logo" style="border-radius: 20px; box-shadow: 0 8px 24px rgba(0,0,0,0.12);" />
+    <img src="assets/master-1024.png" alt="GravityBox Logo" width="84" height="84" />
   </a>
 
   <h1>GravityBox</h1>
 
   <p>
-    <strong>The Native macOS Productivity Suite for Google Antigravity</strong><br>
-    <sub>Zero-Invasive UI Localization · In-IDE Telemetry HUD · Dual-Cycle Quota Radar · Atomic Multi-Account Switcher · Token & Time-Aware Pricing · Safe Cache Cleaner</sub>
-  </p>
-
-  <p>
-    <strong>English</strong> · <a href="README.md">简体中文</a>
+    <strong>Lightweight Native macOS Companion for Antigravity on Apple Silicon</strong><br />
+    Native Swift AppKit UI · In-IDE Telemetry HUD · Dual-Window Quota Monitor · Read-Only SQLite Usage &amp; Cost Engine · Non-Invasive Runtime Localization
   </p>
 
   <p>
     <a href="https://github.com/Enzoo404/gravitybox/releases/latest"><img src="https://img.shields.io/github/v/release/Enzoo404/gravitybox?style=flat-square&color=2563EB" alt="Latest Release"></a>
     <a href="https://github.com/Enzoo404/gravitybox/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Enzoo404/gravitybox/ci.yml?branch=main&style=flat-square&logo=github" alt="CI Status"></a>
-    <a href="https://github.com/Enzoo404/gravitybox/releases"><img src="https://img.shields.io/github/downloads/Enzoo404/gravitybox/total?style=flat-square&color=059669" alt="Downloads"></a>
-    <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License"></a>
-    <img src="https://img.shields.io/badge/macOS-14.0%2B-555555?style=flat-square&logo=apple&logoColor=white" alt="macOS 14+">
-    <img src="https://img.shields.io/badge/Apple%20Silicon-arm64-EA580C?style=flat-square" alt="Apple Silicon">
-    <img src="https://img.shields.io/badge/Telemetry-Zero%20%2F%20100%25%20Local-10B981?style=flat-square&logo=shield" alt="Zero Telemetry">
-    <a href="https://github.com/Enzoo404/gravitybox/stargazers"><img src="https://img.shields.io/github/stars/Enzoo404/gravitybox?style=flat-square&logo=github&color=D97706" alt="Stars"></a>
+    <img src="https://img.shields.io/badge/macOS-14%2B%20%C2%B7%20Apple%20Silicon-111827?style=flat-square&logo=apple&logoColor=white" alt="macOS 14+ Apple Silicon">
+    <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-10B981?style=flat-square" alt="MIT License"></a>
   </p>
 
   <p>
-    <a href="https://github.com/Enzoo404/gravitybox/releases/latest"><b>📥 Download for macOS (.dmg)</b></a> ·
-    <a href="#-quick-start"><b>⚡ Quick Start</b></a> ·
-    <a href="#-why-gravitybox"><b>💡 Why GravityBox?</b></a> ·
-    <a href="#-core-features"><b>✨ Core Features</b></a> ·
-    <a href="#-architecture--principles"><b>📐 Architecture</b></a> ·
-    <a href="#-security--privacy"><b>🛡️ Security & Privacy</b></a>
+    <a href="./README.md">简体中文</a> · <b>English</b>
+  </p>
+
+  <p>
+    <a href="#-why-gravitybox">Why GravityBox</a> ·
+    <a href="#-in-ide-telemetry-hud">Telemetry HUD</a> ·
+    <a href="#-key-capabilities">Capabilities</a> ·
+    <a href="#-screenshots">Screenshots</a> ·
+    <a href="#-installation--upgrades">Installation</a> ·
+    <a href="#-architecture--building-from-source">Architecture &amp; Build</a> ·
+    <a href="#-security--privacy-boundaries">Security</a>
   </p>
 </div>
 
-<p align="center">
+<br />
+
+<div align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/hero-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="assets/screenshots/hero.png">
-    <img src="assets/screenshots/hero.png" width="1280" alt="GravityBox Native macOS Workspace and Menu Bar Panel" style="border-radius: 12px; box-shadow: 0 12px 32px rgba(0,0,0,0.16);" />
+    <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/hero-dark.png" />
+    <img src="assets/screenshots/hero.png" alt="GravityBox Main Console and Menu Bar Panel" width="100%" />
   </picture>
-</p>
-
-<p align="center">
-  <strong>Crafted natively for macOS: Monitor quotas, inspect conversation throughput, and audit token usage right beside your code.</strong>
-</p>
+  <sub><em>Native macOS AppKit Console &amp; Menu Bar Panel (automatically adapts to macOS Light / Dark appearance)</em></sub>
+</div>
 
 ---
 
-## 💡 Why GravityBox?
+## ✨ Why GravityBox?
 
-| Consideration | Stock Google Antigravity | Community Scripts / Patchers | **GravityBox Native Suite** |
-| :--- | :--- | :--- | :--- |
-| **Localization & Display** | English only; non-English developers face cognitive load | Unpacks `app.asar`, invalidates code signature, breaks on updates | **Zero-invasive in-memory hot-patching**; never touches app binaries; survives updates seamlessly |
-| **Conversation Telemetry** | Spinner only; impossible to gauge latency or model velocity | Not supported | **In-IDE tri-capsule HUD**: Live turn duration, TTFT (latency), actual TPS throughput & context waterline |
-| **Quota Visibility** | Plain dropdown percentage; opaque rolling window | Raw packet scraping; conflates 5-hour and weekly caps | **Dual-cycle fusion radar**: Accurately separates 5-hour rolling & weekly caps with color-coded alerts |
-| **Multi-Account Workflow** | Tedious manual sign-outs; frequent session conflicts | Forcible cookie replacement; prone to corrupted state | **4-phase atomic transaction** with 7-day automated snapshot and one-click rollback |
-| **Usage & Cost Analytics** | No usage dashboard; opaque long-term consumption | Missing or rudimentary local counters | **Asynchronous read-only SQLite auditing** with time-aware historical pricing and cache-hit metrics |
-| **Footprint & Security** | — | Unknown script privileges; risks config corruption | **100% local, zero telemetry**; sensitive files locked to `0600`; native Trash-based soft deletion |
+GravityBox complements `/Applications/Antigravity.app` without altering official binaries or signatures—bringing multi-account safety, dual-cycle quota clarity, and local token accounting together in a native macOS experience:
+
+| Area | Default Experience | GravityBox Approach |
+| :--- | :--- | :--- |
+| **Account Switching** | Manual sign-out/sign-in with risk of stale state or accidental overwrites | **4-phase atomic snapshot transaction + automatic rollback**; validates no shared-credential conflict before user-confirmed switches |
+| **Quota Window Clarity** | Weekly allowances are easily mistaken for 5-hour rolling windows | **Strict Dual-Window Separation**; prioritizes true 5-hour windows and clearly labels reset times when missing |
+| **Live Session & Cost Visibility** | No real-time view into per-turn speed, TTFT, cache savings, or context composition | **In-IDE Telemetry HUD** + **Read-Only SQLite Accounting** using dated pricing-feed windows |
+| **Localization Integrity** | Static binary patches break app code signatures across every update | **CDP Runtime Injection** with DOM-protected boundaries—never unpacks or re-signs `/Applications/Antigravity.app` |
+| **Cache & Storage Cleanup** | Session logs accumulate over time with risk of irreversible manual deletion | Guided storage trim where all deletions **move safely to macOS Trash** with timestamped snapshots for one-click restore |
 
 ---
 
-## 📸 Gallery Showcase (Retina HD Gallery)
+## 📊 In-IDE Telemetry HUD
 
-<p align="center">
-  <img src="assets/screenshots/overview.png" width="49%" alt="Overview Dashboard: Quota radar and today's usage" style="border-radius: 8px; box-shadow: 0 6px 16px rgba(0,0,0,0.1);" />
-  <img src="assets/screenshots/usage.png" width="49%" alt="Usage Analytics: Token trend bar charts and cost donut" style="border-radius: 8px; box-shadow: 0 6px 16px rgba(0,0,0,0.1);" />
-</p>
-<p align="center">
-  <img src="assets/screenshots/accounts.png" width="49%" alt="Accounts Manager: Active vs backup quotas & atomic switch" style="border-radius: 8px; box-shadow: 0 6px 16px rgba(0,0,0,0.1);" />
-  <img src="assets/screenshots/menubar.png" width="49%" alt="Menu Bar Companion: Glanceable 3-tab quick view" style="border-radius: 8px; box-shadow: 0 6px 16px rgba(0,0,0,0.1);" />
-</p>
-<p align="center">
-  <img src="assets/screenshots/settings.png" width="49%" alt="Preferences: Localization, HUD toggle, and system integration" style="border-radius: 8px; box-shadow: 0 6px 16px rgba(0,0,0,0.1);" />
-  <img src="assets/screenshots/maintenance.png" width="49%" alt="Storage & Maintenance: Tri-category cache scan and Trash soft-delete" style="border-radius: 8px; box-shadow: 0 6px 16px rgba(0,0,0,0.1);" />
-</p>
+Mounted cleanly beneath every Antigravity conversation composer—without overlapping input controls or stealing editor focus—the tri-capsule HUD expands upward on click or hover across multi-pane layouts and light/dark themes:
+
+<div align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/hud-dark.png" />
+    <img src="assets/screenshots/hud.png" alt="In-IDE Telemetry HUD and upward token breakdown popover" width="92%" />
+  </picture>
+</div>
+
+- **Session & Throughput Capsule**: Tracks turns, model vs. tool execution duration, and Time-To-First-Token (TTFT, excluding thinking idle gaps for accurate `tok/s`), with subtle streaming and subagent activity indicators.
+- **Tokens & Cost Capsule**: Breaks down total, uncached input, cached read, and output tokens alongside cache hit rate, estimated API cost, and cache cost savings.
+- **Context Window Capsule**: Renders a three-segment breakdown bar (System Prompt · Tool Definitions · Conversation Messages) calibrated against each model's true context limit.
+
+---
+
+## 🧭 Key Capabilities
+
+### 1. Multi-Account Management & 4-Phase Safe Switching
+- **Candidate Recommendations (User-Confirmed)**: Scores saved standby accounts by remaining quota, disabled flags, and freshness to surface recommendations while leaving switch execution under explicit user confirmation.
+- **No Force-Killing**: Never kills Antigravity in the background; verifies that the official app (and any credential-sharing Insiders instance) is closed before touching account state.
+- **Automatic In-Place Rollback**: Any error during backup, sync, or post-switch verification immediately restores the pre-switch snapshot.
+
+### 2. Dual-Window Quota Monitor & Local Cost Engine
+- **Accurate Window Semantics**: Separates Gemini 5-hour rolling windows, weekly quotas, and Claude/GPT pools while preserving exact `Unknown`, `Disabled`, `Exhausted`, and `Stale` states.
+- **Non-Blocking SQLite Projection**: Scans local session state in batched read-only SQLite worker transactions with `Today`, `7 Days`, `30 Days`, and `All Time` charts plus hourly usage trends.
+- **Time-Boxed Pricing Feed**: Revalues historical consumption against dated model pricing intervals with optional GitHub release checks for pricing feed updates.
+
+### 3. Non-Invasive Bilingual Adaptation (`中文 / En`)
+- **Zero App Modification**: Injects isolated runtime localization over Chrome DevTools Protocol (`CDP`), adapting new Antigravity updates cleanly without modifying `/Applications/Antigravity.app`.
+- **Protected User Content**: Unsent drafts, chat history, code blocks, terminal output, workspace names, and brand terms are isolated behind DOM selectors.
+- **Graceful Fallback**: Automatically retains valid mappings or falls back cleanly to official English if DOM structure changes unexpectedly.
+
+### 4. Reversible Maintenance & Menu Bar Companion
+- **Trash-First Cleanup**: Previews reclaimable cache and snapshot sizes before moving selected artifacts to the macOS Trash alongside one-click snapshot restoration.
+- **Menu Bar Efficiency**: Supports Launch at Login and synchronized launch/exit with Antigravity, providing instant access to `Usage · Quota · Accounts`.
+
+---
+
+## 🖼 Screenshots
+
+> Built natively with Swift AppKit for macOS. Every preview below automatically adapts to your browser or OS Light / Dark theme.
+
+<table>
+  <tr>
+    <td width="50%" align="center">
+      <b>Main Console · Overview</b><br /><br />
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/dark-overview.png" />
+        <img src="assets/screenshots/overview.png" alt="GravityBox Overview" width="100%" />
+      </picture>
+    </td>
+    <td width="50%" align="center">
+      <b>Main Console · Accounts</b><br /><br />
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/dark-accounts.png" />
+        <img src="assets/screenshots/accounts.png" alt="GravityBox Accounts" width="100%" />
+      </picture>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" align="center">
+      <b>Main Console · Usage &amp; Cost</b><br /><br />
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/dark-usage.png" />
+        <img src="assets/screenshots/usage.png" alt="GravityBox Usage" width="100%" />
+      </picture>
+    </td>
+    <td width="50%" align="center">
+      <b>Main Console · Settings</b><br /><br />
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/dark-settings.png" />
+        <img src="assets/screenshots/settings.png" alt="GravityBox Settings" width="100%" />
+      </picture>
+    </td>
+  </tr>
+</table>
 
 <details>
-<summary><strong>🌙 Click to view Dark Mode Showcase Gallery</strong></summary>
+<summary>Show more screenshots: Menu Bar Panel tabs, Storage Maintenance sheet, and About view</summary>
+<br />
+<table>
+  <tr>
+    <td width="33.3%" align="center">
+      <b>Menu Bar · Usage</b><br /><br />
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/dark-menubar.png" />
+        <img src="assets/screenshots/menubar.png" alt="Menu Bar Usage" width="100%" />
+      </picture>
+    </td>
+    <td width="33.3%" align="center">
+      <b>Menu Bar · Quota</b><br /><br />
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/dark-menubar-quota.png" />
+        <img src="assets/screenshots/menubar-quota.png" alt="Menu Bar Quota" width="100%" />
+      </picture>
+    </td>
+    <td width="33.3%" align="center">
+      <b>Menu Bar · Accounts</b><br /><br />
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/dark-menubar-accounts.png" />
+        <img src="assets/screenshots/menubar-accounts.png" alt="Menu Bar Accounts" width="100%" />
+      </picture>
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center">
+      <b>Storage Trim &amp; Snapshot Restore</b><br /><br />
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/dark-maintenance.png" />
+        <img src="assets/screenshots/maintenance.png" alt="Storage Maintenance Sheet" width="90%" />
+      </picture>
+    </td>
+    <td align="center">
+      <b>About &amp; Updates</b><br /><br />
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/dark-about.png" />
+        <img src="assets/screenshots/about.png" alt="About GravityBox" width="100%" />
+      </picture>
+    </td>
+  </tr>
+</table>
+</details>
 
-<br>
+---
 
-<p align="center">
-  <img src="assets/screenshots/dark-overview.png" width="49%" alt="Dark Mode Overview" style="border-radius: 8px; box-shadow: 0 6px 16px rgba(0,0,0,0.3);" />
-  <img src="assets/screenshots/dark-usage.png" width="49%" alt="Dark Mode Usage Analytics" style="border-radius: 8px; box-shadow: 0 6px 16px rgba(0,0,0,0.3);" />
-</p>
-<p align="center">
-  <img src="assets/screenshots/dark-accounts.png" width="49%" alt="Dark Mode Accounts Management" style="border-radius: 8px; box-shadow: 0 6px 16px rgba(0,0,0,0.3);" />
-  <img src="assets/screenshots/dark-menubar.png" width="49%" alt="Dark Mode Menu Bar Panel" style="border-radius: 8px; box-shadow: 0 6px 16px rgba(0,0,0,0.3);" />
-</p>
-<p align="center">
-  <img src="assets/screenshots/dark-settings.png" width="49%" alt="Dark Mode Settings" style="border-radius: 8px; box-shadow: 0 6px 16px rgba(0,0,0,0.3);" />
-  <img src="assets/screenshots/dark-maintenance.png" width="49%" alt="Dark Mode Storage Maintenance" style="border-radius: 8px; box-shadow: 0 6px 16px rgba(0,0,0,0.3);" />
-</p>
+## 🚀 Installation & Upgrades
+
+### System Requirements
+- **OS**: macOS 14 (Sonoma) or macOS 15+ (Sequoia)
+- **Architecture**: Apple Silicon (`arm64`)
+- **Target App**: Official release `/Applications/Antigravity.app` (*Insiders channel is neither supported nor modified*)
+- **Runtime**: Self-contained Node 22 binary embedded inside the app bundle—zero prerequisites required
+
+### First-Time Installation
+
+1. Download the latest `GravityBox-<version>-arm64.dmg` and `.sha256` checksum from [GitHub Releases](https://github.com/Enzoo404/gravitybox/releases/latest).
+2. *(Recommended)* Verify DMG integrity:
+   ```bash
+   shasum -a 256 -c GravityBox-<version>-arm64.dmg.sha256
+   ```
+3. Mount the DMG and drag **GravityBox.app** into **Applications**.
+4. Because open-source builds are not Apple-notarized, clear Gatekeeper quarantine once before launching:
+   - **Terminal (Recommended)**:
+     ```bash
+     xattr -cr /Applications/GravityBox.app
+     ```
+   - **System Settings**: If blocked on first launch, open **System Settings → Privacy & Security** and click **Open Anyway**.
+
+### Non-Destructive Upgrades
+- **Drop-In Replacement**: Quit GravityBox and drag the new app bundle over `/Applications/GravityBox.app`. All saved accounts, custom dictionary overrides, usage ledgers, and recovery snapshots under `~/Library/Application Support/GravityBox` are preserved intact.
+- **Legacy Channel Migration**: Configurations from `v1.0.5` or earlier with `applicationChannel=insiders` are automatically backed up and migrated to official `stable` mode on first launch.
+- **In-App Updates**: Background update checks remain off by default; check manually or opt in anytime from the **About** tab.
+
+<details>
+<summary>Optional: Custom Google OAuth credentials for source builds</summary>
+
+Local quota inspection, the Telemetry HUD, SQLite cost tracking, and runtime localization require **no OAuth setup**. For source builds using live quota API refreshes, provide your own OAuth client credentials via environment variables:
+
+```bash
+export GRAVITYBOX_GOOGLE_CLIENT_ID="your-client-id.apps.googleusercontent.com"
+export GRAVITYBOX_GOOGLE_CLIENT_SECRET="your-client-secret"
+```
 
 </details>
 
-<p align="center"><sub>All screenshots captured via native macOS 14+ AppKit at crisp 2x Retina resolution with sensitive identities fully redacted. <a href="assets/screenshots/README.md">View complete asset specs and privacy standards</a></sub></p>
+---
+
+## 🔒 Security & Privacy Boundaries
+
+| Principle | Implementation |
+| :--- | :--- |
+| **Zero Telemetry** | No analytics SDKs, crash telemetry, or unprompted outbound requests; update polling is off by default |
+| **Untouched Official Binary** | Never patches, unpacks, or re-signs `/Applications/Antigravity.app` |
+| **Local-Only State** | Accounts, keychain references, ledgers, and snapshots live exclusively in `~/Library/Application Support/GravityBox` |
+| **Protected User Content** | Input drafts, messages, code blocks, terminal logs, and project names are excluded from DOM mutation |
 
 ---
 
-## ✨ Core Features
+## 🛠 Architecture & Building from Source
 
-### 1. 🌐 Zero-Invasive Runtime Localization
-- **No binary tampering or ASAR repacking**: Delivers on-the-fly Chinese localization via local Chrome DevTools Protocol (CDP) debugging channel; macOS Gatekeeper signature remains 100% valid;
-- **Strict AST & selector protection**: Automatically preserves code editors (`.monaco-editor`), terminal buffers (`.xterm`), conversation bodies, and code blocks—never alters user code or prompt text;
-- **Instant toggle & clean fallback**: Switch localization on or off with millisecond responsiveness, reverting instantly to pristine stock English without restarting Antigravity.
+```mermaid
+flowchart LR
+  UI["Native UI (Swift / AppKit)<br/>Main Console · Menu Bar · Updater"] <-->|"Unix Domain Socket IPC"| Core["Core Engine (Node 22 / TypeScript)<br/>4-Phase Switch · SQLite Ledger · Quota Fusion"]
+  Core -->|"CDP (Zero Binary Mod)"| IDE["/Applications/Antigravity.app<br/>Runtime Localization · Telemetry HUD"]
+  Core -->|"Read-Only SQLite + Trash Snapshots"| Local["~/Library/Application Support/GravityBox<br/>State · Ledger · Dict Overrides · Snapshots"]
+```
 
-### 2. ⚡️ In-IDE Conversation Telemetry HUD
-- **Tri-capsule status bar embedded right into the chat input**: Glances performance directly below your prompt editor;
-- **Essential real-time telemetry**:
-  - **Turns & Latency**: Tracks turn numbers, agent tool execution steps, and **TTFT (Time-to-First-Token)**;
-  - **Throughput Velocity**: Calculates true live **TPS (Tokens Per Second)** during streaming;
-  - **Context Waterline**: Visualizes input, output, and cumulative prompt tokens as a percentage of the model's max context window, alerting you before truncation occurs;
-- **Independent operation**: Can be enabled as an English HUD even when Chinese localization is turned off.
+### Build & Verification Commands
 
-### 3. ⏱️ Dual-Cycle Quota Radar (5-Hour & Weekly)
-- **Comprehensive tier support**: Accurately tracks PRO, ULTRA, and FREE subscription tiers across Gemini, Claude, and GPT model families;
-- **Strict temporal separation**: Disentangles the dynamic 5-hour rolling window from weekly caps, providing reliable reset countdowns;
-- **Tiered visual alerts**: Progress bars transition to warning orange at `≤20%` remaining, and critical red at `≤10%` or depletion.
-
-### 4. 🔄 Atomic Multi-Account Management & Safe Switch
-- **Zero-config onboarding**: Save current active credentials with one click, or add backup accounts via Google OAuth;
-- **Safe atomic transaction**: Shuts down Antigravity gracefully before committing credential writes, preventing corrupted keychain states;
-- **Interrupted-switch recovery**: Automatically creates timestamped recovery snapshots, enabling one-click rollback if a switch transaction is interrupted;
-- **Smart recommendation**: Highlights the healthiest standby account when active quotas dip below thresholds.
-
-### 5. 📊 Token-Level Usage Audit & Time-Aware Pricing
-- **Multi-interval consumption dashboards**: View input, output, and cache read/write tokens across **Today**, **Last 7 Days**, **Last 30 Days**, or **All Time**;
-- **Historical temporal billing**: Matches token consumption with historical pricing feeds ([`assets/model-catalog.json`](./assets/model-catalog.json)) active at the exact time of invocation;
-- **Granular request logs**: Review historical requests sorted by timestamp with model metadata and four-tier token distributions, exportable to JSON.
-
-### 6. 🛡️ Safe Non-Destructive Cache Cleaner
-- **Tri-category safe scan**: Clearly isolates runtime speed-up caches (safe to clean), session state (caution required), and core databases (read-only locked);
-- **Guaranteed database protection**: Conversation databases (`conversations/*.db`), auth state (`state.vscdb`), and credential stores are strictly protected from accidental deletion;
-- **System Trash soft deletion**: Selected files are safely moved to the macOS Trash, never hard-deleted, supporting instant restoration;
-- **Automated verified updates**: Integrated update checker verifies SHA-256 digests, DMG images, and code signatures prior to installation.
-
----
-
-### Dual-Surface Native Architecture
-
-Constructed natively with Swift / AppKit for 60 FPS performance and seamless macOS Light / Dark mode transitions:
-
-- **Menu Bar Quick Panel**: Resides permanently in the macOS menu bar with lightweight tabs for **Usage**, **Quotas**, and **Accounts**;
-- **Main Console**: A full-featured desktop window with a frosted-glass sidebar providing deep analytical views (`⌘1` Overview, `⌘2` Accounts, `⌘3` Usage, `⌘4` Settings, `⌘5` About).
-
----
-
-## ⚡ Quick Start
-
-### System Requirements
-- **Operating System**: macOS 14.0 (Sonoma) or macOS 15+ (Sequoia)
-- **Hardware Architecture**: Apple Silicon (`arm64`, M1/M2/M3/M4 series chips)
-- **Host Application**: Google Antigravity (Stable channel)
-- **Self-Contained Runtime**: Bundled with a stand-alone Node 22 environment—**no external Node.js installation required**.
-
-### 1. Download & Installation
-1. Download the latest `GravityBox-<version>-arm64.dmg` from [**Releases**](https://github.com/Enzoo404/gravitybox/releases/latest);
-2. Double-click the DMG and drag `GravityBox.app` into your `Applications` folder;
-3. Since GravityBox uses local ad-hoc code signing, run this command in Terminal if Gatekeeper displays an untrusted developer warning:
-
-   ```bash
-   sudo xattr -rd com.apple.quarantine /Applications/GravityBox.app
-   ```
-
-### 2. Getting Started
-1. **Enable Localization**: Launch GravityBox, toggle **"界面汉化 (UI Localization)"** in the main window or menu bar, and Antigravity will instantly render in Chinese;
-2. **Onboard Active Account**: In the Accounts tab, click **"Add Account... -> Save Current Account"** to immediately monitor quotas;
-3. **Experience the Telemetry HUD**: Start any conversation in Antigravity to see live latency and velocity metrics below the prompt input.
-
-<details>
-<summary><strong>⚙️ Optional Configuration: Google OAuth Credentials for Standby Refresh (Click to expand)</strong></summary>
-
-<br>
-
-> [!NOTE]
-> Saving current local credentials, monitoring local quotas, localization, conversation HUD, and cache cleaning **do NOT require this configuration**.
-
-If you wish to authenticate multiple standby accounts via browser OAuth or enable background cloud-based quota refreshes for inactive accounts, configure your own Google OAuth Client credentials.
-
-Copy [`.env.example`](./.env.example) to `.env` inside `~/Library/Application Support/GravityBox/.env`:
+> Requires Xcode Command Line Tools and Node.js `>=22.15.0 <23`.
 
 ```bash
-# Google OAuth Client Credentials (for browser authentication and cloud quota refresh)
-GRAVITYBOX_GOOGLE_CLIENT_ID=your_client_id.apps.googleusercontent.com
-GRAVITYBOX_GOOGLE_CLIENT_SECRET=your_client_secret
+git clone https://github.com/Enzoo404/gravitybox.git
+cd gravitybox
+npm ci
+
+# TypeScript build, pricing sync check, and unit/integration tests
+npm test
+
+# Swift native UI compilation and layout verification
+npm run check:swift
+
+# Full release verification gate (TS + tests + headless browser + Swift + dict checks)
+npm run verify
+
+# Package local Apple Silicon .app and distributable .dmg
+npm run package:mac
+```
+
+<details>
+<summary>Repository layout</summary>
+
+```text
+gravitybox/
+├── native/          # Swift 6 / AppKit Main Console, Menu Bar Panel, and native App Updater
+├── src/             # TypeScript core engine (IPC, 4-phase switching, quota fusion, SQLite ledger, HUD state)
+├── runtime/         # CDP-injected runtime scripts (localization engine, DOM guards, Telemetry HUD UI)
+├── dict/            # Versioned bilingual dictionaries, frozen maps, and shared glossary rules
+├── assets/          # App icons, Retina screenshots, dated pricing feed (pricing-feed.json), and model catalog
+├── test/            # Unit, integration, headless Chromium regression, and Swift native UI suites
+└── tools/           # Release integrity checks, Retina screenshot generator, and macOS DMG packager
 ```
 
 </details>
@@ -196,123 +290,39 @@ GRAVITYBOX_GOOGLE_CLIENT_SECRET=your_client_secret
 ## ❓ FAQ
 
 <details>
-<summary><strong>Q1: Does localization modify Antigravity files or break official updates?</strong></summary>
+<summary><b>Why must Antigravity be closed before switching accounts?</b></summary>
 
-<br>
+Overwriting account databases or keychain caches while the host IDE holds active file locks can corrupt SQLite state or authentication sessions. GravityBox checks running processes (never killing them silently) and executes a 4-phase atomic snapshot switch with automatic rollback.
 
-No. GravityBox communicates via a local loopback CDP channel to dynamically substitute interface strings in runtime memory. It never repacks `app.asar` or tampers with application binaries, keeping Gatekeeper signatures intact and surviving official Antigravity updates automatically.
 </details>
 
 <details>
-<summary><strong>Q2: How does the Telemetry HUD work, and does it affect editor performance?</strong></summary>
+<summary><b>Do localization or HUD features alter my code, chats, or workspace files?</b></summary>
 
-<br>
+No. All adjustments happen purely in the presentation layer with strict selector guards around editors, code blocks, chat content, terminal output, and workspace names. Disk project files remain completely untouched.
 
-The HUD uses lightweight DOM projection and debounced state listeners active only during prompt streaming. Memory overhead is negligible (<0.5% CPU), and all metrics are derived locally without generating extra outbound requests.
 </details>
 
 <details>
-<summary><strong>Q3: Does the estimated API cost reflect my actual bill?</strong></summary>
+<summary><b>How do I uninstall or revert changes?</b></summary>
 
-<br>
+Use **Settings → Manage Storage** to restore any trimmed cache from its snapshot, or quit GravityBox, move `/Applications/GravityBox.app` to the Trash, and optionally remove `~/Library/Application Support/GravityBox`.
 
-No. It is an equivalent benchmark value calculated by multiplying local token metrics by public model API price cards. It helps developers quantify their daily usage scale and does not represent billing charges on subscription plans.
-</details>
-
-<details>
-<summary><strong>Q4: Is Intel (x86_64) Mac supported?</strong></summary>
-
-<br>
-
-GravityBox is strictly optimized and compiled for Apple Silicon (`arm64`). Intel binaries are not currently provided.
 </details>
 
 ---
 
-## 📐 Architecture & Principles
+## 🤝 Contributing & License
 
-```mermaid
-graph TD
-    classDef native fill:#EEF2FF,stroke:#4F46E5,stroke-width:2px,color:#1E1B4B;
-    classDef core fill:#ECFDF5,stroke:#10B981,stroke-width:2px,color:#064E3B;
-    classDef ext fill:#F8FAFC,stroke:#64748B,stroke-width:1.5px,color:#0F172A;
+- Read [CONTRIBUTING.md](./CONTRIBUTING.md), [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md), and [SECURITY.md](./SECURITY.md) before opening an [Issue](https://github.com/Enzoo404/gravitybox/issues) or Pull Request.
+- Release notes and full version history are tracked in [CHANGELOG.md](./CHANGELOG.md) and [GitHub Releases](https://github.com/Enzoo404/gravitybox/releases).
 
-    subgraph NativeUI["Native Frontend (Swift / AppKit - 60 FPS)"]
-        MW["Main Console (Overview / Accounts / Usage / Settings / About)"]:::native
-        MB["Menu Bar Panel (Usage / Quotas / Accounts)"]:::native
-    end
-
-    UDS["Unix Domain Socket IPC (0600 Private Permission)"]
-
-    subgraph CoreBackend["Isolated Core Engine (Node 22 / TypeScript)"]
-        Engine["CDP Runtime Injection / Telemetry HUD"]:::core
-        Accounts["Atomic Switch Transactions & Quota Fusion"]:::core
-        Usage["Read-Only SQLite Analysis & Time-Aware Pricing"]:::core
-        Maintenance["Tri-Category Cache Scan & Safe Trash Transactions"]:::core
-    end
-
-    MW <==> UDS <==> CoreBackend
-    MB <==> UDS
-
-    CoreBackend -. In-Memory Injection .-> TargetApp["Google Antigravity.app (Isolated World)"]:::ext
-    CoreBackend -. Read-Only Batched Queries .-> SQLiteDB["Local Session & State DBs (conversations/*.db & state.vscdb)"]:::ext
-    CoreBackend -. Secure Credential Reads .-> Keychain["macOS Keychain (Stored Tokens)"]:::ext
-```
-
----
-
-## 🛡️ Security & Privacy
-
-- **Zero Telemetry**: Completely devoid of analytics, telemetry beacons, or crash reporters. All calculations stay on your Mac;
-- **Strict File Permissions**: Configurations and tokens are kept in `~/Library/Application Support/GravityBox` with `0600` user-only permissions;
-- **Read-Only SQLite Analysis**: Session analysis employs read-only SQLite transactions, ensuring Antigravity database consistency is never compromised;
-- **Transparent Network Boundaries**: Auto-update and pricing sync remain disabled by default; outbound calls only connect to official Google OAuth/quota endpoints on user action, or GitHub Releases and public pricing feeds (GitHub Raw with `cdn.jsdelivr.net` fallback) when explicitly enabled or triggered;
-- **Open & Transparent**: Source code is fully open for community inspection, with release DMG binaries verified via automated SHA-256 sidecars.
-
----
-
-## 🛠️ Building from Source
-
-To build, debug, or package GravityBox locally, you will need **macOS 14+**, **Node.js `>=22.15.0 <23`**, and **Xcode Command Line Tools** (`swiftc`):
-
-```bash
-# 1. Clone repository and install dependencies
-git clone https://github.com/Enzoo404/gravitybox.git
-cd gravitybox
-npm ci
-
-# 2. Check toolchains and local environment
-npm run doctor
-
-# 3. Run compilation, pricing consistency checks, and unit/integration tests
-npm test
-
-# 4. Run full release gate (unit/integration, headless browser regression, Swift -O check, and dictionary gate)
-npm run verify
-
-# 5. Produce native macOS DMG release installer
-npm run package:mac
-```
-
-Packaged installers and SHA-256 hashes will be placed in the `成品/` (Distributables) directory.
-
----
-
-## 🌟 Community & Contributing
-
-Contributions and feedback are warmly welcomed! Please submit an [Issue](https://github.com/Enzoo404/gravitybox/issues) or open a Pull Request.
-Before submitting code, please review our [Contributing Guide (CONTRIBUTING.md)](./CONTRIBUTING.md) and [Code of Conduct (CODE_OF_CONDUCT.md)](./CODE_OF_CONDUCT.md).
-
-<p align="center">
+<div align="center">
   <a href="https://star-history.com/#Enzoo404/gravitybox&Date">
     <img src="https://api.star-history.com/svg?repos=Enzoo404/gravitybox&type=Date" alt="Star History Chart" width="720" />
   </a>
+</div>
+
+<p align="center">
+  <sub>Licensed under the <a href="./LICENSE">MIT License</a> · Third-party attributions in <a href="./THIRD_PARTY_NOTICES.md">THIRD_PARTY_NOTICES.md</a> · Not affiliated with or endorsed by Google or Antigravity.</sub>
 </p>
-
----
-
-## 📄 Disclaimer & License
-
-GravityBox is an independent open-source project and is not affiliated with, sponsored by, or endorsed by Google LLC, Anthropic PBC, OpenAI Inc., or Apple Inc. All brand names and trademarks belong to their respective holders.
-
-Licensed under the [MIT License](./LICENSE) · Copyright © 2026 [Enzoo404](https://github.com/Enzoo404)
