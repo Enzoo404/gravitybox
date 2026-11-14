@@ -90,11 +90,11 @@ export async function extractFromRunningApp({ app = APP, profile = PROFILE, base
   const bundleFile = join(projectRoot, bundleRelative);
   await mkdir(dirname(bundleFile), { recursive: true });
   await writeFile(bundleFile, source);
-  const strings = extractUiStrings(source), byKind = {};
+  const strings = extractUiStrings(source, { includeJsxRuntime: true }), byKind = {};
   for (const entry of strings) for (const kind of entry.kinds) byKind[kind] = (byKind[kind] ?? 0) + 1;
   const bundleSha256 = computeBundleSha256(source);
   const value = {
-    schema: 1, extractor: 'typescript-ast-v1',
+    schema: 1, extractor: 'typescript-ast-v2',
     appVersion: version,
     source: bundleRelative,
     bundleSha256,
@@ -132,11 +132,11 @@ async function main() {
     const bundleFile = join(root, bundleRelative); await mkdir(dirname(bundleFile), { recursive: true }); await writeFile(bundleFile, source);
     sourceName = bundleRelative;
   }
-  const strings = extractUiStrings(source), byKind = {};
+  const strings = extractUiStrings(source, { includeJsxRuntime: true }), byKind = {};
   for (const entry of strings) for (const kind of entry.kinds) byKind[kind] = (byKind[kind] ?? 0) + 1;
   const bundleSha256 = computeBundleSha256(source);
   /* schema 保持不变；只保证 source 对 --bundle 路径是可回溯的绝对路径。 */
-  const value = { schema: 1, extractor: 'typescript-ast-v1', appVersion: version, source: sourceName, bundleSha256, bundleBytes: Buffer.byteLength(source), extractedAt: new Date().toISOString(), counts: { total: strings.length, ...byKind }, strings };
+  const value = { schema: 1, extractor: 'typescript-ast-v2', appVersion: version, source: sourceName, bundleSha256, bundleBytes: Buffer.byteLength(source), extractedAt: new Date().toISOString(), counts: { total: strings.length, ...byKind }, strings };
   if (args.includes('--stdout')) { process.stdout.write(JSON.stringify(value, null, 1) + '\n'); return; }
   const out = option('--out', join(root, 'ui-strings', `${version}.json`)); await mkdir(dirname(out), { recursive: true }); await writeFile(out, JSON.stringify(value, null, 1) + '\n');
   const shouldRegister = args.includes('--register-bundle');

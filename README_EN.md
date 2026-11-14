@@ -124,17 +124,17 @@
 ### 4. 🔄 Atomic Multi-Account Management & Safe Switch
 - **Zero-config onboarding**: Save current active credentials with one click, or add backup accounts via Google OAuth;
 - **Safe atomic transaction**: Shuts down Antigravity gracefully before committing credential writes, preventing corrupted keychain states;
-- **7-day rollback snapshot**: Automatically creates timestamped recovery points, allowing one-click rollback if any account anomaly occurs;
+- **Interrupted-switch recovery**: Automatically creates timestamped recovery snapshots, enabling one-click rollback if a switch transaction is interrupted;
 - **Smart recommendation**: Highlights the healthiest standby account when active quotas dip below thresholds.
 
 ### 5. 📊 Token-Level Usage Audit & Time-Aware Pricing
 - **Multi-interval consumption dashboards**: View input, output, and cache read/write tokens across **Today**, **Last 7 Days**, **Last 30 Days**, or **All Time**;
 - **Historical temporal billing**: Matches token consumption with historical pricing feeds ([`assets/model-catalog.json`](./assets/model-catalog.json)) active at the exact time of invocation;
-- **Granular request logs**: Review historical requests sorted by timestamp with model metadata, latencies, and four-tier token distributions, exportable to JSON.
+- **Granular request logs**: Review historical requests sorted by timestamp with model metadata and four-tier token distributions, exportable to JSON.
 
 ### 6. 🛡️ Safe Non-Destructive Cache Cleaner
 - **Tri-category safe scan**: Clearly isolates runtime speed-up caches (safe to clean), session state (caution required), and core databases (read-only locked);
-- **Guaranteed database protection**: Conversation databases (`state.vscdb`) and credential stores are strictly protected from accidental deletion;
+- **Guaranteed database protection**: Conversation databases (`conversations/*.db`), auth state (`state.vscdb`), and credential stores are strictly protected from accidental deletion;
 - **System Trash soft deletion**: Selected files are safely moved to the macOS Trash, never hard-deleted, supporting instant restoration;
 - **Automated verified updates**: Integrated update checker verifies SHA-256 digests, DMG images, and code signatures prior to installation.
 
@@ -255,7 +255,7 @@ graph TD
     MB <==> UDS
 
     CoreBackend -. In-Memory Injection .-> TargetApp["Google Antigravity.app (Isolated World)"]:::ext
-    CoreBackend -. Read-Only Batched Queries .-> SQLiteDB["Local Session Database (state.vscdb)"]:::ext
+    CoreBackend -. Read-Only Batched Queries .-> SQLiteDB["Local Session & State DBs (conversations/*.db & state.vscdb)"]:::ext
     CoreBackend -. Secure Credential Reads .-> Keychain["macOS Keychain (Stored Tokens)"]:::ext
 ```
 

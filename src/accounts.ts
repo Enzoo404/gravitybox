@@ -664,9 +664,13 @@ export class AccountsManager {
   async addAccountWithRefreshToken(raw: string, fetchImpl: typeof fetch = globalThis.fetch): Promise<Account> {
     const refreshToken = String(raw).trim();
     if (!refreshToken || refreshToken.length > 8192 || /[\r\n\x00]/.test(refreshToken)) throw new Error('请填写有效的 Refresh Token');
+    const clientId = getGoogleClientId(), clientSecret = getGoogleClientSecret();
+    if (fetchImpl === globalThis.fetch && (!clientId || !clientSecret)) {
+      throw new Error('未配置 Google OAuth 凭据，请在 .env 中配置 GRAVITYBOX_GOOGLE_CLIENT_ID 与 GRAVITYBOX_GOOGLE_CLIENT_SECRET');
+    }
     const tokenReply = await fetchImpl('https://oauth2.googleapis.com/token', {
       method: 'POST', signal: AbortSignal.timeout(6000), headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ client_id: getGoogleClientId(), client_secret: getGoogleClientSecret(), refresh_token: refreshToken, grant_type: 'refresh_token' }).toString(),
+      body: new URLSearchParams({ client_id: clientId, client_secret: clientSecret, refresh_token: refreshToken, grant_type: 'refresh_token' }).toString(),
     }).catch(() => { throw new Error('无法连接登录服务，请检查网络后重试'); });
     if (!tokenReply.ok) throw new Error('登录凭据无效或已失效，请重新获取');
     const token: any = await tokenReply.json();
@@ -710,8 +714,22 @@ export class AccountsManager {
       if (original !== null) {
         const removedDir = join(this.stateDir, 'accounts-removed');
         await mkdir(removedDir, { recursive: true, mode: 0o700 });
+        const parsedOriginal = JSON.parse(original);
+        const redactedAccount = parsedOriginal && typeof parsedOriginal === 'object'
+          ? {
+              ...parsedOriginal,
+              token: parsedOriginal.token && typeof parsedOriginal.token === 'object'
+                ? {
+                    redacted: true,
+                    email: parsedOriginal.token.email ?? null,
+                    project_id: parsedOriginal.token.project_id ?? null,
+                    token_type: parsedOriginal.token.token_type ?? null,
+                  }
+                : undefined,
+            }
+          : null;
         await atomicJson(join(removedDir, `${id}-${Date.now()}.json`), {
-          schema: 1, removedAt: new Date().toISOString(), account: JSON.parse(original),
+          schema: 1, removedAt: new Date().toISOString(), account: redactedAccount,
         });
         try {
           const entries = (await readdir(removedDir)).filter(f => f.endsWith('.json'));

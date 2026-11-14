@@ -414,7 +414,7 @@ export class Controller {
       if (this.lastInspectedSha === sha) return;
       this.lastInspectedSha = sha;
 
-      const extracted = extractUiStrings(source);
+      const extracted = extractUiStrings(source, { includeJsxRuntime: true });
       const missing = findMissingStrings(extracted, this.options.dictionary);
       this.trustedCandidates = missing.filter(isSafeCandidate).map(key=>({key,kind:extractedKind(extracted.find(e=>e.text===key)?.kinds),source:'static'}));
       this.status.newStringsCount = this.trustedCandidates.length;

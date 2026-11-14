@@ -125,18 +125,18 @@
 
 ### 4. 🔄 多账号原子管理与安全切换 (Atomic Multi-Account Management)
 - **零配置一键纳管**：一键保存当前登录态，支持通过 Google OAuth 授权安全扩充备用账号池；
-- **四阶段原子事务**：手动退出 Antigravity 后安全写入凭据，全程状态机守卫，拒绝进程并发冲突；
-- **7 天快照安全恢复**：切号自动创建时间戳快照，遇任何异常在主界面一键「撤销并恢复原账号」；
+- **四阶段原子事务**：经用户确认后优雅退出 Antigravity 并安全写入凭据，全程状态机守卫，完成后自动拉起宿主；
+- **异常中断自动恢复**：切号自动创建带时间戳的恢复快照，遇中断异常支持在账号页一键「撤销并恢复原账号」；
 - **智能轮换推荐**：可按「配额充裕优先」或「轮询」算法监测模型额度，低于阈值时自动高亮最佳接力账号。
 
 ### 5. 📊 Token 级用量审计与时间感知计费 (Time-Aware Usage & Cost Analytics)
 - **多维度消费看板**：按「今日」「近 7 天」「近 30 天」「全部」统计输入、输出、缓存读写 Token 与缓存命中率；
 - **时序价格精准对账**：内置主流模型公开价格表（[`assets/model-catalog.json`](./assets/model-catalog.json)），按调用发生时的有效定价计算参考费用；
-- **单次请求明细导出**：支持按时间倒序回溯每次调用的模型、耗时与四类 Token 消耗，支持搜索翻页与导出 JSON 报告。
+- **单次请求明细导出**：支持按时间倒序回溯每次调用的模型、发生时间与四类 Token 消耗，支持搜索翻页与导出 JSON 报告。
 
 ### 6. 🛡️ 智能非破坏性缓存维护 (Safe Non-Destructive Cache Cleaner)
 - **三分类安全扫描**：精确区分加速缓存（推荐清理）、会话状态（慎重清理）与核心数据（只读锁定）；
-- **核心对话与凭据绝对保护**：对话数据库（`state.vscdb`）及密钥文件受到严格保护，绝不触碰；
+- **核心对话与凭据绝对保护**：历史对话库（`conversations/*.db`）、登录状态库（`state.vscdb`）及密钥文件受到严格保护，绝不触碰；
 - **系统废纸篓软删除**：清理产物默认移入 macOS 系统废纸篓，杜绝物理硬删除，支持一键原位还原；
 - **自动安全更新**：在线更新支持 GitHub Release 检查、后台预下载与 SHA-256、DMG 镜像签名三重校验。
 
@@ -257,7 +257,7 @@ graph TD
     MB <==> UDS
 
     CoreBackend -. 运行时安全注入 .-> TargetApp["Google Antigravity.app (Isolated World)"]:::ext
-    CoreBackend -. 只读分批查询 .-> SQLiteDB["本地会话与用量数据库 (state.vscdb)"]:::ext
+    CoreBackend -. 只读分批查询 .-> SQLiteDB["本地会话与登录状态库 (conversations/*.db & state.vscdb)"]:::ext
     CoreBackend -. 钥匙串读写 .-> Keychain["macOS Keychain (安全凭据)"]:::ext
 ```
 

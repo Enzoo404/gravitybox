@@ -417,7 +417,7 @@ export class AccountSwitchService {
       const journal = JSON.parse(await readFile(this.journalPath, 'utf8')) as Journal;
       if (journal.status === 'rolled-back') throw new Error('上次切换已撤销');
       if (journal.status === 'cleared') throw new Error('恢复材料已由用户清除');
-      if (journal.status === 'complete' && (!Number.isFinite(Date.parse(journal.at)) || Date.now()-Date.parse(journal.at)>7*86400000)) throw new Error('完成记录已超过 7 天撤销期；材料保留，可在设置中核对和清除');
+      if (journal.status === 'complete' && (!Number.isFinite(Date.parse(journal.at)) || Date.now()-Date.parse(journal.at)>7*86400000)) throw new Error('完成记录已超过 7 天撤销期；恢复材料仍保留在本地数据目录中供核对');
       const db = join(this.options.profile, 'User', 'globalStorage', 'state.vscdb');
       const hasDb = await this.optionalRegular(db);
       const transaction = hasDb ? this.database(db) : undefined;

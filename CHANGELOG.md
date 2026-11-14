@@ -10,7 +10,7 @@
 
 ### Added
 - **In-IDE Telemetry HUD**：上线 Antigravity 输入框下方三联遥测胶囊（会话概览 / Token 消耗 / 上下文水位）及独立悬浮弹层；支持实时区分模型思考（实心蓝）与工具执行（呼吸蓝）状态、TTFT / 真实 TPS / 本轮用时与模型及工具耗时拆分、高对比度进度条及一键中英文双语独立开关。
-- **HUD Popover Redesign**：会话统计卡片引入虚线分隔总平均与本轮实时数据，新增「本轮输出速度（TPS）」并统一「最近一步（TPS）」等字段为固定占位格式。
+- **HUD Popover Redesign**：会话统计卡片引入虚线分隔总平均与本轮实时数据，新增「最近一步 TTFT」与「最近一步 TPS」并统一「本轮用时」等字段为固定占位格式。
 - **Storage & Maintenance v2**：新增存储与维护 v2（三分类缓存扫描、废纸篓软删除、7 天恢复点管理及账本数据维护），默认隔离核心 `state.vscdb` 与凭据。
 - **Pricing / Usage**：新增模型定价同步明细弹窗（`PricingSyncSheetController`），支持查看各官方模型时序定价、执行公开定价表（GitHub Raw / jsDelivr）同步与历史用量账本重估预览/应用。
 - **i18n / Dictionary**：新增对 Google Antigravity `2.31.0`、`2.31.2` 与 `2.32.1` 官方版本的指纹登记、文案抽取与分层词典适配（现已覆盖 `2.23.0` ~ `2.32.1` 全系列受支持版本）。

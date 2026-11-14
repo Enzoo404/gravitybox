@@ -80,7 +80,18 @@ extension Assistant {
     }
 
     func refreshSingleAccountQuota(id: String, completion: ((Result<[String: Any], Error>) -> Void)? = nil) {
-        guard !id.isEmpty, reachable, !refreshingAccountIds.contains(id) else { return }
+        guard !id.isEmpty else {
+            completion?(.failure(BackendFailure(message: "账号标识无效")))
+            return
+        }
+        guard reachable else {
+            completion?(.failure(BackendFailure(message: "本机服务尚未就绪")))
+            return
+        }
+        guard !refreshingAccountIds.contains(id) else {
+            completion?(.failure(BackendFailure(message: "该账号配额正在刷新中")))
+            return
+        }
         singleAccountRefreshErrors[id] = nil
         refreshingAccountIds.insert(id)
         updateQuotaRefreshControls()
@@ -124,7 +135,7 @@ extension Assistant {
                 let label = acc["name"] as? String ?? ""
                 let displayName = label.isEmpty ? accEmail : "\(label) · \(accEmail)"
                 let accTier = AccountIdentity.normalizeTier(acc["subscription_tier"] as? String)
-                let title = "\(displayName) · \(accTier) · \(QuotaPresentation.menuQuotaText(acc))"
+                let title = [displayName, accTier, QuotaPresentation.menuQuotaText(acc)].filter { !$0.isEmpty }.joined(separator: " · ")
                 let accItem = NSMenuItem(title: title, action: #selector(switchAccountFromMenu(_:)), keyEquivalent: "")
                 accItem.target = self
                 accItem.representedObject = id

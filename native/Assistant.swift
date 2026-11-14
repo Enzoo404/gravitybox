@@ -91,7 +91,6 @@ final class Assistant: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPopo
     var reachable = false
     var quotaRefreshTimer: Timer?
     var autoUpdateTimer: Timer?
-    private var updateLaunchAcknowledged = false
     lazy var updateManager = AppUpdateManager(app: self)
     var timer: Timer?
     var directorySource: DispatchSourceFileSystemObject?

@@ -292,6 +292,7 @@ export interface ParsedGenMetadata {
     reasoningTokens: number;
     candidateTokens: number;
   };
+  modelEnum?: number;
   responseModel?: string;
   modelDisplayName?: string;
   plannerModelName?: string;

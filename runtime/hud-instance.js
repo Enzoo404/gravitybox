@@ -1048,7 +1048,7 @@ export class HudInstance {
     }
     if (this.domRefsShadow !== this.shadow || !this.domRefs) {
       this.domRefsShadow = this.shadow;
-      this.domRefs = { bySelector: new Map(), capsules: null };
+      this.domRefs = { bySelector: new Map(), capsules: null, popovers: null };
     }
     return this.domRefs;
   }
@@ -1069,6 +1069,15 @@ export class HudInstance {
       cache.capsules = [...this.shadow.querySelectorAll('.capsule')];
     }
     return cache.capsules || [];
+  }
+
+  getShadowPopovers() {
+    const cache = this.ensureDomCache();
+    if (!cache) return [];
+    if (!cache.popovers && typeof this.shadow.querySelectorAll === 'function') {
+      cache.popovers = [...this.shadow.querySelectorAll('.hud-popover')];
+    }
+    return cache.popovers || [];
   }
 
   renderSkeleton() {
@@ -2089,7 +2098,7 @@ export class HudInstance {
 
   handleContainerResize(width) {
     if (!this.shadow) return;
-    const container = this.shadow.querySelector('.hud-container');
+    const container = this.getShadowEl('.hud-container');
     if (!container || !container.classList) return;
 
     if (width > 0 && width < 360) {
@@ -2201,7 +2210,7 @@ export class HudInstance {
   showPopover(id) {
     if (!this.shadow) return;
     this.activePopoverId = id;
-    const capsules = this.shadow.querySelectorAll('.capsule');
+    const capsules = this.getShadowCapsules();
     capsules.forEach((cap) => {
       const match = cap.getAttribute('data-capsule-id') === id;
       cap.setAttribute('aria-expanded', match ? 'true' : 'false');
@@ -2211,7 +2220,7 @@ export class HudInstance {
       }
     });
 
-    const popovers = this.shadow.querySelectorAll('.hud-popover');
+    const popovers = this.getShadowPopovers();
     popovers.forEach((pop) => {
       const match = pop.getAttribute('data-popover-id') === id;
       if (match) {
@@ -2234,7 +2243,7 @@ export class HudInstance {
 
     // 先在未激活过渡态完成定位与祖先包含块校准，触发一次布局后再附加 is-visible 以保留 130ms 入场过渡动画
     this.repositionActivePopover(true);
-    const activePop = this.shadow.querySelector(`#hud-popover-${id}`);
+    const activePop = this.getShadowEl(`#hud-popover-${id}`);
     if (activePop && activePop.classList) {
       void activePop.offsetWidth;
       activePop.classList.add('is-visible');
@@ -2244,9 +2253,9 @@ export class HudInstance {
   repositionActivePopover(force = false) {
     if (!this.shadow || !this.activePopoverId) return;
     const id = this.activePopoverId;
-    const capsule = this.shadow.querySelector(`.capsule[data-capsule-id="${id}"]`);
-    const popover = this.shadow.querySelector(`#hud-popover-${id}`);
-    const arrow = this.shadow.querySelector(`#arrow-${id}`);
+    const capsule = this.getShadowEl(`.capsule[data-capsule-id="${id}"]`);
+    const popover = this.getShadowEl(`#hud-popover-${id}`);
+    const arrow = this.getShadowEl(`#arrow-${id}`);
     if (!capsule || !popover) return;
 
     const standardWidth = POPOVER_WIDTHS[id] || 296;
@@ -2279,12 +2288,12 @@ export class HudInstance {
       typeof resetPopoverGeometryCache === 'function'
         ? resetPopoverGeometryCache
         : globalThis.__GRAVITYBOX_HUD_POPOVER__?.resetPopoverGeometryCache;
-    const capsules = this.shadow.querySelectorAll('.capsule');
+    const capsules = this.getShadowCapsules();
     capsules.forEach((cap) => {
       cap.setAttribute('aria-expanded', 'false');
       if (cap.classList) cap.classList.remove('is-active');
     });
-    const popovers = this.shadow.querySelectorAll('.hud-popover');
+    const popovers = this.getShadowPopovers();
     popovers.forEach((pop) => {
       try {
         if (typeof pop.hidePopover === 'function') {

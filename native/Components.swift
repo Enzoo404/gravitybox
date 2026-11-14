@@ -1784,15 +1784,14 @@ final class ModelDonutChartView: NSView {
         while cwFromTop < 0 { cwFromTop += 360.0 }
         while cwFromTop >= 360.0 { cwFromTop -= 360.0 }
 
-        var accum: CGFloat = 0
+        let layout = Self.computeSliceAngles(validSlices: validSlices, sumUsd: sumUsd)
+        let halfGap: CGFloat = validSlices.count > 1 ? 1.5 : 0.0
         var hitIndex: Int? = nil
-        for (idx, slice) in validSlices.enumerated() {
-            let sweep = CGFloat(slice.usd / sumUsd) * 360.0
-            if cwFromTop >= accum && cwFromTop <= accum + sweep {
+        for (idx, item) in layout.enumerated() {
+            if cwFromTop >= item.startCW - halfGap && cwFromTop <= item.startCW + item.sweep + halfGap {
                 hitIndex = idx
                 break
             }
-            accum += sweep
         }
         if let hitIndex {
             if hoveredSliceIndex != hitIndex {
@@ -1809,6 +1808,44 @@ final class ModelDonutChartView: NSView {
 
     override func mouseExited(with event: NSEvent) {
         clearHoveredSlice()
+    }
+
+    static func computeSliceAngles(validSlices: [Slice], sumUsd: Double) -> [(startCW: CGFloat, sweep: CGFloat)] {
+        guard !validSlices.isEmpty, sumUsd > 0 else { return [] }
+        if validSlices.count == 1 {
+            return [(startCW: 0, sweep: 360.0)]
+        }
+        let count = validSlices.count
+        let gap: CGFloat = 3.0
+        let minSweep: CGFloat = 2.0
+        let available = max(CGFloat(count) * minSweep, 360.0 - gap * CGFloat(count))
+        var sweeps = validSlices.map { CGFloat($0.usd / sumUsd) * available }
+        var fixed = Array(repeating: false, count: count)
+        while true {
+            var deficit: CGFloat = 0
+            var flexSum: CGFloat = 0
+            for i in 0..<count where !fixed[i] {
+                if sweeps[i] < minSweep {
+                    deficit += (minSweep - sweeps[i])
+                    sweeps[i] = minSweep
+                    fixed[i] = true
+                } else {
+                    flexSum += sweeps[i]
+                }
+            }
+            if deficit <= 0.0001 || flexSum <= 0.0001 { break }
+            let scale = max(0, (flexSum - deficit) / flexSum)
+            for i in 0..<count where !fixed[i] {
+                sweeps[i] *= scale
+            }
+        }
+        var out: [(startCW: CGFloat, sweep: CGFloat)] = []
+        var cursorCW: CGFloat = 0
+        for s in sweeps {
+            out.append((startCW: cursorCW, sweep: s))
+            cursorCW += s + gap
+        }
+        return out
     }
 
     private func clearHoveredSlice() {
@@ -1860,16 +1897,15 @@ final class ModelDonutChartView: NSView {
         Design.track.setStroke()
         track.stroke()
 
-        let sumUsd = slices.reduce(0.0) { $0 + $1.usd }
         let validSlices = slices.filter { $0.usd > 0 }
-        let gap: CGFloat = validSlices.count > 1 ? 3.0 : 0.0
+        let sumUsd = validSlices.reduce(0.0) { $0 + $1.usd }
+        let layout = Self.computeSliceAngles(validSlices: validSlices, sumUsd: sumUsd)
 
         if sumUsd > 0 {
-            var startAngle: CGFloat = 90
-            for (idx, slice) in validSlices.enumerated() {
+            for (idx, slice) in validSlices.enumerated() where idx < layout.count {
                 let isSliceHovered = (hoveredSliceIndex == idx)
-                let sweep = CGFloat(slice.usd / sumUsd) * 360.0 * revealProgress
-                let effectiveSweep = max(2.0 * revealProgress, sweep - gap)
+                let startAngle: CGFloat = 90.0 - layout[idx].startCW * revealProgress
+                let effectiveSweep = layout[idx].sweep * revealProgress
                 let endAngle = startAngle - effectiveSweep
                 let sliceRadius = isSliceHovered ? (radius + 1.2 * hoverEmphasis) : radius
                 let sliceWidth = isSliceHovered ? (lineWidth + 2.2 * hoverEmphasis) : lineWidth
@@ -1880,7 +1916,6 @@ final class ModelDonutChartView: NSView {
                 let alpha: CGFloat = (hoveredSliceIndex == nil || isSliceHovered) ? 1.0 : max(0.45, 1.0 - 0.50 * hoverEmphasis)
                 slice.color.withAlphaComponent(alpha).setStroke()
                 arc.stroke()
-                startAngle = endAngle - gap
             }
         }
 

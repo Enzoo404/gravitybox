@@ -250,7 +250,7 @@ export type ExtractedString = { text: string; kinds: string[]; count: number };
 
 const PROP_PATTERN = new RegExp(String.raw`(?:^|[\s,{;(])(?:${UI_PROPERTIES.map(p => p.replace(/-/g, '\\-')).join('|')}):"`, 'g');
 
-export function extractUiStrings(source: string): ExtractedString[] {
+export function extractUiStrings(source: string, options?: { includeJsxRuntime?: boolean }): ExtractedString[] {
   const found = new Map<string, { text: string; kinds: Set<string>; count: number }>();
   const record = (text: string | null, kind: string) => {
     if (!text || !isEnglishSource(kind === 'template' ? text.replace(/\$\{[^}]+\}/g, 'variable') : text)) return;
@@ -270,11 +270,18 @@ export function extractUiStrings(source: string): ExtractedString[] {
     if (literal) { const property = match[0].slice(0,-2).match(/([\w-]+)$/)?.[1]; record(decodeLiteral(literal.raw), property ?? 'prop'); }
   }
 
-  // 2) createElement 文本子节点
+  // 2) createElement 文本子节点（及可选 React 18/19 jsx/jsxs children 字面量）
   const childPattern = /\.createElement\(\s*(?:"[^"]{1,40}"|[A-Za-z_$][\w$.]*)\s*,\s*(?:\{[^{}]*\}|\([^()]*\)|\s*\[[^[\]]*\]|[^,(){}[\]])*?,\s*("(?:[^"\\\n]|\\.)*")/g;
   while ((match = childPattern.exec(source))) {
     const decoded = decodeLiteral(match[1]!);
     if (decoded) { const tag = match[0].match(/createElement\(\s*"([^"]+)"/)?.[1]; record(decoded, tag === 'button' ? 'button' : /^h[1-6]$/.test(tag ?? '') ? 'heading' : 'text'); }
+  }
+  if (options?.includeJsxRuntime) {
+    const jsxChildPattern = /\b(?:jsx|jsxs|jsxDEV|_jsx|_jsxs)\(\s*(?:"([^"]{1,40})"|[A-Za-z_$][\w$.]*)\s*,\s*\{[^{}]*?\bchildren:\s*("(?:[^"\\\n]|\\.)*")/g;
+    while ((match = jsxChildPattern.exec(source))) {
+      const decoded = decodeLiteral(match[2]!);
+      if (decoded) { const tag = match[1]; record(decoded, tag === 'button' ? 'button' : /^h[1-6]$/.test(tag ?? '') ? 'heading' : 'text'); }
+    }
   }
 
   // 3) 三元/键值对中的界面串

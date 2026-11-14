@@ -25,7 +25,7 @@ final class MenuLanguagePreferences {
         // Save rollback state before changing the one application-scoped preference.
         try PropertyListSerialization.data(fromPropertyList:payload,format:.binary,options:0).write(to:backup,options:.atomic)
         try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:backup.path)
-        let preferences=UserDefaults(suiteName:domain)!
+        guard let preferences=UserDefaults(suiteName:domain) else { throw ToolboxFailure(message:"无法打开目标应用语言偏好域。") }
         if let value { preferences.set(value,forKey:"AppleLanguages") } else { preferences.removeObject(forKey:"AppleLanguages") }
         preferences.synchronize()
 
@@ -34,7 +34,7 @@ final class MenuLanguagePreferences {
         let data=try Data(contentsOf:backup);var payload=try PropertyListSerialization.propertyList(from:data,format:nil) as? [String:Any] ?? [:]
         let expectedPresent=payload["writtenPresent"] as? Bool ?? true
         guard expectedPresent ? current as? [String] == payload["written"] as? [String] : current == nil else {throw ToolboxFailure(message:"语言偏好已在其它位置更改，已保留当前设置。")}
-        let preferences=UserDefaults(suiteName:domain)!
+        guard let preferences=UserDefaults(suiteName:domain) else { throw ToolboxFailure(message:"无法打开目标应用语言偏好域。") }
         if payload["present"] as? Bool == true{preferences.set(payload["value"],forKey:"AppleLanguages")}else{preferences.removeObject(forKey:"AppleLanguages")};preferences.synchronize()
 
         payload["restored"]=true

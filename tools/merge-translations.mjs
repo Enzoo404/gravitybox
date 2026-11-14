@@ -34,6 +34,7 @@ export { PROPER_NOUNS, GLOSSARY_RULES };
 
 const placeholderTokens = (text) => (text.match(/\{\{?\w+\}?\}|\$\d+|%[sd]/g) ?? []).sort().join('|');
 const hasCJK = (text) => /[\u3400-\u9fff]/.test(text);
+const inKeyAsWord = (key, noun) => new RegExp(`(?:^|[^A-Za-z])${noun.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:$|[^A-Za-z])`, 'i').test(key);
 
 function validateWithRuntime(items, existing = {}) {
   const accepted = [];
@@ -66,8 +67,7 @@ function validateWithRuntime(items, existing = {}) {
     // 检查专有名词
     let nounViolated;
     for (const noun of PROPER_NOUNS) {
-      const reg = new RegExp(`\\b${noun}\\b`, 'i');
-      if (reg.test(key) && !zh.toLowerCase().includes(noun.toLowerCase())) {
+      if (inKeyAsWord(key, noun) && !zh.toLowerCase().includes(noun.toLowerCase())) {
         nounViolated = noun;
         break;
       }
@@ -116,7 +116,7 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const args = process.argv.slice(2);
 const option = (name, fallback) => { const i = args.indexOf(name); return i < 0 ? fallback : args[i + 1]; };
 
-const inKeyAsWord = (key, noun) => new RegExp(`(?:^|[^A-Za-z])${noun.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:$|[^A-Za-z])`).test(key);
+// inKeyAsWord 已前置声明并统一忽略大小写匹配
 /** 保留本工具要求的专有名词，沿用现有大小写检查规则。 */
 const REQUIRED_PROPER_NOUNS = PROPER_NOUNS;
 

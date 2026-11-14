@@ -21,7 +21,7 @@ const HUD_RUNTIME_FILES = [
 function stripEsmForClassicRuntime(code) {
   return code
     .replace(/^\s*import\s+[^;]*?from\s+['"][^'"]+['"];?\s*$/gm, '')
-    .replace(/^\s*export\s+(?=(?:const|let|var|function|class)\s+)/gm, '')
+    .replace(/^\s*export\s+(?=(?:async\s+function|const|let|var|function|class)\s+)/gm, '')
     .replace(/^\s*export\s*\{[^}]*\};?\s*$/gm, '');
 }
 

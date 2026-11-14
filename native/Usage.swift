@@ -20,7 +20,6 @@ final class UsagePage: NSObject {
     let totalTokensMetric = metricValue()
     let tokensDetail = text("输入 — · 缓存读取 — · 输出 —", size: 11, color: .secondaryLabelColor, wrap: true)
     let costTitle = text("API 费用估算", size: 12, weight: .semibold)
-    let priceCoverage = text("", size: 11, color: Design.secondary)
     let usdMetric = metricValue()
     let usdDetail = text("", size: 11, color: .secondaryLabelColor, wrap: true)
     let cacheRateMetric = metricValue()
@@ -83,7 +82,6 @@ final class UsagePage: NSObject {
         root.addArrangedSubview(group([trend]))
         costTitle.font = .systemFont(ofSize: 13, weight: .semibold)
         usdMetric.font = .monospacedDigitSystemFont(ofSize: 24, weight: .semibold)
-        priceCoverage.isHidden = true
         donutLegendStack.orientation = .vertical; donutLegendStack.alignment = .leading; donutLegendStack.spacing = 8
         donutLegendStack.setContentHuggingPriority(.defaultLow, for: .horizontal)
         let costHeading = horizontal([costTitle, flexibleSpace(), usdMetric], spacing: 8)
@@ -262,13 +260,6 @@ final class UsagePage: NSObject {
                 let pricedCount = (summary["pricedModels"] as? Int) ?? (summary["priced_models"] as? Int) ?? (value["pricedModels"] as? Int) ?? 0
                 let unpricedCount = (summary["unpricedModels"] as? Int) ?? (summary["unpriced_models"] as? Int) ?? (value["unpricedModels"] as? Int) ?? 0
                 self.costTitle.stringValue = "API 费用估算"
-                let coverageRows = value["byModel"] as? [[String: Any]] ?? []
-                let unpricedTokens = coverageRows.reduce(0) { $0 + intVal($1, "unpricedTokens", fallback: intVal($1, "unpriced_tokens")) }
-                let coverageText = total > 0 && unpricedTokens > 0
-                    ? "已计价部分 · 另有 \(Int((Double(unpricedTokens) / Double(total) * 100).rounded()))% Token 未计价"
-                    : "已计价部分 · 含未计价请求"
-                self.priceCoverage.stringValue = unpricedCount > 0 ? coverageText : ""
-                self.priceCoverage.isHidden = unpricedCount == 0
                 self.usdMetric.stringValue = unpricedCount > 0 && pricedCount == 0 && usd == 0 ? "未计价" : self.formatUsd(usd)
                 self.usdDetail.stringValue = ""
                 self.usdDetail.isHidden = true

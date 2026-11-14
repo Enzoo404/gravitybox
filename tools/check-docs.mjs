@@ -89,7 +89,7 @@ export async function checkDocs({
   const summaryFile = '文档/当前版本验收摘要.json';
   const summary = await readJson(summaryPath);
   if (!summary) {
-    if (!sourceOnly) add('error', 'SUMMARY_MISSING', summaryFile, null, '缺少验收摘要文件');
+    if (!sourceOnly) add('error', 'SUMMARY_MISSING', summaryFile, null, '缺少验收摘要文件（仅检查源码文档可传 --source-only；正式发布前需打包并完成实机验收以生成该摘要）');
   } else {
     if (facts.version) verify('error', 'SUMMARY_VERSION_MISMATCH', summaryFile, null, `version ${shorten(summary.version)} ≠ 实际 ${facts.version}`, summary.version === facts.version);
     if (!sourceOnly) {

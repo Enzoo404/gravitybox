@@ -1,7 +1,7 @@
 /** Select small metadata fields from a protobuf BLOB without loading skipped payloads. */
 export type ProtoSelection = { [field: number]: true | ProtoSelection };
 export const GENERATION_PROJECTION: ProtoSelection = {
-  1: { 4: true, 9: true, 19: true, 21: true },
+  1: { 3: true, 4: true, 9: true, 19: true, 21: true },
   2: true,
   3: { 27: { 8: true, 12: true, 20: true }, 28: true },
   4: true,
@@ -26,6 +26,7 @@ export const HUD_STEP_METADATA_PROJECTION: ProtoSelection = {
 };
 export const HUD_GEN_METADATA_PROJECTION: ProtoSelection = {
   1: {
+    3: true,
     4: true,
     9: { 10: { 1: true, 3: true, 4: true } },
     11: true,

@@ -371,7 +371,7 @@ enum QuotaPresentation {
                 let isExtraGemini4: Bool = {
                     guard let match = extraStandaloneGeminiRegex?.firstMatch(in: rawId, range: NSRange(location: 0, length: (rawId as NSString).length)) else { return false }
                     let code = (rawId as NSString).substring(with: match.range(at: 1)).lowercased()
-                    return !["argon", "carbon", "pro", "flash", "ultra", "nano", "lite", "default"].contains(code)
+                    return !["argon", "carbon", "hydrogen", "pro", "flash", "ultra", "nano", "lite", "default"].contains(code)
                 }()
                 guard family == "other" || isExtraGemini4 else { continue }
                 let baseKey = rawId.replacingOccurrences(of: "-(?:trial|preview|exp|disabled|tiered|latest)$", with: "", options: .regularExpression)

@@ -638,10 +638,11 @@ export async function inspectNamedEntry(
   return await inspectSingleProfileItem(ctx, name);
 }
 
-export async function inspectReadOnlyPaths(paths: string[], limitCount = 80000, budgetMs = 2800) {
+export async function inspectReadOnlyPaths(paths: string[], limitCount = 80000, budgetMs = 2800, excludePaths?: ReadonlySet<string>) {
   let bytes = 0, fileCount = 0, count = 0, exists = false, truncated = false;
   const deadline = Date.now() + budgetMs;
   const walk = async (path: string) => {
+    if (excludePaths?.has(path)) return;
     if (++count > limitCount || Date.now() > deadline) {
       truncated = true;
       return;
@@ -651,7 +652,9 @@ export async function inspectReadOnlyPaths(paths: string[], limitCount = 80000, 
       if (s.isSymbolicLink()) return;
       exists = true;
       if (s.isDirectory()) {
-        for (const n of await readdir(path)) {
+        const names = await readdir(path);
+        names.sort((a, b) => (a.startsWith('conversation') ? 0 : 1) - (b.startsWith('conversation') ? 0 : 1));
+        for (const n of names) {
           if (count > limitCount || Date.now() > deadline) {
             truncated = true;
             break;

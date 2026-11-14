@@ -151,11 +151,6 @@ export function allApplicationTargets(home = homedir(), applicationsDir = '/Appl
   ];
 }
 
-export function resolveDefaultTarget(home = homedir(), applicationsDir = '/Applications'): ApplicationTarget {
-  const info = detectInstalledChannels('stable', applicationsDir);
-  return applicationTarget(info.effectiveChannel, home, { applicationsDir });
-}
-
 export function targetForApp(appPath: string, home = homedir()): ApplicationTarget {
   return applicationTarget('stable', home, { appPath });
 }

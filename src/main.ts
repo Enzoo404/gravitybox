@@ -912,6 +912,7 @@ async function run() {
           if(command==='api_pricing_revalue_rollback'){reply({ok:true,...await usageManager.restoreRevalueHistory(String(parsed.previewId ?? ''),parsed.confirm===true)});return;}
           if(command==='pricing_sync_set'){await atomicJson(join(stateDir, 'pricing-preferences.json'), {enabled:parsed.enabled===true});usageManager.setAutoRemotePricingSync(parsed.enabled===true);reply({ok:true});return;}
           if(command==='pricing_sync_check'){
+            if(parsed.feedUrl!==undefined&&typeof parsed.feedUrl!=='string')throw new Error('价格源地址无效');
             await syncActiveOfficialModelsToUsageManager();
             const res=await usageManager.syncRemotePricing(parsed.feedUrl,true);
             const prices=await usageManager.getActivePricingTable();
@@ -1076,8 +1077,8 @@ async function run() {
   process.off('SIGTERM', earlySignalExit); process.off('SIGINT', earlySignalExit);
   process.on('SIGTERM', () => void stop()); process.on('SIGINT', () => void stop());
   // A single bad payload must not take the whole localisation helper down; log it and keep serving.
-  process.on('uncaughtException', error => { console.error(`[GravityBox] ${error.stack ?? error.message}`); if (stopping) void stop(1); });
-  process.on('unhandledRejection', reason => { console.error(`[GravityBox] ${reason instanceof Error ? reason.message : '后台任务异常'}`); });
+  process.on('uncaughtException', error => { console.error(`[GravityBox] ${sanitizeError(error?.stack ?? error?.message ?? '未捕获异常')}`); if (stopping) void stop(1); });
+  process.on('unhandledRejection', reason => { console.error(`[GravityBox] ${reason instanceof Error ? sanitizeError(reason.message) : '后台任务异常'}`); });
   await controller.start();
   void syncActiveAccountToUsageManager(true).catch(() => {});
   } catch (error) {
@@ -1095,5 +1096,5 @@ function isDirectEntry(): boolean {
   try { return realpathSync(entry) === realpathSync(modulePath); } catch { return false; }
 }
 if (process.env.GRAVITYBOX_IMPORT_ONLY !== '1' && isDirectEntry()) {
-  run().catch(error => { console.error(`[GravityBox] ${(error as Error).message}`); process.exitCode = 1; });
+  run().catch(error => { console.error(`[GravityBox] ${sanitizeError((error as Error)?.message ?? '启动失败')}`); process.exitCode = 1; });
 }

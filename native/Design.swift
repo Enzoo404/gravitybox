@@ -1341,8 +1341,6 @@ final class DesignSegmentedControl: NSControl {
         set { setSelected(newValue, animated: Design.shouldAnimate(in: self)) }
     }
 
-    var segmentCount: Int { labels.count }
-
     final class SegmentButton: NSButton {
         override func becomeFirstResponder() -> Bool { let result = super.becomeFirstResponder(); needsDisplay = true; return result }
         override func resignFirstResponder() -> Bool { let result = super.resignFirstResponder(); needsDisplay = true; return result }

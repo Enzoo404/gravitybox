@@ -66,7 +66,11 @@ const canonicalKinds = kinds => [...new Set(Array.isArray(kinds) ? kinds.map(Str
 export function reconcileExtraction(uiStrings, source) {
   const rows = Array.isArray(uiStrings?.strings) ? uiStrings.strings : undefined;
   if (!rows) return { ok: false, reason: '提取结果缺少 strings 数组，无法与界面包字节对账' };
-  const actual = uiStrings.extractor === 'typescript-ast-v1' ? extractUiStringsAst(source) : extractUiStrings(source);
+  const actual = uiStrings.extractor === 'typescript-ast-v2'
+    ? extractUiStringsAst(source, { includeJsxRuntime: true })
+    : uiStrings.extractor === 'typescript-ast-v1'
+      ? extractUiStringsAst(source)
+      : extractUiStrings(source);
   if (rows.length !== actual.length) return { ok: false, reason: `提取结果条数 ${rows.length} 与按界面包字节重新提取的 ${actual.length} 不一致（可能伪造或过期）` };
   const committed = new Map();
   for (const [index, row] of rows.entries()) {

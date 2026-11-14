@@ -136,6 +136,24 @@ export function selectRemotePricingCandidateUrls(options: {
   return fallbackPricingUrls;
 }
 
+const MAX_PRICING_FEED_BYTES = 2 * 1024 * 1024;
+
+export function assertAllowedPricingFeedUrl(rawUrl: unknown): string {
+  if (typeof rawUrl !== 'string' || !rawUrl.trim()) throw new Error('价格源地址无效');
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl.trim());
+  } catch {
+    throw new Error('价格源地址格式无效');
+  }
+  if (parsed.username || parsed.password) throw new Error('价格源地址不允许内嵌凭据');
+  if (parsed.protocol === 'https:') return parsed.href;
+  if (parsed.protocol === 'http:' && (parsed.hostname === '127.0.0.1' || parsed.hostname === 'localhost' || parsed.hostname === '[::1]')) {
+    return parsed.href;
+  }
+  throw new Error('仅允许 HTTPS 官方或受信任价格源地址');
+}
+
 export async function executeRemotePricingSync(options: {
   candidateUrls: string[];
   remotePricingCachePath: string;
@@ -149,9 +167,19 @@ export async function executeRemotePricingSync(options: {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 6000);
     try {
-      const res = await fetch(targetUrl, { signal: controller.signal, headers: { 'User-Agent': `GravityBox/${APP_VERSION}` } });
+      const safeUrl = assertAllowedPricingFeedUrl(targetUrl);
+      const res = await fetch(safeUrl, { signal: controller.signal, headers: { 'User-Agent': `GravityBox/${APP_VERSION}` } });
+      if (res.url) assertAllowedPricingFeedUrl(res.url);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
+      const contentLen = Number(res.headers.get('content-length') ?? 0);
+      if (Number.isFinite(contentLen) && contentLen > MAX_PRICING_FEED_BYTES) {
+        throw new Error('价格源响应体积超出安全上限');
+      }
+      const rawBuf = await res.arrayBuffer();
+      if (rawBuf.byteLength > MAX_PRICING_FEED_BYTES) {
+        throw new Error('价格源响应体积超出安全上限');
+      }
+      const data = JSON.parse(new TextDecoder('utf-8').decode(rawBuf));
       const prices = data && typeof data === 'object' && data.prices ? data.prices : data;
       const validated = validateRawPrices(prices);
       const feedVersion = (data && typeof data === 'object' && typeof data.version === 'string') ? data.version : 'unknown';

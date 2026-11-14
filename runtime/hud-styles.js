@@ -7,7 +7,6 @@
 export const HUD_STYLES_CSS = `
 :host {
   --hud-space-compact: 6px;
-  --hud-space-standard: 12px;
   --hud-radius-card: 12px;
   /* ==================== 浅色模式 (Antigravity Light Theme) ==================== */
   --hud-dock-bg: rgba(10, 10, 12, 0.032);
@@ -465,8 +464,7 @@ export const HUD_STYLES_CSS = `
 .hud-container.is-ultra-compact .hud-turn-dot,
 .hud-container.is-ultra-compact .hud-speed,
 .hud-container.is-ultra-compact .hud-subagent-tag,
-.hud-container.is-ultra-compact .hud-tok-cache,
-.hud-container.is-ultra-compact .hud-ctx-pct-suffix {
+.hud-container.is-ultra-compact .hud-tok-cache {
   display: none !important;
 }
 
@@ -497,8 +495,7 @@ export const HUD_STYLES_CSS = `
   .hud-turn-dot,
   .hud-speed,
   .hud-subagent-tag,
-  .hud-tok-cache,
-  .hud-ctx-pct-suffix {
+  .hud-tok-cache {
     display: none !important;
   }
 }

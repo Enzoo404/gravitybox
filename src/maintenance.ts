@@ -240,8 +240,8 @@ export class CacheMaintenance {
     return inspectNamedEntry(this.discoveryContext(), name, retentionDays, cachedAgentTargets);
   }
 
-  private inspectReadOnlyPaths(paths: string[], limitCount = 80000, budgetMs = 2800) {
-    return inspectReadOnlyPaths(paths, limitCount, budgetMs);
+  private inspectReadOnlyPaths(paths: string[], limitCount = 80000, budgetMs = 2800, excludePaths?: ReadonlySet<string>) {
+    return inspectReadOnlyPaths(paths, limitCount, budgetMs, excludePaths);
   }
 
   private cachedProtectedSummary?: {
@@ -264,7 +264,7 @@ export class CacheMaintenance {
       : undefined;
 
     if (!rawGroups) {
-      const groups: Array<{ id: string; title: string; subtitle: string; icon: string; paths: string[] }> = [
+      const groups: Array<{ id: string; title: string; subtitle: string; icon: string; paths: string[]; excludePaths?: ReadonlySet<string> }> = [
         {
           id: 'workspace',
           title: '工作区与核心账号凭据',
@@ -278,13 +278,18 @@ export class CacheMaintenance {
       ];
       const agentDir = this.officialAgentDir();
       if (agentDir) {
-        const agentDirExists = Boolean(await lstat(agentDir).catch(() => null));
+        const [agentDirStat, browserCacheSpecs] = await Promise.all([
+          lstat(agentDir).catch(() => null),
+          this.collectBrowserProfileCandidates(),
+        ]);
+        const agentDirExists = Boolean(agentDirStat);
         groups.push({
           id: 'conversations',
           title: 'Agent 历史对话与上下文库',
           subtitle: '受保护的主对话、已归档对话、正式产物与站点会话',
           icon: 'bubble.left.and.bubble.right',
           paths: agentDirExists ? [agentDir] : [this.options.geminiDir!],
+          excludePaths: new Set(browserCacheSpecs.map(spec => spec.path)),
         });
       }
       if (this.options.stateDir) {
@@ -297,7 +302,7 @@ export class CacheMaintenance {
         });
       }
       rawGroups = await Promise.all(groups.map(async group => {
-        const stats = await this.inspectReadOnlyPaths(group.paths);
+        const stats = await this.inspectReadOnlyPaths(group.paths, 80000, 2800, group.excludePaths);
         return {
           id: group.id,
           title: group.title,
@@ -486,8 +491,8 @@ export class CacheMaintenance {
         fingerprints: fullEntries.map(e => e.fingerprint),
       };
 
+      // AgentBrowserCache 已在 scanProtectedSummary 遍历阶段前置排除，避免大缓存截断后重复扣减导致下溢
       const agentItemSet = new Set<string>([
-        'AgentBrowserCache',
         'OrphanAgentData',
         'AgentTaskStepLogs',
         'AgentVerboseTranscripts',

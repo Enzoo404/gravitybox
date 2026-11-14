@@ -513,12 +513,6 @@ final class AppUpdateManager {
         return normalized.isEmpty ? nil : normalized
     }
 
-    var hasDownloadedUpdateReady: Bool {
-        guard let url = downloadedDMGURL, !downloadInFlight else { return false }
-        if case .installing = state { return false }
-        return FileManager.default.fileExists(atPath: url.path)
-    }
-
     func validateCachedDMGState() {
         if let url = downloadedDMGURL, !FileManager.default.fileExists(atPath: url.path) {
             downloadedDMGURL = nil

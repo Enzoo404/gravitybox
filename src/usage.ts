@@ -951,6 +951,11 @@ export class UsageStatsManager {
       return { ...page, generated_at: snapshot.summary.generated_at, snapshot_id: snapshot.summary.snapshot_id, availability: snapshot.summary.availability, scope: snapshot.summary.scan_scope_description };
     }
     const {summary,prices,rawPricing}=snapshot as any;
+    const snapshotAccountId: string = summary.selected_account_id ?? 'all';
+    if (accountId && snapshotAccountId !== 'all' && accountId !== snapshotAccountId) {
+      throw Error('统计快照账号范围不匹配，请重新读取');
+    }
+    const effectiveAccountId = accountId ?? snapshotAccountId;
     const start = new Date(summary.generated_at*1000); start.setHours(0, 0, 0, 0);
     if (period === '7d') start.setDate(start.getDate() - 6);
     if (period === '30d') start.setDate(start.getDate() - 29);
@@ -959,11 +964,11 @@ export class UsageStatsManager {
     const upper = end.getTime()/1000;
     const needle = query.toLowerCase().slice(0, 200);
     let events = snapshot.events.filter(e => (period === 'all' || (e.timestamp_seconds >= cutoff && e.timestamp_seconds < upper)) && e.model.toLowerCase().includes(needle));
-    if (accountId && accountId !== 'all') {
-      const targetOpt = this.knownAccounts.find(a => a.id === accountId || (a.email && a.email.toLowerCase() === accountId.toLowerCase()));
-      const targetEmail = targetOpt?.email?.toLowerCase() || (accountId.includes('@') ? accountId.toLowerCase() : null);
+    if (effectiveAccountId && effectiveAccountId !== 'all') {
+      const targetOpt = this.knownAccounts.find(a => a.id === effectiveAccountId || (a.email && a.email.toLowerCase() === effectiveAccountId.toLowerCase()));
+      const targetEmail = targetOpt?.email?.toLowerCase() || (effectiveAccountId.includes('@') ? effectiveAccountId.toLowerCase() : null);
       events = events.filter(e => {
-        if (e.account_id && e.account_id === accountId) return true;
+        if (e.account_id && e.account_id === effectiveAccountId) return true;
         if (targetEmail && e.account_email && e.account_email.toLowerCase() === targetEmail) return true;
         return false;
       });
@@ -971,12 +976,17 @@ export class UsageStatsManager {
     const safeOffset = Math.max(0, Math.floor(offset) || 0);
     const safeLimit = Math.min(500, Math.max(1, Math.floor(limit) || 200));
     const pricingSource = rawPricing ?? prices;
-    return { rows: events.slice().reverse().slice(safeOffset, safeOffset + safeLimit).map(e => {
+    const rows = events.slice().reverse().slice(safeOffset, safeOffset + safeLimit).map(e => {
       const price = this.resolvePricing(pricingSource, e.model, e.timestamp_seconds);
       const cost = this.lockedCost(e, price);
       const { event_key: _key, ...publicEvent } = e;
       return { ...publicEvent, estimated_usd: cost, priced: cost !== null };
-    }), total: events.length, offset: safeOffset, limit: safeLimit, generated_at: summary.generated_at, snapshot_id: summary.snapshot_id, availability: summary.availability, scope: summary.scan_scope_description };
+    });
+    if (this.rateLocksDirty) {
+      this.rateLocksDirty = false;
+      await this.saveRateLocks().catch(() => {});
+    }
+    return { rows, total: events.length, offset: safeOffset, limit: safeLimit, generated_at: summary.generated_at, snapshot_id: summary.snapshot_id, availability: summary.availability, scope: summary.scan_scope_description };
   }
 
   releaseSnapshot(id: string) {

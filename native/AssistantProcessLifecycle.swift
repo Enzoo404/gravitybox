@@ -1,4 +1,7 @@
 import Cocoa
+import OSLog
+
+private let lifecycleLogger = Logger(subsystem: "local.gravitybox.app", category: "Lifecycle")
 
 extension Assistant {
     static func hasRunningAntigravityProcess(psOutput: String, appPaths: [String]) -> Bool {
@@ -344,13 +347,14 @@ extension Assistant {
             autoRestartAttempts = 0
         }
         guard autoRestartAttempts < 3 else {
-            NSLog("[GravityBox] 后台子进程短时间内连续异常退出 3 次，停止自动拉起并保留报错: %@", reason)
+            lifecycleLogger.error("后台子进程短时间内连续异常退出 3 次，停止自动拉起并保留报错: \(reason, privacy: .private)")
             return
         }
         autoRestartAttempts += 1
         lastAutoRestartAt = now
         selfHealingPending = true
-        NSLog("[GravityBox] 后台子进程异常退出 (%@)，将在 1 秒后尝试自动自愈重启 (第 %d/3 次)...", reason, autoRestartAttempts)
+        let attempt = autoRestartAttempts
+        lifecycleLogger.warning("后台子进程异常退出 (\(reason, privacy: .private))，将在 1 秒后尝试自动自愈重启 (第 \(attempt, privacy: .public)/3 次)...")
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
             guard let self else { return }
             self.selfHealingPending = false
@@ -359,7 +363,7 @@ extension Assistant {
                 guard let self else { return }
                 switch result {
                 case .success:
-                    NSLog("[GravityBox] 后台子进程自愈重启成功，重新同步状态与用量。")
+                    lifecycleLogger.info("后台子进程自愈重启成功，重新同步状态与用量。")
                     self.refresh()
                     if self.contentVisible && self.currentPage == 2 {
                         self.usagePage?.fetch()
@@ -369,7 +373,7 @@ extension Assistant {
                         self.fetchUsageSummary(period: periodKey, force: true, allowCached: false)
                     }
                 case .failure(let error):
-                    NSLog("[GravityBox] 后台子进程自愈重启失败: %@", error.localizedDescription)
+                    lifecycleLogger.error("后台子进程自愈重启失败: \(error.localizedDescription, privacy: .private)")
                 }
             }
         }

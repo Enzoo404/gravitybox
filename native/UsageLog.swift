@@ -13,6 +13,7 @@ func saveUsageJSON(_ report: [String: Any], name: String, window: NSWindow, app:
             let result = Result {
                 let data = try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
                 try data.write(to: url, options: .atomic)
+                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
             }
             PerformanceSignpost.end("UsageExportWrite", state)
             DispatchQueue.main.async {

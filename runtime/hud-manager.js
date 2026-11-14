@@ -1,13 +1,12 @@
 import { HudInstance } from './hud-instance.js';
-import { computeUpwardPopoverPosition, applyPopoverGeometry } from './hud-popover.js';
-import { HUD_STYLES_CSS } from './hud-styles.js';
+import { computeUpwardPopoverPosition } from './hud-popover.js';
 
 /**
  * 分栏多会话 HUD 顶层生命周期管理器 (AntigravityHudManager v2.1)
  * 支持双分栏多实例挂载、精确会话 UUID 解析、DOM 模型/流式/子智能体探针、路由安全守卫与无损销毁
  */
 
-const RESTRICTED_HUD_ROUTE = /^\/(?:onboarding|oauth|auth|login|sign-in)(?:\/|$)/i;
+const RESTRICTED_HUD_ROUTE = /^\/(?:onboarding|oauth|auth|login|sign-in|api|browser|preview)(?:\/|$)/i;
 
 export class AntigravityHudManager {
   constructor(options = {}) {

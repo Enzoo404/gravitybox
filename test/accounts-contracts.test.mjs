@@ -286,7 +286,9 @@ test('账号移除保留可恢复材料，文件、索引与墓碑一致，不�
   assert.equal(copies.length,1);
   const saved=JSON.parse(await readFile(join(dir,'accounts-removed',copies[0]),'utf8'));
   assert.equal(saved.account.email,account.email);
-  assert.equal(saved.account.token.refresh_token,'synthetic-refresh');
+  assert.equal(saved.account.token.redacted,true);
+  assert.equal('refresh_token' in saved.account.token,false);
+  assert.equal('access_token' in saved.account.token,false);
 });
 
 test('读取损坏账号明确失败，原件及索引不被当作不存在清掉', async t => {

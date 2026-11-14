@@ -103,11 +103,15 @@ export async function fetchCloudQuotaForAccount(params: {
     if (needTokenRefresh) {
       const previousRefresh = account.token.refresh_token;
       if (!account.token.refresh_token) throw new Error('此账号缺少登录凭据，请重新添加');
+      const clientId = getGoogleClientId(), clientSecret = getGoogleClientSecret();
+      if (fetchImpl === globalThis.fetch && (!clientId || !clientSecret)) {
+        throw new Error('未配置 Google OAuth 凭据，备用账号无法后台刷新 Token（可在 .env 中配置可选凭据）');
+      }
       try {
         const response = await fetchImpl('https://oauth2.googleapis.com/token', {
           method: 'POST', signal: requestSignal(10000),
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: new URLSearchParams({ client_id: getGoogleClientId(), client_secret: getGoogleClientSecret(),
+          body: new URLSearchParams({ client_id: clientId, client_secret: clientSecret,
             refresh_token: account.token.refresh_token, grant_type: 'refresh_token' }).toString(),
         });
         if (!response.ok) throw new Error('登录凭据无法刷新，请重新添加此账号');

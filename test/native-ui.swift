@@ -204,7 +204,7 @@ import Cocoa
                             }
                         }
                         check(usage.costTitle.stringValue == "API费用估算" || usage.costTitle.stringValue == "今日费用估算" || usage.costTitle.stringValue == "API 费用估算","Title must remain API费用估算")
-                        check(usage.priceCoverage.stringValue.isEmpty && usage.priceCoverage.isHidden,"Partial pricing model count must stay hidden")
+                        check(usage.statusSummary.stringValue.isEmpty && usage.footerBox.isHidden,"Partial pricing footer warning must stay hidden when all models are priced")
                         check(usage.donutLegendStack.fittingSize.width <= size.width-190,"Legend exceeds page")
                     }
                 }

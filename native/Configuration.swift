@@ -17,7 +17,6 @@ struct DesktopApplicationTarget {
     // Accept the old initializer shape for configuration migration, never select another app.
     init(channel: String = "stable") {}
     var channel: String { "stable" }
-    var bundleName: String { "Antigravity" }
     var name: String { "Antigravity" }
     var label: String { "Antigravity" }
     var path: String { (Self.applicationsDirectory as NSString).appendingPathComponent("Antigravity.app") }
@@ -41,7 +40,6 @@ struct AppConfiguration: Codable {
     var lastPage = 0
     var navigationVersion: Int?
     var quotaRefreshMinutes = 0
-    var localizationShortcutEnabled = true
     var hudEnabled = true
     var autoPricingSyncEnabled = false
     var syncAntigravityLifecycle = false
@@ -54,14 +52,13 @@ struct AppConfiguration: Codable {
     var applicationChannel = "stable"
 
     enum CodingKeys: String, CodingKey {
-        case autoPricingSyncEnabled, localizationShortcutEnabled, hudEnabled, quotaRefreshMinutes, schema, lastPage, navigationVersion, syncAntigravityLifecycle, autoUpdateEnabled, lastCleanedVersion, accountsCollapsed, menuSelectedTab, menuUsagePeriod, menuTrendMetric, applicationChannel
+        case autoPricingSyncEnabled, hudEnabled, quotaRefreshMinutes, schema, lastPage, navigationVersion, syncAntigravityLifecycle, autoUpdateEnabled, lastCleanedVersion, accountsCollapsed, menuSelectedTab, menuUsagePeriod, menuTrendMetric, applicationChannel
     }
 
     init() {}
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        localizationShortcutEnabled = (try? container.decode(Bool.self, forKey: .localizationShortcutEnabled)) ?? true
         autoPricingSyncEnabled = (try? container.decode(Bool.self, forKey: .autoPricingSyncEnabled)) ?? false
         hudEnabled = (try? container.decode(Bool.self, forKey: .hudEnabled)) ?? true
         quotaRefreshMinutes = (try? container.decode(Int.self, forKey: .quotaRefreshMinutes)) ?? 0

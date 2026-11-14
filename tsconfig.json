@@ -1,7 +1,7 @@
 {
   "compilerOptions": {
     "target": "ES2022", "module": "NodeNext", "moduleResolution": "NodeNext",
-    "strict": true, "noUnusedLocals": true, "noUnusedParameters": true,
+    "strict": true, "noUnusedLocals": true, "noUnusedParameters": true, "allowUnreachableCode": false,
     "outDir": "dist", "rootDir": "src", "types": ["node"],
     "lib": ["ES2022", "DOM"], "noUncheckedIndexedAccess": true,
     "forceConsistentCasingInFileNames": true, "skipLibCheck": true

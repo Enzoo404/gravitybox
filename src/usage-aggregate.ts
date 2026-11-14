@@ -3,6 +3,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
 import type { TokenUsageSummary, TokenUsagePeriod, AvailableAccountUsageOption } from './usage.js';
 import { resolveDatabaseModelFullName } from './usage-types.js';
+import { MODEL_PRICE_ALIASES } from './model-catalog.js';
 import { resolvePricingForTimestamp, matchPricingKeys, calculateEstimatedUsd, priceStatus, type ApiPricingEntry } from './pricing.js';
 
 export function formatLocalDate(d: Date): string {
@@ -224,14 +225,29 @@ export function ledgerEventPage(db: DatabaseSync, options: {
         start.setDate(start.getDate() - 29);
     const end = new Date(snapshot.generatedAt * 1000);
     end.setHours(24, 0, 0, 0);
+    const rawQuery = options.query ?? '';
+    const qLower = rawQuery.trim().toLowerCase();
+    const aliasMatches = qLower
+        ? Object.keys(MODEL_PRICE_ALIASES)
+            .filter(alias => resolveDatabaseModelFullName(alias, null).toLowerCase().includes(qLower))
+            .map(alias => alias.toLowerCase())
+        : [];
+    const modelClause = aliasMatches.length > 0
+        ? "(json_extract(r.payload,'$.model') LIKE ? ESCAPE '\\' OR lower(json_extract(r.payload,'$.model')) IN (" + aliasMatches.map(() => '?').join(',') + '))'
+        : "json_extract(r.payload,'$.model') LIKE ? ESCAPE '\\'";
     const conditions = [
         'r.seq<=?',
         'NOT EXISTS(SELECT 1 FROM event_revisions n WHERE n.event_key=r.event_key AND n.seq>r.seq AND n.seq<=?)',
         'NOT EXISTS(SELECT 1 FROM event_aliases a WHERE a.legacy_key=r.event_key)',
         "COALESCE(json_extract(r.payload,'$.db_file'),'') NOT IN ('recovered_session.db','recovered_enterprise_session.db')",
-        "json_extract(r.payload,'$.model') LIKE ? ESCAPE '\\'",
+        modelClause,
     ];
-    const params: Array<string | number> = [snapshot.revision, snapshot.revision, '%' + options.query.replace(/[\\%_]/g, '\\$&') + '%'];
+    const params: Array<string | number> = [
+        snapshot.revision,
+        snapshot.revision,
+        '%' + rawQuery.replace(/[\\%_]/g, '\\$&') + '%',
+        ...aliasMatches,
+    ];
     if (options.period !== 'all') {
         conditions.push('r.timestamp>=? AND r.timestamp<?');
         params.push(start.getTime() / 1000, end.getTime() / 1000);
@@ -244,6 +260,7 @@ export function ledgerEventPage(db: DatabaseSync, options: {
     const total = Number(db.prepare(`SELECT COUNT(*) AS count FROM event_revisions r WHERE ${where}`).get(...params)?.count);
     const rows = db.prepare(`SELECT r.payload,l.unit_price FROM event_revisions r LEFT JOIN rate_locks l ON l.event_key=r.event_key WHERE ${where} ORDER BY r.timestamp DESC,r.seq DESC LIMIT ? OFFSET ?`).all(...params, options.limit, options.offset).map(row => {
         const event = JSON.parse(String(row.payload)) as LedgerEvent;
+        event.model = resolveDatabaseModelFullName(event.model, null);
         const price = row.unit_price ? JSON.parse(String(row.unit_price)) : null;
         const cost = price && event.timestamp_seconds > 0 ? calculateEstimatedUsd(event.input_tokens, event.output_tokens, event.cached_tokens, price, event.cache_write_tokens ?? 0) : null;
         const { event_key: _key, source_id: _source, legacy_event_key: _legacy, ...publicEvent } = event;

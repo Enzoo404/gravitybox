@@ -216,3 +216,204 @@ test('P2-Batch3: Protobuf 超长损毁 varint 安全保护、JSX 运行时 AST �
   assert.equal(rep.missing.length,0,`${file} 不应存在漏译词条`);
  }
 });
+
+test('Release-Audit-P0: 费率重估同步 JSON 锁、HUD 编排器模型消歧、移除账号凭据脱敏与 AST v2 对账',async t=>{
+ const {mkdtemp,mkdir,rm,readdir}=await import('node:fs/promises');
+ const {tmpdir}=await import('node:os');
+ const {join}=await import('node:path');
+ const {DatabaseSync}=await import('node:sqlite');
+ const {UsageStatsManager}=await import('../dist/usage.js');
+ const {AccountsManager}=await import('../dist/accounts.js');
+ const {ProtobufWriter:W}=await import('../dist/protobuf.js');
+ const {buildConversationHudMetrics,parseLatestGenMetadataBlob,resolveModelCapacity}=await import('../dist/hud.js');
+ const {reconcileExtraction}=await import('../tools/coverage-report.mjs');
+ const dir=await mkdtemp(join(tmpdir(),'gb-release-p0-'));
+ t.after(()=>rm(dir,{recursive:true,force:true}));
+
+ // 1) revalueHistory('apply' / 'restore') 同步更新 usage-rate-locks.json，杜绝被移除费率锁在重启后复活
+ const convDir=join(dir,'antigravity','conversations');
+ await mkdir(convDir,{recursive:true});
+ const nowSec=Math.floor(Date.now()/1000)-30;
+ const revDb=new DatabaseSync(join(convDir,'revalue-sync.db'));
+ revDb.exec('CREATE TABLE gen_metadata(idx INTEGER PRIMARY KEY,data BLOB);');
+ const mkUsageGen=(model,cacheWrite=0)=>W.encodeLengthDelimited(1,Buffer.concat([
+  W.encodeString(19,model),
+  W.encodeLengthDelimited(4,Buffer.concat([W.encodeVarintField(2,1000000),W.encodeVarintField(3,0),...(cacheWrite?[W.encodeVarintField(4,cacheWrite)]:[])])),
+  W.encodeLengthDelimited(9,W.encodeLengthDelimited(4,W.encodeVarintField(1,nowSec))),
+ ]));
+ revDb.prepare('INSERT INTO gen_metadata VALUES(0,?)').run(mkUsageGen('model-keep'));
+ revDb.prepare('INSERT INTO gen_metadata VALUES(1,?)').run(mkUsageGen('model-drop',1000000));
+ revDb.close();
+
+ const usageMgr=new UsageStatsManager({geminiDir:dir,stateDir:dir});
+ await usageMgr.savePricingTable({
+  'model-keep':{model:'model-keep',input:1,output:1,cached:0},
+  'model-drop':{model:'model-drop',input:1,output:1,cached:0,cacheWrite:1},
+ });
+ assert.equal((await usageMgr.getUsageSummary(true)).all_time.estimated_usd,3);
+ const beforeJson=await readFile(join(dir,'usage-rate-locks.json'),'utf8');
+ assert.equal(Object.keys(JSON.parse(beforeJson).entries).length,2);
+
+ // 更新价格表：model-keep 涨至 $5，model-drop 移除未核实的 cacheWrite 费率（重估后该事件转为未计价，删除原锁）
+ await usageMgr.savePricingTable({
+  'model-keep':{model:'model-keep',input:5,output:1,cached:0},
+  'model-drop':{model:'model-drop',input:1,output:1,cached:0},
+ });
+ const preview1=await usageMgr.previewRevalueHistory();
+ assert.equal(preview1.before,3);
+ assert.equal(preview1.after,5);
+ await usageMgr.revalueHistory(true,{previewId:preview1.previewId});
+ const appliedJson=JSON.parse(await readFile(join(dir,'usage-rate-locks.json'),'utf8'));
+ assert.equal(Object.keys(appliedJson.entries).length,1,'变成未计价的费率锁必须从磁盘 usage-rate-locks.json 同步移除');
+
+ // 重启新实例后验证已删除的 model-drop 费率锁不会从磁盘 JSON 复活，且支持连续二次预览
+ const restartedMgr=new UsageStatsManager({geminiDir:dir,stateDir:dir});
+ assert.equal((await restartedMgr.getUsageSummary(true)).all_time.estimated_usd,5);
+ const preview2=await restartedMgr.previewRevalueHistory();
+ assert.equal(preview2.before,5);
+
+ // 回退第一次重估后，磁盘 JSON 与总金额均精确恢复为原值 $3（2 条锁）
+ await restartedMgr.restoreRevalueHistory(preview1.previewId,true);
+ assert.equal((await new UsageStatsManager({geminiDir:dir,stateDir:dir}).getUsageSummary(true)).all_time.estimated_usd,3);
+ assert.equal(Object.keys(JSON.parse(await readFile(join(dir,'usage-rate-locks.json'),'utf8')).entries).length,2);
+
+ // 2) HUD Orchestrator (Carbon / Hydrogen / Argon) 容量解析与按步 API 计费消歧
+ assert.equal(resolveModelCapacity('Orchestrator (Carbon)').modelId,'gemini-4-carbon');
+ assert.equal(resolveModelCapacity('Orchestrator (Carbon)').isFallback,false);
+ assert.equal(resolveModelCapacity('Orchestrator (Hydrogen)').modelId,'gemini-4-hydrogen');
+ assert.equal(resolveModelCapacity('Orchestrator (Hydrogen)').isFallback,false);
+ assert.equal(resolveModelCapacity('gemini-flash-worker-agy').modelId,'gemini-3.8-flash');
+
+ const carbonEnumGen=parseLatestGenMetadataBlob(W.encodeLengthDelimited(1,Buffer.concat([
+  W.encodeVarintField(3,1667),
+  W.encodeString(19,'gemini-pro-orchestrator-g1-pro'),
+ ])));
+ assert.equal(carbonEnumGen.modelEnum,1667);
+
+ const novTs=Math.floor(Date.parse('2026-11-14T12:00:00Z')/1000);
+ const hudHydrogen=buildConversationHudMetrics({
+  conversationId:'orch-hydrogen',
+  steps:[{
+   idx:0,stepType:15,status:3,hasUsage:true,startTimeSeconds:novTs,endTimeSeconds:novTs+2,
+   rawInputTokens:1_000_000,outputTokens:0,cachedReadTokens:0,cacheWriteTokens:0,reasoningTokens:0,candidateTokens:0,
+   generation:{responseModel:'gemini-pro-orchestrator-g1-pro',modelDisplayName:'Orchestrator (Hydrogen)'},
+  }],
+ });
+ assert.equal(hudHydrogen.context.modelId,'gemini-4-hydrogen');
+ assert.equal(hudHydrogen.context.modelDisplayName,'Orchestrator (Hydrogen)');
+ assert.equal(hudHydrogen.context.capacitySource,'reference');
+ assert.equal(hudHydrogen.tokens.estimatedCostUsd,1.5,'Orchestrator (Hydrogen) 应按 Hydrogen $1.5/1M 计费而非 Argon $2.0/1M');
+
+ // 3) deleteAccount 写入 accounts-removed 快照时必须脱敏 OAuth 令牌
+ const accMgr=new AccountsManager(dir);
+ const victim=await accMgr.upsertAccount({email:'sec@example.invalid',refreshToken:'1//secret-rt',accessToken:'ya29.secret-at',idToken:'eyJ.secret-id'});
+ await accMgr.deleteAccount(victim.id);
+ const removedSnapFiles=(await readdir(join(dir,'accounts-removed'))).filter(f=>f.startsWith(victim.id));
+ const removedSnap=JSON.parse(await readFile(join(dir,'accounts-removed',removedSnapFiles[0]),'utf8'));
+ assert.equal(removedSnap.account.token.redacted,true);
+ assert.equal(JSON.stringify(removedSnap).includes('secret-rt'),false);
+ assert.equal(JSON.stringify(removedSnap).includes('secret-at'),false);
+ assert.equal(JSON.stringify(removedSnap).includes('secret-id'),false);
+
+ // 4) typescript-ast-v2 对账与 2.32.1 新增 JSX 词条核验
+ const jsxSource='(0,r.jsx)("h2",{children:"Agent working"});';
+ const v2Rows=extractUiStringsAst(jsxSource,{includeJsxRuntime:true});
+ assert.equal(reconcileExtraction({extractor:'typescript-ast-v2',strings:v2Rows},jsxSource).ok,true);
+ const snap2321=JSON.parse(await readFile(new URL('../ui-strings/2.32.1.json',import.meta.url),'utf8'));
+ assert.equal(snap2321.extractor,'typescript-ast-v2');
+ const dict=JSON.parse(await readFile(new URL('../dict/base.json',import.meta.url),'utf8'));
+ assert.equal(dict['Agent working'],'智能体工作中');
+ assert.equal(dict['Sort and filter conversations'],'排序和筛选对话');
+ assert.equal(dict['Live chat'],'实时对话');
+});
+
+test('Release-Audit-P1: 大账本模型归一化搜索、starter 套餐映射、OAuth 未配置提示、日志脱敏与价格源白名单',async t=>{
+ const {mkdtemp,mkdir,writeFile,rm}=await import('node:fs/promises');
+ const {tmpdir}=await import('node:os');
+ const {join}=await import('node:path');
+ const {DatabaseSync}=await import('node:sqlite');
+ const {UsageStatsManager}=await import('../dist/usage.js');
+ const {UsageLedger}=await import('../dist/usage-ledger.js');
+ const {AccountsManager}=await import('../dist/accounts.js');
+ const {buildAccountQuotaOverview}=await import('../dist/account-quota.js');
+ const {normalizeSubscriptionTier}=await import('../dist/ipc-projections.js');
+ const {DEFAULT_API_PRICES,priceStatus}=await import('../dist/pricing.js');
+ const {assertAllowedPricingFeedUrl}=await import('../dist/usage-pricing.js');
+ const {Tasks}=await import('../dist/tasks.js');
+ const {CacheMaintenance}=await import('../dist/maintenance.js');
+ const {ProtobufWriter:W}=await import('../dist/protobuf.js');
+ const dir=await mkdtemp(join(tmpdir(),'gb-release-p1-'));
+ t.after(()=>rm(dir,{recursive:true,force:true}));
+
+ // 1) 大账本 ledgerEventPage 支持按归一化模型名检索历史占位符并返回归一化名称
+ const ledger=new UsageLedger(dir);
+ const nowSec=Math.floor(Date.now()/1000)-20;
+ await ledger.save([
+  {event_key:'p1-m668',source_id:'s1',model:'MODEL_PLACEHOLDER_M668',input_tokens:100,output_tokens:20,cached_tokens:0,total_tokens:120,timestamp_seconds:nowSec},
+  {event_key:'p1-worker',source_id:'s2',model:'gemini-flash-worker-agy',input_tokens:50,output_tokens:10,cached_tokens:0,total_tokens:60,timestamp_seconds:nowSec+1},
+ ]);
+ const agg=await ledger.aggregate({prices:DEFAULT_API_PRICES,accountId:'all',accounts:[],snapshotId:'snap-p1'});
+ const argonPage=await ledger.events({snapshot:agg.ledger_snapshot,period:'all',query:'gemini-4-argon',offset:0,limit:10});
+ assert.equal(argonPage.total,1);
+ assert.equal(argonPage.rows[0].model,'gemini-4-argon');
+ const flashPage=await ledger.events({snapshot:agg.ledger_snapshot,period:'all',query:'3.8-flash',offset:0,limit:10});
+ assert.equal(flashPage.total,1);
+ assert.equal(flashPage.rows[0].model,'gemini-3.8-flash');
+
+ // 2) Carbon 模型配额在未显式标记 is_carbon 的旧快照上自动对齐 family === 'carbon'
+ const carbonOverview=buildAccountQuotaOverview({quota:{models:[{name:'gemini-4-carbon',percentage:80,reset_time:''}],quota_groups:[],is_forbidden:false,subscription_tier:'PRO',last_updated:nowSec,model_forwarding_rules:{}}});
+ assert.equal(carbonOverview.models[0].is_carbon,true);
+
+ // 3) 小账本单账号快照在 getUsageEvents 中继承账号范围并拒绝越权混读；gemini-4-carbon-trial 优惠期边界受 priceStatus 识别
+ const convDir=join(dir,'antigravity','conversations');
+ await mkdir(convDir,{recursive:true});
+ const uDb=new DatabaseSync(join(convDir,'p1-scope.db'));
+ uDb.exec('CREATE TABLE gen_metadata(idx INTEGER PRIMARY KEY,data BLOB);');
+ uDb.prepare('INSERT INTO gen_metadata VALUES(0,?)').run(W.encodeLengthDelimited(1,Buffer.concat([
+  W.encodeString(19,'gemini-3.8-flash'),
+  W.encodeLengthDelimited(4,Buffer.concat([W.encodeVarintField(2,100),W.encodeVarintField(3,20)])),
+  W.encodeLengthDelimited(9,W.encodeLengthDelimited(4,W.encodeVarintField(1,nowSec))),
+ ])));
+ uDb.close();
+ const uMgr=new UsageStatsManager({geminiDir:dir,stateDir:join(dir,'small-state')});
+ uMgr.setKnownAccounts([{id:'acc-a',email:'a@example.invalid'},{id:'acc-b',email:'b@example.invalid'}]);
+ uMgr.setCurrentAccountContext({id:'acc-a',email:'a@example.invalid'});
+ uMgr.accountContextObservedAtSec=nowSec-100;
+ const sumB=await uMgr.getUsageSummary(true,'acc-b');
+ assert.equal((await uMgr.getUsageEvents('all','',0,10,sumB.snapshot_id)).total,0,'省略 accountId 时应继承单账号快照范围');
+ await assert.rejects(uMgr.getUsageEvents('all','',0,10,sumB.snapshot_id,false,false,'acc-a'),/范围不匹配/);
+ assert.equal(priceStatus(DEFAULT_API_PRICES['gemini-4-carbon-trial'],Date.parse('2027-01-01T00:00:00Z')),'expired');
+
+ // 4) 未配置可选 Google OAuth 环境变量时给出明确提示而非误报凭据失效
+ const prevCid=process.env.GRAVITYBOX_GOOGLE_CLIENT_ID,prevSec=process.env.GRAVITYBOX_GOOGLE_CLIENT_SECRET;
+ delete process.env.GRAVITYBOX_GOOGLE_CLIENT_ID;delete process.env.GRAVITYBOX_GOOGLE_CLIENT_SECRET;
+ try{
+  const accMgr=new AccountsManager(join(dir,'oauth-state'));
+  await assert.rejects(accMgr.addAccountWithRefreshToken('1//valid-token'),/未配置 Google OAuth 凭据/);
+ }finally{
+  if(prevCid!==undefined)process.env.GRAVITYBOX_GOOGLE_CLIENT_ID=prevCid;
+  if(prevSec!==undefined)process.env.GRAVITYBOX_GOOGLE_CLIENT_SECRET=prevSec;
+ }
+
+ // 5) Tasks 后台异常脱敏与远程价格源 URL 安全白名单校验
+ const tasks=new Tasks(join(dir,'tasks-state'),()=>{});
+ tasks.begin('test-redact','脱敏测试',async()=>{throw new Error('上游返回异常 token=ya29.superSecretAccessToken123456');});
+ await tasks.stop();
+ assert.equal(tasks.list()[0].message.includes('ya29.'),false,'后台任务错误消息必须脱敏');
+ assert.match(assertAllowedPricingFeedUrl('https://raw.githubusercontent.com/Enzoo404/gravitybox/main/assets/pricing-feed.json'),/^https:/);
+ assert.equal(assertAllowedPricingFeedUrl('http://127.0.0.1:8080/feed.json'),'http://127.0.0.1:8080/feed.json');
+ assert.throws(()=>assertAllowedPricingFeedUrl('file:///etc/passwd'),/仅允许 HTTPS/);
+ assert.throws(()=>assertAllowedPricingFeedUrl('http://example.com/feed.json'),/仅允许 HTTPS/);
+
+ // 6) Maintenance 受保护对话统计前置排除浏览器缓存目录，保留精确对话与 Cookies 体积
+ const maintProfile=join(dir,'maint-profile'),maintTrash=join(dir,'maint-trash');
+ const bpDefault=join(dir,'antigravity','browser_profile','Default');
+ await mkdir(join(bpDefault,'Cache'),{recursive:true});
+ await mkdir(maintProfile,{recursive:true});await mkdir(maintTrash,{recursive:true});
+ await writeFile(join(bpDefault,'Cache','big.bin'),Buffer.alloc(4096,1));
+ await writeFile(join(bpDefault,'Cookies'),'protected-cookie-bytes');
+ const maint=new CacheMaintenance(maintProfile,maintTrash,async()=>false,{geminiDir:dir});
+ const scan=await maint.scan();
+ const convProtected=scan.protectedEntries.find(e=>e.id==='conversations');
+ assert.ok(convProtected && convProtected.bytes>=22,'受保护对话与站点 Cookies 体积不得被浏览器缓存抵扣归零');
+});

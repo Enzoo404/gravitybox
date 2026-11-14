@@ -19,6 +19,7 @@ import {
   type ApiPricingEntry,
 } from '../pricing.js';
 import { loadRawPricingTable } from '../usage-pricing.js';
+import { resolveDatabaseModelFullName } from '../usage-types.js';
 import { runHudDbScanInWorker } from '../sqlite-read.js';
 import type { HudWorkerRawStepRow } from '../sqlite-worker.js';
 import { decodeVarint64, skipProtobufField } from '../protobuf.js';
@@ -450,12 +451,30 @@ export function parseLatestGenMetadataBlob(
           if (!t1) break;
           const fn1 = t1 >>> 3;
           const wt1 = t1 & 0x07;
-          if (wt1 === 2) {
+          if (wt1 === 0) {
+            const v1 = Number(decodeVarint64(subBuf, c1));
+            if (fn1 === 3 && Number.isSafeInteger(v1) && v1 > 0) {
+              out.modelEnum = v1;
+            }
+          } else if (wt1 === 2) {
             const l1 = Number(decodeVarint64(subBuf, c1));
             if (!Number.isSafeInteger(l1) || l1 < 0 || c1.pos + l1 > subBuf.length) break;
             const fieldSlice = subBuf.subarray(c1.pos, c1.pos + l1);
             if (fn1 === 4) {
               out.usage = parseModelUsageStatsField9(fieldSlice);
+              if (!out.modelEnum) {
+                const cu = { pos: 0 };
+                while (cu.pos < fieldSlice.length) {
+                  const tu = Number(decodeVarint64(fieldSlice, cu));
+                  if (!tu) break;
+                  if ((tu & 0x07) === 0) {
+                    const vu = Number(decodeVarint64(fieldSlice, cu));
+                    if ((tu >>> 3) === 1 && Number.isSafeInteger(vu) && vu > 0) out.modelEnum = vu;
+                  } else if (!skipProtobufField(fieldSlice, cu, tu & 0x07)) {
+                    break;
+                  }
+                }
+              }
             } else if ((fn1 === 19 || fn1 === 21) && l1 > 0 && l1 < 256) {
               const str = decoder.decode(fieldSlice).trim();
               if (str) {
@@ -984,7 +1003,19 @@ export function buildConversationHudMetrics(input: ComputeHudMetricsInput): Conv
     }
   }
   const genMeta = latestStep?.generation ?? input.genMetadata;
-  const historicalModel = genMeta?.modelDisplayName || genMeta?.responseModel ||
+  const needsGenDisambiguation = Boolean(
+    genMeta && (
+      (genMeta.responseModel && /\borchestrator\b|^gemini-flash-worker|^MODEL_PLACEHOLDER_M66[789]$/i.test(genMeta.responseModel)) ||
+      (genMeta.modelDisplayName && /\borchestrator\b/i.test(genMeta.modelDisplayName)) ||
+      genMeta.modelEnum === 1667 ||
+      genMeta.modelEnum === 1668 ||
+      genMeta.modelEnum === 1669
+    )
+  );
+  const disambiguatedGenModel = needsGenDisambiguation
+    ? resolveDatabaseModelFullName(genMeta?.responseModel, genMeta?.modelDisplayName, genMeta?.modelEnum ?? null)
+    : '';
+  const historicalModel = disambiguatedGenModel || genMeta?.modelDisplayName || genMeta?.responseModel ||
     genMeta?.plannerModelName || latestStep?.modelName;
   const hasExplicitModelEvidence = Boolean(historicalModel || (typeof input.modelId === 'string' && input.modelId.trim()));
   const modelSpec = resolveModelCapacity(historicalModel || input.modelId);
@@ -1077,9 +1108,16 @@ export function buildConversationHudMetrics(input: ComputeHudMetricsInput): Conv
   const defaultPriceTsSeconds = Math.floor(nowMs / 1000);
   for (const item of usageStepsForCost) {
     const step = item.step;
+    const resolvedStepGenModel =
+      step.generation && (step.generation.responseModel || step.generation.modelDisplayName || step.generation.modelEnum)
+        ? resolveDatabaseModelFullName(
+            step.generation.responseModel,
+            step.generation.modelDisplayName,
+            step.generation.modelEnum ?? null
+          )
+        : '';
     const stepModel =
-      step.generation?.responseModel ||
-      step.generation?.modelDisplayName ||
+      (resolvedStepGenModel && resolvedStepGenModel !== '未知模型' ? resolvedStepGenModel : '') ||
       step.generation?.plannerModelName ||
       step.modelName ||
       (item.isChildStep ? '' : defaultFallbackModel);

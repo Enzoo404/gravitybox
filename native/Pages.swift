@@ -22,7 +22,6 @@ final class DashboardPage: NSObject {
     let argonWeeklyBar = quotaBar(title: "Gemini 4 Argon", percentage: nil, resetText: "", icon: "sparkles", unknownPlaceholder: "未取得配额数据")
     let carbonWeeklyBar = quotaBar(title: "Gemini 4 Carbon", percentage: nil, resetText: "", icon: "sparkles", unknownPlaceholder: "未取得配额数据")
     let extraStandaloneStack = NSStackView()
-    let argonStatusLabel = text("Argon 配额未知", size:11, color:.secondaryLabelColor, wrap:true)
     let refreshQuotaButton: QuotaRefreshButton
 
     // 三磁贴 Bento 磁贴
@@ -85,7 +84,6 @@ final class DashboardPage: NSObject {
         let second = horizontal([claude5hBar, claudeWeeklyBar], spacing: 14)
         second.distribution = .fillEqually
         second.alignment = .top
-        argonStatusLabel.isHidden = true
         let thirdRow = horizontal([argonWeeklyBar, carbonWeeklyBar], spacing: 14)
         thirdRow.distribution = .fillEqually
         thirdRow.alignment = .top
@@ -94,11 +92,10 @@ final class DashboardPage: NSObject {
         extraStandaloneStack.spacing = 6
         extraStandaloneStack.isHidden = true
         extraStandaloneStack.detachesHiddenViews = true
-        let third = vertical([thirdRow, extraStandaloneStack, argonStatusLabel], spacing: 6)
+        let third = vertical([thirdRow, extraStandaloneStack], spacing: 6)
         third.detachesHiddenViews = true
         fillWidth(thirdRow, in: third)
         fillWidth(extraStandaloneStack, in: third)
-        fillWidth(argonStatusLabel, in: third)
         for bar in [gemini5hBar, geminiWeeklyBar, claude5hBar, claudeWeeklyBar, argonWeeklyBar, carbonWeeklyBar] { bar.useCompactLayout() }
         dataTimestampLabel.isHidden = true
         let heroDivider = divider()
@@ -245,8 +242,7 @@ final class DashboardPage: NSObject {
 
     func updateReadinessMatrix() {
         let dashUsage = (lastSuccessfulSummary?["usage"] as? [String: Any]) ?? [:]
-        let report = app.cachedUsageReportsByPeriod["today:(app.selectedUsageAccountId)"]
-            ?? app.cachedUsageReportsByPeriod["today:all"]
+        let report = app.cachedUsageReportsByPeriod["today:all"]
             ?? app.cachedUsageReportsByPeriod["today"]
             ?? [:]
         let summary = report["summary"] as? [String: Any] ?? [:]
@@ -562,7 +558,7 @@ final class DashboardPage: NSObject {
         self.geminiWeeklyBar.update(title: "Gemini · 每周", percentage: nil, resetText: "", icon: "calendar", unknownPlaceholder: "读取失败")
         self.claude5hBar.update(title: "Claude/GPT · 5 小时", percentage: nil, resetText: "", icon: "cpu", unknownPlaceholder: "读取失败")
         self.claudeWeeklyBar.update(title: "Claude/GPT · 每周", percentage: nil, resetText: "", icon: "calendar", unknownPlaceholder: "读取失败")
-        argonWeeklyBar.isHidden = false; carbonWeeklyBar.isHidden = false; extraStandaloneStack.isHidden = true; argonStatusLabel.isHidden = true
+        argonWeeklyBar.isHidden = false; carbonWeeklyBar.isHidden = false; extraStandaloneStack.isHidden = true
         self.argonWeeklyBar.update(title: "Gemini 4 Argon", percentage: nil, resetText: "", icon: "sparkles", unknownPlaceholder: "读取失败")
         self.carbonWeeklyBar.update(title: "Gemini 4 Carbon", percentage: nil, resetText: "", icon: "sparkles", unknownPlaceholder: "读取失败")
     }
@@ -696,11 +692,10 @@ final class DashboardPage: NSObject {
                 // B01: stale quota groups are a warning of their own; append them to the status
                 // line (and tooltip with real sampling times) but never replace the mailbox line.
                 let stale = self.staleGroupSummary(acc)
-                var finalBadgeTitle = badgeTitle
                 var finalBadgeTint = badgeTint
                 var finalStatus = statusText
                 if !stale.hint.isEmpty {
-                    if finalBadgeTitle == "已保存记录" { finalBadgeTitle = "部分配额陈旧"; finalBadgeTint = accessibleWarningColor() }
+                    if badgeTitle == "已保存记录" { finalBadgeTint = accessibleWarningColor() }
                     finalStatus = finalStatus.isEmpty ? stale.hint : "\(finalStatus) · \(stale.hint)"
                 }
                 self.accountStatusLabel.isHidden = finalStatus.isEmpty
@@ -725,8 +720,7 @@ final class DashboardPage: NSObject {
             self.claude5hBar.update(title: "Claude/GPT · \(quotaContract.claudePrimary.label)", percentage: c5h, resetText: c5Cd, icon: "cpu", unknownPlaceholder: quotaContract.claudePrimary.window?.placeholder ?? QuotaPresentation.missingWindowPlaceholder(otherPercentage:cWeek), stale: quotaContract.claudePrimary.window?.stale == true)
             self.claudeWeeklyBar.update(title: "Claude/GPT · 每周", percentage: cWeek, resetText: cWCd, icon: "calendar", unknownPlaceholder: quotaContract.claudeWeekly?.placeholder ?? QuotaPresentation.missingWindowPlaceholder(otherPercentage:c5h), stale: quotaContract.claudeWeekly?.stale == true)
             let argon = quotaContract.argon
-            argonWeeklyBar.isHidden = false; carbonWeeklyBar.isHidden = false; argonStatusLabel.isHidden = true
-            argonStatusLabel.stringValue = argon?.compactText ?? "Argon 配额未知"
+            argonWeeklyBar.isHidden = false; carbonWeeklyBar.isHidden = false
             let argonPlaceholder = argon?.availability == "disabled" ? "不可用" : (argon?.placeholder ?? "未知")
             self.argonWeeklyBar.update(title: argon?.title ?? "Gemini 4 Argon", percentage: argon?.percentage,
                 resetText: argon?.percentage == nil ? "" : (argon?.resetText ?? ""), icon: "sparkles",

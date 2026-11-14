@@ -1,34 +1,34 @@
 {
  "schema": 1,
- "extractor": "typescript-ast-v1",
+ "extractor": "typescript-ast-v2",
  "appVersion": "2.32.1",
  "source": "vendor/antigravity/2.32.1/main.js",
  "bundleSha256": "4c0a1ff5659e7dd92e6ad249a386c0dbce2c8e94b88522a2f366ff20b397081e",
  "bundleBytes": 12061895,
- "extractedAt": "2026-11-14T01:34:14.875Z",
+ "extractedAt": "2026-11-14T10:03:35.329Z",
  "counts": {
-  "total": 2415,
-  "fragment": 164,
-  "text": 990,
-  "button": 47,
-  "template": 229,
-  "placeholder": 58,
-  "label": 504,
-  "aria-label": 241,
-  "description": 130,
-  "message": 40,
+  "total": 2897,
+  "fragment": 173,
+  "text": 1168,
+  "template": 359,
+  "button": 63,
+  "placeholder": 74,
+  "label": 544,
+  "aria-label": 306,
+  "description": 148,
+  "title": 362,
+  "message": 57,
   "name": 19,
-  "title": 320,
-  "tooltip": 63,
-  "heading": 36,
+  "tooltip": 96,
+  "heading": 38,
+  "ariaLabel": 36,
+  "subtitle": 9,
   "errorMessage": 6,
-  "ariaLabel": 21,
   "summary": 6,
   "tooltipText": 11,
   "displayName": 13,
   "alt": 8,
   "confirmLabel": 2,
-  "subtitle": 5,
   "emptyText": 3,
   "header": 1,
   "promptText": 1
@@ -43,7 +43,31 @@
    "count": 1
   },
   {
+   "text": " (${a})",
+   "kinds": [
+    "fragment",
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": " (${C})",
+   "kinds": [
+    "fragment",
+    "template"
+   ],
+   "count": 1
+  },
+  {
    "text": " (for example, passwords, messages, or credit cards).",
+   "kinds": [
+    "fragment",
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": " (still loading…)",
    "kinds": [
     "fragment",
     "text"
@@ -59,7 +83,31 @@
    "count": 1
   },
   {
+   "text": " \\u00b7 ${a.serverName}",
+   "kinds": [
+    "fragment",
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": " \\u00b7 ${h.detail}",
+   "kinds": [
+    "fragment",
+    "template"
+   ],
+   "count": 1
+  },
+  {
    "text": " ${a.name}",
+   "kinds": [
+    "fragment",
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": " ${u.pctValue.toFixed(1)}%",
    "kinds": [
     "fragment",
     "template"
@@ -540,6 +588,14 @@
    "count": 2
   },
   {
+   "text": " We'll keep waiting, or you can open it directly in a new tab.",
+   "kinds": [
+    "fragment",
+    "text"
+   ],
+   "count": 1
+  },
+  {
    "text": " with ID ",
    "kinds": [
     "fragment",
@@ -633,6 +689,13 @@
    "count": 1
   },
   {
+   "text": ", read-only",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
    "text": ", then reopen this dialog.",
    "kinds": [
     "text"
@@ -696,6 +759,13 @@
    "count": 1
   },
   {
+   "text": "(${g.length} step${g.length!==\n1?\"s\":\"\"})",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
    "text": "(empty)",
    "kinds": [
     "placeholder"
@@ -713,6 +783,13 @@
    "text": "(Optional) Tell us more or type your reason...",
    "kinds": [
     "placeholder"
+   ],
+   "count": 1
+  },
+  {
+   "text": "(skipped)",
+   "kinds": [
+    "text"
    ],
    "count": 1
   },
@@ -782,6 +859,20 @@
    "count": 1
   },
   {
+   "text": "✓ macOS permissions granted",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "✓ Target set",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
    "text": "${a.additions} lines added, ${a.deletions} lines removed",
    "kinds": [
     "template"
@@ -810,11 +901,46 @@
    "count": 1
   },
   {
+   "text": "${a}: Connect GitHub",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "${aa.length} folders in this project could not be loaded because their locations are invalid.",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "${b.title} \\u00b7 ${b.agentLabel} (${c})",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
    "text": "${b}#${c}",
    "kinds": [
     "template"
    ],
    "count": 1
+  },
+  {
+   "text": "${bb.length} accounts",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "${Bc}\\n${tb.snapshot.text}",
+   "kinds": [
+    "template"
+   ],
+   "count": 2
   },
   {
    "text": "${c?\"Hide\":\n\"Show\"} ${i1(h)}",
@@ -846,6 +972,27 @@
   },
   {
    "text": "${c}#${a}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "${d.label} (${d.description})",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "${d} could not find the requested page.",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "${d} is currently unable to handle this request.",
    "kinds": [
     "template"
    ],
@@ -887,6 +1034,20 @@
    "count": 1
   },
   {
+   "text": "${f}. Switch microphone.",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "${f}. This commit is already pushed; amending will require a force push.",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
    "text": "${g.repo}#${g.prNumber}",
    "kinds": [
     "template"
@@ -894,7 +1055,35 @@
    "count": 1
   },
   {
+   "text": "${g}, from ${c.senderName}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
    "text": "${g||(h||a!==J.CortexStepStatus.DONE?\"Messaging\":\"Messaged\")} ${b.resolvedRole}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "${h} (${k.tooltip})",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "${hd.label}, error",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "${hd.label}, setup required",
    "kinds": [
     "template"
    ],
@@ -915,7 +1104,70 @@
    "count": 1
   },
   {
+   "text": "${k.rows.length} rows",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "${k} (latest)",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "${k} (unavailable)",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "${k} tab",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "${l.accessibilityLabel} header",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "${l.length} / ${k.rows.length} rows",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "${m.accessibilityLabel} header",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "${Math.round(b*100)}%",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
    "text": "${Math.round(ea*100)}%",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "${Math.round(la.volume*100)}%",
    "kinds": [
     "template"
    ],
@@ -936,7 +1188,21 @@
    "count": 1
   },
   {
+   "text": "${N.length} tools",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
    "text": "${na?\"Pause\":\"Resume\"} ${H}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "${na} (Default)",
    "kinds": [
     "template"
    ],
@@ -951,6 +1217,13 @@
   },
   {
    "text": "${p(g)} / ${p(m)}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "${p} ${p===1?\"reference\":\"references\"}",
    "kinds": [
     "template"
    ],
@@ -978,6 +1251,13 @@
    "count": 1
   },
   {
+   "text": "${t} tab",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
    "text": "${t}. Starting in local workspace.",
    "kinds": [
     "template"
@@ -999,7 +1279,21 @@
    "count": 1
   },
   {
+   "text": "${v} (${u.memberIds.length})",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
    "text": "${vb.label?\n\"Rename\":\"Add label for\"} ${vb.identity||vb.alias}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "${w} comments",
    "kinds": [
     "template"
    ],
@@ -1027,6 +1321,13 @@
    "count": 1
   },
   {
+   "text": "${x} (disabled by admin)",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
    "text": "${z?\"Hide\":\"Show\"} ${i1(V)}",
    "kinds": [
     "template"
@@ -1034,7 +1335,28 @@
    "count": 1
   },
   {
+   "text": "${Z} (Default)",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "1 comment",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
    "text": "1 Draft",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "1 hidden host",
    "kinds": [
     "text"
    ],
@@ -1058,6 +1380,13 @@
    "text": "2x playback speed",
    "kinds": [
     "aria-label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "A bash script run in your cloud environment after cloning repositories (or configure interactively in chat with /env-setup).",
+   "kinds": [
+    "description"
    ],
    "count": 1
   },
@@ -1097,6 +1426,20 @@
    "count": 1
   },
   {
+   "text": "A folder in this project could not be loaded because its location is invalid.",
+   "kinds": [
+    "title"
+   ],
+   "count": 1
+  },
+  {
+   "text": "A Google Cloud project is required to use Antigravity.",
+   "kinds": [
+    "description"
+   ],
+   "count": 1
+  },
+  {
    "text": "A group with this name already exists.",
    "kinds": [
     "text"
@@ -1105,6 +1448,13 @@
   },
   {
    "text": "A label for this computer when you connect from another device. Changing it reconnects.",
+   "kinds": [
+    "description"
+   ],
+   "count": 1
+  },
+  {
+   "text": "A license or project selection is required to use Antigravity.",
    "kinds": [
     "description"
    ],
@@ -1128,6 +1478,13 @@
    "text": "A project with this name already exists.",
    "kinds": [
     "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "A shell setup script run before every command the agent executes in this project. Overrides the global script.",
+   "kinds": [
+    "description"
    ],
    "count": 1
   },
@@ -1307,9 +1664,10 @@
    "text": "Add",
    "kinds": [
     "button",
-    "text"
+    "text",
+    "tooltip"
    ],
-   "count": 4
+   "count": 8
   },
   {
    "text": "Add ",
@@ -1320,9 +1678,37 @@
    "count": 1
   },
   {
+   "text": "Add (${Q.size})",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Add ${a}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Add ${K} ${K===1?\"plugin\":\"plugins\"} from ${a}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
    "text": "Add ${t.emptyMessageSingular}",
    "kinds": [
     "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Add a message...",
+   "kinds": [
+    "placeholder"
    ],
    "count": 1
   },
@@ -1338,6 +1724,13 @@
    "kinds": [
     "fragment",
     "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Add an optional message, ⏎ to submit comments",
+   "kinds": [
+    "placeholder"
    ],
    "count": 1
   },
@@ -1387,6 +1780,13 @@
    "text": "Add inline comment",
    "kinds": [
     "title"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Add label",
+   "kinds": [
+    "text"
    ],
    "count": 1
   },
@@ -1473,6 +1873,14 @@
    "count": 1
   },
   {
+   "text": "Add to allowlist",
+   "kinds": [
+    "aria-label",
+    "text"
+   ],
+   "count": 2
+  },
+  {
    "text": "Add to Chat",
    "kinds": [
     "label",
@@ -1495,6 +1903,14 @@
    "count": 1
   },
   {
+   "text": "Add Workspace",
+   "kinds": [
+    "ariaLabel",
+    "text"
+   ],
+   "count": 2
+  },
+  {
    "text": "Added",
    "kinds": [
     "title"
@@ -1507,6 +1923,29 @@
     "title"
    ],
    "count": 2
+  },
+  {
+   "text": "Added to allowlist",
+   "kinds": [
+    "aria-label",
+    "text"
+   ],
+   "count": 2
+  },
+  {
+   "text": "Adding ${a}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Adding...",
+   "kinds": [
+    "text",
+    "tooltip"
+   ],
+   "count": 3
   },
   {
    "text": "Address bar",
@@ -1532,9 +1971,10 @@
   {
    "text": "Advanced",
    "kinds": [
+    "button",
     "text"
    ],
-   "count": 1
+   "count": 2
   },
   {
    "text": "Advanced Settings",
@@ -1625,9 +2065,51 @@
    "count": 1
   },
   {
+   "text": "Agent permissions preset selector, current: ${z}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Agent permissions preset: ${z}, ${g}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Agent said",
+   "kinds": [
+    "heading"
+   ],
+   "count": 2
+  },
+  {
+   "text": "Agent Script",
+   "kinds": [
+    "title"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Agent Settings",
+   "kinds": [
+    "title"
+   ],
+   "count": 1
+  },
+  {
    "text": "Agent terminated due to error",
    "kinds": [
     "title"
+   ],
+   "count": 2
+  },
+  {
+   "text": "Agent working",
+   "kinds": [
+    "heading"
    ],
    "count": 2
   },
@@ -1688,6 +2170,27 @@
    "text": "All agents",
    "kinds": [
     "button"
+   ],
+   "count": 1
+  },
+  {
+   "text": "All changes since ${b}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "All changes since the branch point",
+   "kinds": [
+    "subtitle"
+   ],
+   "count": 1
+  },
+  {
+   "text": "All conversations",
+   "kinds": [
+    "label"
    ],
    "count": 1
   },
@@ -1867,6 +2370,13 @@
    "count": 1
   },
   {
+   "text": "Amended commit on ${a}.",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
    "text": "An error occurred while submitting your feedback. Please try again.",
    "kinds": [
     "message"
@@ -1898,9 +2408,10 @@
   {
    "text": "Antigravity",
    "kinds": [
-    "name"
+    "name",
+    "text"
    ],
-   "count": 1
+   "count": 3
   },
   {
    "text": "Antigravity Interactive HTML",
@@ -1966,6 +2477,13 @@
    "count": 2
   },
   {
+   "text": "Appears larger on mobile",
+   "kinds": [
+    "description"
+   ],
+   "count": 1
+  },
+  {
    "text": "Application",
    "kinds": [
     "label",
@@ -1988,6 +2506,20 @@
    "count": 2
   },
   {
+   "text": "Approximate; may start a few minutes later",
+   "kinds": [
+    "title"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Apps",
+   "kinds": [
+    "title"
+   ],
+   "count": 1
+  },
+  {
    "text": "Apps connected to your account",
    "kinds": [
     "text"
@@ -1997,9 +2529,10 @@
   {
    "text": "Archive",
    "kinds": [
-    "label"
+    "label",
+    "tooltip"
    ],
-   "count": 1
+   "count": 2
   },
   {
    "text": "Archive / Restore",
@@ -2120,7 +2653,7 @@
    "kinds": [
     "text"
    ],
-   "count": 1
+   "count": 2
   },
   {
    "text": "Artifacts",
@@ -2287,6 +2820,13 @@
    "count": 1
   },
   {
+   "text": "Authenticated via Enterprise Gateway",
+   "kinds": [
+    "description"
+   ],
+   "count": 1
+  },
+  {
    "text": "Authenticating...",
    "kinds": [
     "message"
@@ -2392,6 +2932,20 @@
    "count": 1
   },
   {
+   "text": "Automation credentials expired",
+   "kinds": [
+    "aria-label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Automation credentials expiring soon",
+   "kinds": [
+    "aria-label"
+   ],
+   "count": 1
+  },
+  {
    "text": "automation. ",
    "kinds": [
     "fragment",
@@ -2403,9 +2957,10 @@
    "text": "Automations",
    "kinds": [
     "label",
+    "text",
     "title"
    ],
-   "count": 4
+   "count": 5
   },
   {
    "text": "Available AI Credits: ${y??\"0\"}",
@@ -2542,6 +3097,13 @@
    "count": 2
   },
   {
+   "text": "Bar ${g+1}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
    "text": "Baseline model quota reached",
    "kinds": [
     "title"
@@ -2564,6 +3126,13 @@
   },
   {
    "text": "Best of N mode is not available",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Best of N Models",
    "kinds": [
     "text"
    ],
@@ -2627,6 +3196,13 @@
    "count": 2
   },
   {
+   "text": "Blocked: ${a.disabledReason}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
    "text": "Boolean AND, OR, and negation",
    "kinds": [
     "text"
@@ -2653,6 +3229,13 @@
     "title"
    ],
    "count": 2
+  },
+  {
+   "text": "Browse",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
   },
   {
    "text": "Browse and enable plugins from the Build With Google catalog.",
@@ -2758,7 +3341,7 @@
    "kinds": [
     "label"
    ],
-   "count": 1
+   "count": 2
   },
   {
    "text": "Browsing History",
@@ -2820,6 +3403,13 @@
   },
   {
    "text": "Built to help, not hurt",
+   "kinds": [
+    "title"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Built-in Browser",
    "kinds": [
     "title"
    ],
@@ -2919,11 +3509,39 @@
    "count": 1
   },
   {
+   "text": "Cancel Questionnaire and Stop the Agent",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Cancel Questionnaire and Stop the Agent (${p})",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
    "text": "Cancel recording",
    "kinds": [
     "aria-label"
    ],
    "count": 2
+  },
+  {
+   "text": "Cancel Render Page Failed",
+   "kinds": [
+    "message"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Cancel Render Thumbnail Failed",
+   "kinds": [
+    "message"
+   ],
+   "count": 1
   },
   {
    "text": "Cancel Sending Message",
@@ -2967,6 +3585,20 @@
    "text": "Cannot add folder: \"${lb}\" is not a valid folder location.",
    "kinds": [
     "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Canvas · written by your Chief of Staff · display only",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Canvas page · display only",
+   "kinds": [
+    "text"
    ],
    "count": 1
   },
@@ -3026,7 +3658,7 @@
    "kinds": [
     "text"
    ],
-   "count": 1
+   "count": 2
   },
   {
    "text": "Change model",
@@ -3092,9 +3724,37 @@
    "count": 1
   },
   {
+   "text": "Check again",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
    "text": "Check for Updates",
    "kinds": [
     "label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Checked command status",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Checking command status",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Checking...",
+   "kinds": [
+    "text"
    ],
    "count": 1
   },
@@ -3183,6 +3843,13 @@
    "count": 1
   },
   {
+   "text": "Chrome on the machine you are controlling is not accepting remote debugging. Complete these steps on that machine, not in this tab:",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
    "text": "CitC Clone",
    "kinds": [
     "label"
@@ -3228,9 +3895,10 @@
   {
    "text": "Clear filter",
    "kinds": [
-    "aria-label"
+    "aria-label",
+    "title"
    ],
-   "count": 2
+   "count": 3
   },
   {
    "text": "Clear row filter",
@@ -3253,6 +3921,20 @@
     "title"
    ],
    "count": 2
+  },
+  {
+   "text": "Clear visited URLs and autocomplete suggestions from side panel preview.",
+   "kinds": [
+    "description"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Clear visited URLs and autocomplete suggestions from the built-in browser.",
+   "kinds": [
+    "description"
+   ],
+   "count": 1
   },
   {
    "text": "Cleared Count",
@@ -3361,7 +4043,7 @@
    "kinds": [
     "template"
    ],
-   "count": 1
+   "count": 2
   },
   {
    "text": "Close downloads",
@@ -3372,6 +4054,13 @@
   },
   {
    "text": "Close Logs Modal",
+   "kinds": [
+    "aria-label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Close message",
    "kinds": [
     "aria-label"
    ],
@@ -3472,9 +4161,52 @@
    "count": 1
   },
   {
+   "text": "Collapse All",
+   "kinds": [
+    "tooltip"
+   ],
+   "count": 1
+  },
+  {
    "text": "Collapse All Folders",
    "kinds": [
     "label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Collapse Diffs",
+   "kinds": [
+    "ariaLabel",
+    "tooltip"
+   ],
+   "count": 2
+  },
+  {
+   "text": "Collapse questionnaire",
+   "kinds": [
+    "aria-label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Collapse Questionnaire",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Collapse queued messages",
+   "kinds": [
+    "aria-label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Collapse subagents",
+   "kinds": [
+    "aria-label"
    ],
    "count": 1
   },
@@ -3504,7 +4236,7 @@
    "kinds": [
     "label"
    ],
-   "count": 1
+   "count": 2
   },
   {
    "text": "Command:",
@@ -3578,9 +4310,17 @@
    "kinds": [
     "aria-label",
     "label",
-    "text"
+    "text",
+    "title"
    ],
-   "count": 3
+   "count": 4
+  },
+  {
+   "text": "Comments unavailable at this screen size",
+   "kinds": [
+    "title"
+   ],
+   "count": 1
   },
   {
    "text": "Commit",
@@ -3598,9 +4338,23 @@
    "count": 1
   },
   {
+   "text": "Commit staged changes",
+   "kinds": [
+    "tooltip"
+   ],
+   "count": 1
+  },
+  {
    "text": "Commit succeeded",
    "kinds": [
     "title"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Committed to ${y}.",
+   "kinds": [
+    "template"
    ],
    "count": 1
   },
@@ -3634,6 +4388,20 @@
   },
   {
    "text": "Configure ${c.serverName}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Configure ${G}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Configure ${G}, values missing",
    "kinds": [
     "template"
    ],
@@ -3675,6 +4443,13 @@
    "count": 1
   },
   {
+   "text": "Configure allowed and denied URLs for the browser subagent. It runs in the built-in browser, so no separate browser install is needed.",
+   "kinds": [
+    "description"
+   ],
+   "count": 1
+  },
+  {
    "text": "Configure allowed commands outside the sandbox.",
    "kinds": [
     "description"
@@ -3687,6 +4462,14 @@
     "description"
    ],
    "count": 1
+  },
+  {
+   "text": "Configure Branches",
+   "kinds": [
+    "text",
+    "title"
+   ],
+   "count": 3
   },
   {
    "text": "Configure built-in browser, link opening, and browser subagent preferences.",
@@ -3717,6 +4500,13 @@
    "count": 1
   },
   {
+   "text": "Configure global allowed and denied resource permissions.",
+   "kinds": [
+    "text"
+   ],
+   "count": 2
+  },
+  {
    "text": "Configure hooks that run on agent lifecycle events.",
    "kinds": [
     "description"
@@ -3743,6 +4533,13 @@
     "description"
    ],
    "count": 1
+  },
+  {
+   "text": "Configure what the agent can do in local and remote conversations.",
+   "kinds": [
+    "text"
+   ],
+   "count": 2
   },
   {
    "text": "Configure when follow-up messages are sent.",
@@ -3787,6 +4584,13 @@
    "count": 1
   },
   {
+   "text": "Confirm Selection",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
    "text": "Confirm the command is safe to run outside of the sandbox with full network and disk access.",
    "kinds": [
     "text"
@@ -3813,7 +4617,7 @@
     "label",
     "text"
    ],
-   "count": 5
+   "count": 8
   },
   {
    "text": "Connect ${b}",
@@ -3826,6 +4630,20 @@
    "text": "Connect ${k}",
    "kinds": [
     "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Connect an account for ${c.join(\", \")} so the agent can run automations.",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Connect an account so the agent can run automations.",
+   "kinds": [
+    "text"
    ],
    "count": 1
   },
@@ -3846,6 +4664,27 @@
    "count": 3
   },
   {
+   "text": "Connect GitHub: ${a.message}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Connect GitHub: Run gh auth login in a terminal",
+   "kinds": [
+    "ariaLabel"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Connect to SSH Host",
+   "kinds": [
+    "title"
+   ],
+   "count": 1
+  },
+  {
    "text": "Connect to SSH Host…",
    "kinds": [
     "label",
@@ -3864,9 +4703,10 @@
   {
    "text": "Connected",
    "kinds": [
-    "text"
+    "text",
+    "title"
    ],
-   "count": 4
+   "count": 7
   },
   {
    "text": "Connected Google Drive and GitHub resources",
@@ -3898,6 +4738,13 @@
   },
   {
    "text": "Connecting to terminal...",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Connecting…",
    "kinds": [
     "text"
    ],
@@ -3983,7 +4830,7 @@
    "kinds": [
     "text"
    ],
-   "count": 1
+   "count": 3
   },
   {
    "text": "Continue Response",
@@ -4046,9 +4893,10 @@
   {
    "text": "Controls the actions the agent can take.",
    "kinds": [
-    "description"
+    "description",
+    "text"
    ],
-   "count": 2
+   "count": 4
   },
   {
    "text": "Controls whether terminal commands require your approval before running.",
@@ -4077,7 +4925,14 @@
     "label",
     "text"
    ],
-   "count": 2
+   "count": 3
+  },
+  {
+   "text": "Conversation ${D}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
   },
   {
    "text": "Conversation Archived",
@@ -4243,19 +5098,46 @@
   {
    "text": "Copied",
    "kinds": [
+    "aria-label",
+    "label",
     "text",
-    "title"
+    "title",
+    "tooltip"
    ],
-   "count": 2
+   "count": 24
+  },
+  {
+   "text": "Copied transcript",
+   "kinds": [
+    "aria-label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Copied!",
+   "kinds": [
+    "button",
+    "text"
+   ],
+   "count": 3
   },
   {
    "text": "Copy",
    "kinds": [
+    "aria-label",
     "label",
     "text",
-    "title"
+    "title",
+    "tooltip"
    ],
-   "count": 11
+   "count": 18
+  },
+  {
+   "text": "Copy ${a.label}",
+   "kinds": [
+    "template"
+   ],
+   "count": 2
   },
   {
    "text": "Copy as Markdown",
@@ -4263,6 +5145,14 @@
     "text"
    ],
    "count": 1
+  },
+  {
+   "text": "Copy code",
+   "kinds": [
+    "aria-label",
+    "text"
+   ],
+   "count": 2
   },
   {
    "text": "Copy command",
@@ -4275,9 +5165,10 @@
   {
    "text": "Copy Command",
    "kinds": [
-    "aria-label"
+    "aria-label",
+    "text"
    ],
-   "count": 1
+   "count": 2
   },
   {
    "text": "Copy Config File Path",
@@ -4315,6 +5206,14 @@
    "count": 1
   },
   {
+   "text": "Copy error messages",
+   "kinds": [
+    "aria-label",
+    "title"
+   ],
+   "count": 2
+  },
+  {
    "text": "Copy File Name",
    "kinds": [
     "label"
@@ -4343,11 +5242,19 @@
    "count": 1
   },
   {
-   "text": "Copy Image",
+   "text": "Copy image",
    "kinds": [
     "label"
    ],
    "count": 1
+  },
+  {
+   "text": "Copy Image",
+   "kinds": [
+    "label",
+    "tooltip"
+   ],
+   "count": 2
   },
   {
    "text": "Copy Image Address",
@@ -4362,6 +5269,16 @@
     "button"
    ],
    "count": 1
+  },
+  {
+   "text": "Copy link",
+   "kinds": [
+    "aria-label",
+    "text",
+    "title",
+    "tooltip"
+   ],
+   "count": 6
   },
   {
    "text": "Copy Link",
@@ -4385,6 +5302,14 @@
    "count": 1
   },
   {
+   "text": "Copy output",
+   "kinds": [
+    "aria-label",
+    "title"
+   ],
+   "count": 2
+  },
+  {
    "text": "Copy path",
    "kinds": [
     "aria-label"
@@ -4401,11 +5326,26 @@
    "count": 8
   },
   {
+   "text": "Copy sign-in link",
+   "kinds": [
+    "button"
+   ],
+   "count": 1
+  },
+  {
    "text": "Copy Trajectory ID",
    "kinds": [
     "label"
    ],
    "count": 1
+  },
+  {
+   "text": "Copy transcript",
+   "kinds": [
+    "aria-label",
+    "text"
+   ],
+   "count": 2
   },
   {
    "text": "Cost summary: ${n}",
@@ -4464,7 +5404,7 @@
    "kinds": [
     "message"
    ],
-   "count": 1
+   "count": 2
   },
   {
    "text": "Couldn't connect to ",
@@ -4496,9 +5436,30 @@
    "count": 1
   },
   {
+   "text": "Couldn't fetch the Google Drive file's title. The link was kept as-is.",
+   "kinds": [
+    "message"
+   ],
+   "count": 1
+  },
+  {
    "text": "Couldn't load Google Drive link title",
    "kinds": [
     "title"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Couldn't load message",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Couldn't load the suggested plugin.",
+   "kinds": [
+    "text"
    ],
    "count": 1
   },
@@ -4557,7 +5518,14 @@
    "kinds": [
     "text"
    ],
-   "count": 2
+   "count": 4
+  },
+  {
+   "text": "Create ${Gb}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
   },
   {
    "text": "Create a new project from one or more folders.",
@@ -4616,6 +5584,14 @@
    "count": 1
   },
   {
+   "text": "Create New Project",
+   "kinds": [
+    "ariaLabel",
+    "text"
+   ],
+   "count": 2
+  },
+  {
    "text": "Create plugin",
    "kinds": [
     "aria-label"
@@ -4660,9 +5636,30 @@
    "count": 1
   },
   {
+   "text": "Creates a local automation that runs on this computer",
+   "kinds": [
+    "tooltip"
+   ],
+   "count": 1
+  },
+  {
    "text": "Creating ${n.lowercase}\\u2026",
    "kinds": [
     "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Creating environment...",
+   "kinds": [
+    "aria-label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Creating Fork...",
+   "kinds": [
+    "text"
    ],
    "count": 1
   },
@@ -4686,6 +5683,34 @@
     "text"
    ],
    "count": 2
+  },
+  {
+   "text": "Creating…",
+   "kinds": [
+    "text"
+   ],
+   "count": 3
+  },
+  {
+   "text": "Credentials for one or more automations expire in less than a week.",
+   "kinds": [
+    "message"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Credentials for one or more automations have expired.",
+   "kinds": [
+    "message"
+   ],
+   "count": 1
+  },
+  {
+   "text": "CRON_TZ=${b} ${a}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
   },
   {
    "text": "Current Page",
@@ -4722,7 +5747,7 @@
     "label",
     "text"
    ],
-   "count": 2
+   "count": 3
   },
   {
    "text": "Custom Agent Error:",
@@ -4796,7 +5821,7 @@
     "title",
     "tooltipText"
    ],
-   "count": 7
+   "count": 8
   },
   {
    "text": "Customizations views",
@@ -4866,6 +5891,13 @@
    "text": "Dark",
    "kinds": [
     "displayName"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Dark Mode",
+   "kinds": [
+    "title"
    ],
    "count": 1
   },
@@ -4986,7 +6018,7 @@
     "text",
     "tooltip"
    ],
-   "count": 18
+   "count": 21
   },
   {
    "text": "Delete ",
@@ -5192,6 +6224,13 @@
    "count": 1
   },
   {
+   "text": "Deleting...",
+   "kinds": [
+    "text"
+   ],
+   "count": 3
+  },
+  {
    "text": "Denied Sites",
    "kinds": [
     "text"
@@ -5307,6 +6346,28 @@
    "count": 1
   },
   {
+   "text": "Disable",
+   "kinds": [
+    "text"
+   ],
+   "count": 2
+  },
+  {
+   "text": "Disable Text Selection",
+   "kinds": [
+    "aria-label",
+    "title"
+   ],
+   "count": 2
+  },
+  {
+   "text": "Disable Word Wrap${R}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
    "text": "Disabled",
    "kinds": [
     "label",
@@ -5371,6 +6432,13 @@
    "text": "Disconnect ${f}",
    "kinds": [
     "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Disconnected",
+   "kinds": [
+    "message"
    ],
    "count": 1
   },
@@ -5521,7 +6589,7 @@
     "text",
     "tooltip"
    ],
-   "count": 3
+   "count": 4
   },
   {
    "text": "Download ",
@@ -5554,6 +6622,13 @@
    "count": 1
   },
   {
+   "text": "Download image",
+   "kinds": [
+    "label"
+   ],
+   "count": 1
+  },
+  {
    "text": "Download Location",
    "kinds": [
     "label"
@@ -5576,12 +6651,41 @@
    "count": 1
   },
   {
+   "text": "Download video",
+   "kinds": [
+    "label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Downloading...",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
    "text": "Downloads",
    "kinds": [
+    "aria-label",
     "text",
     "title"
    ],
-   "count": 2
+   "count": 3
+  },
+  {
+   "text": "Downloads, ${Math.round(u*100)}% complete",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Downloads, in progress",
+   "kinds": [
+    "aria-label"
+   ],
+   "count": 1
   },
   {
    "text": "Draft documents, emails, and notes that sound like you.",
@@ -5615,6 +6719,21 @@
    "text": "Drive",
    "kinds": [
     "label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Drop to add to group",
+   "kinds": [
+    "label",
+    "text"
+   ],
+   "count": 2
+  },
+  {
+   "text": "Drop to attach",
+   "kinds": [
+    "placeholder"
    ],
    "count": 1
   },
@@ -5765,9 +6884,10 @@
    "text": "Edit comment",
    "kinds": [
     "aria-label",
+    "placeholder",
     "tooltip"
    ],
-   "count": 2
+   "count": 3
   },
   {
    "text": "Edit Comment",
@@ -5805,6 +6925,13 @@
     "tooltip"
    ],
    "count": 2
+  },
+  {
+   "text": "Edit side question title: ${a}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
   },
   {
    "text": "Edit task title",
@@ -5871,6 +6998,13 @@
    "count": 1
   },
   {
+   "text": "Empty message",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
    "text": "Empty table",
    "kinds": [
     "text"
@@ -5883,7 +7017,7 @@
     "confirmLabel",
     "text"
    ],
-   "count": 2
+   "count": 5
   },
   {
    "text": "Enable ${a.displayName}",
@@ -5924,6 +7058,13 @@
    "text": "Enable fine-grained GitHub permissions and define the org, repository, and resource-level access the agent is allowed to use.",
    "kinds": [
     "subtitle"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Enable macOS Permissions",
+   "kinds": [
+    "text"
    ],
    "count": 1
   },
@@ -5998,6 +7139,14 @@
    "count": 1
   },
   {
+   "text": "Enable Text Selection",
+   "kinds": [
+    "aria-label",
+    "title"
+   ],
+   "count": 2
+  },
+  {
    "text": "Enable the plugin to sign in.",
    "kinds": [
     "text"
@@ -6012,9 +7161,23 @@
    "count": 1
   },
   {
+   "text": "Enable Word Wrap${R}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
    "text": "Enabled \"${h}\".",
    "kinds": [
     "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Enabling...",
+   "kinds": [
+    "text"
    ],
    "count": 1
   },
@@ -6029,6 +7192,20 @@
    "text": "End",
    "kinds": [
     "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "End Live chat",
+   "kinds": [
+    "aria-label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "End Voice mode",
+   "kinds": [
+    "aria-label"
    ],
    "count": 1
   },
@@ -6071,6 +7248,14 @@
    "text": "Enter device name...",
    "kinds": [
     "placeholder"
+   ],
+   "count": 2
+  },
+  {
+   "text": "Enter Fullscreen",
+   "kinds": [
+    "aria-label",
+    "title"
    ],
    "count": 2
   },
@@ -6131,6 +7316,20 @@
     "text"
    ],
    "count": 6
+  },
+  {
+   "text": "Environment Setup Script",
+   "kinds": [
+    "label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Environment: ${v}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
   },
   {
    "text": "Environments",
@@ -6195,6 +7394,13 @@
    "text": "Error Loading Models",
    "kinds": [
     "title"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Error occurred during import.",
+   "kinds": [
+    "text"
    ],
    "count": 1
   },
@@ -6291,6 +7497,13 @@
    "count": 1
   },
   {
+   "text": "Event",
+   "kinds": [
+    "ariaLabel"
+   ],
+   "count": 1
+  },
+  {
    "text": "Event:",
    "kinds": [
     "text"
@@ -6299,6 +7512,13 @@
   },
   {
    "text": "Events",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Events and stdout streams will appear here as they occur.",
    "kinds": [
     "text"
    ],
@@ -6368,6 +7588,28 @@
    "count": 1
   },
   {
+   "text": "Exit Fullscreen",
+   "kinds": [
+    "aria-label",
+    "title"
+   ],
+   "count": 2
+  },
+  {
+   "text": "Exit fullscreen (f)",
+   "kinds": [
+    "label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Exit inspect element mode (Esc)",
+   "kinds": [
+    "title"
+   ],
+   "count": 1
+  },
+  {
    "text": "Expand",
    "kinds": [
     "text"
@@ -6375,9 +7617,59 @@
    "count": 1
   },
   {
+   "text": "Expand All",
+   "kinds": [
+    "tooltip"
+   ],
+   "count": 1
+  },
+  {
    "text": "Expand All Folders",
    "kinds": [
     "label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Expand Diffs",
+   "kinds": [
+    "ariaLabel",
+    "tooltip"
+   ],
+   "count": 2
+  },
+  {
+   "text": "Expand message",
+   "kinds": [
+    "aria-label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Expand questionnaire",
+   "kinds": [
+    "aria-label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Expand Questionnaire",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Expand queued messages",
+   "kinds": [
+    "aria-label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Expand subagents",
+   "kinds": [
+    "aria-label"
    ],
    "count": 1
   },
@@ -6400,6 +7692,13 @@
    "text": "Explore the plugin marketplace",
    "kinds": [
     "title"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Export Artifact",
+   "kinds": [
+    "tooltip"
    ],
    "count": 1
   },
@@ -6472,6 +7771,20 @@
    "text": "External tools the agent can call via Model Context Protocol.",
    "kinds": [
     "description"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Extracted DOM elements",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Extracting DOM elements",
+   "kinds": [
+    "text"
    ],
    "count": 1
   },
@@ -6602,6 +7915,20 @@
    "count": 1
   },
   {
+   "text": "Failed to download Firebase skill.",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Failed to evict annotation index for page ${b}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
    "text": "Failed to export artifact",
    "kinds": [
     "title"
@@ -6626,6 +7953,20 @@
    "text": "Failed to Generate Commit Message",
    "kinds": [
     "title"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Failed to get all annotations",
+   "kinds": [
+    "message"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Failed to get annotations",
+   "kinds": [
+    "message"
    ],
    "count": 1
   },
@@ -6882,7 +8223,21 @@
    "count": 1
   },
   {
+   "text": "Fetched network request",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
    "text": "Fetched network request for page.",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Fetched network requests",
    "kinds": [
     "text"
    ],
@@ -6896,7 +8251,28 @@
    "count": 1
   },
   {
+   "text": "Fetching network request",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Fetching network requests",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
    "text": "Fields",
+   "kinds": [
+    "text"
+   ],
+   "count": 2
+  },
+  {
+   "text": "Fig share",
    "kinds": [
     "text"
    ],
@@ -7130,6 +8506,13 @@
    "count": 1
   },
   {
+   "text": "Find skills, agents, and more in the Marketplace.",
+   "kinds": [
+    "message"
+   ],
+   "count": 1
+  },
+  {
    "text": "Finder",
    "kinds": [
     "aria-label"
@@ -7162,6 +8545,29 @@
    "text": "Fit Mode",
    "kinds": [
     "label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Fit to Page",
+   "kinds": [
+    "aria-label",
+    "title"
+   ],
+   "count": 2
+  },
+  {
+   "text": "Fit to Width",
+   "kinds": [
+    "aria-label",
+    "title"
+   ],
+   "count": 2
+  },
+  {
+   "text": "Fix",
+   "kinds": [
+    "text"
    ],
    "count": 1
   },
@@ -7201,6 +8607,20 @@
    "count": 1
   },
   {
+   "text": "Fold code block",
+   "kinds": [
+    "aria-label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Fold lines ${a+1}-${q.endLine}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
    "text": "Folder",
    "kinds": [
     "label"
@@ -7211,6 +8631,13 @@
    "text": "Folder where files downloaded in the built-in browser are saved.",
    "kinds": [
     "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Folders",
+   "kinds": [
+    "title"
    ],
    "count": 1
   },
@@ -7313,9 +8740,10 @@
   {
    "text": "Fork Conversation",
    "kinds": [
-    "aria-label"
+    "aria-label",
+    "text"
    ],
-   "count": 1
+   "count": 2
   },
   {
    "text": "Fork conversation in this folder",
@@ -7346,9 +8774,23 @@
    "count": 1
   },
   {
+   "text": "Forked conversation",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
    "text": "Forked from",
    "kinds": [
     "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Forked from ${l}",
+   "kinds": [
+    "template"
    ],
    "count": 1
   },
@@ -7407,6 +8849,13 @@
    "text": "Full View",
    "kinds": [
     "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Fullscreen (f)",
+   "kinds": [
+    "label"
    ],
    "count": 1
   },
@@ -7583,16 +9032,18 @@
   {
    "text": "Global",
    "kinds": [
-    "label"
+    "label",
+    "text"
    ],
-   "count": 2
+   "count": 3
   },
   {
    "text": "Global Permissions",
    "kinds": [
-    "text"
+    "text",
+    "title"
    ],
-   "count": 1
+   "count": 4
   },
   {
    "text": "Go Back",
@@ -7924,9 +9375,30 @@
    "count": 5
   },
   {
+   "text": "Header",
+   "kinds": [
+    "aria-label"
+   ],
+   "count": 2
+  },
+  {
+   "text": "Help",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
    "text": "Help us improve ${a}.",
    "kinds": [
     "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Help:",
+   "kinds": [
+    "text"
    ],
    "count": 1
   },
@@ -7957,6 +9429,85 @@
     "aria-label"
    ],
    "count": 1
+  },
+  {
+   "text": "Hide",
+   "kinds": [
+    "text"
+   ],
+   "count": 3
+  },
+  {
+   "text": "Hide ${ta.host} from this list",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Hide advanced",
+   "kinds": [
+    "button"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Hide breakdown",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Hide earlier steps",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Hide Error",
+   "kinds": [
+    "button"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Hide from this list",
+   "kinds": [
+    "tooltip"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Hide Thumbnail Sidebar",
+   "kinds": [
+    "aria-label"
+   ],
+   "count": 2
+  },
+  {
+   "text": "Hide token",
+   "kinds": [
+    "aria-label",
+    "title"
+   ],
+   "count": 2
+  },
+  {
+   "text": "Hide tools",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Hide Whitespace Changes",
+   "kinds": [
+    "ariaLabel",
+    "tooltip"
+   ],
+   "count": 3
   },
   {
    "text": "Hold ",
@@ -8027,6 +9578,20 @@
    "text": "Hourly",
    "kinds": [
     "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "How loud Antigravity's voice is.",
+   "kinds": [
+    "description"
+   ],
+   "count": 1
+  },
+  {
+   "text": "How loud Jetski's voice is.",
+   "kinds": [
+    "description"
    ],
    "count": 1
   },
@@ -8139,6 +9704,14 @@
    "text": "Importing shared conversation...",
    "kinds": [
     "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "in ${f} ",
+   "kinds": [
+    "fragment",
+    "template"
    ],
    "count": 1
   },
@@ -8258,9 +9831,10 @@
   {
    "text": "Inspect element to comment",
    "kinds": [
-    "aria-label"
+    "aria-label",
+    "title"
    ],
-   "count": 1
+   "count": 2
   },
   {
    "text": "Inspected commit",
@@ -8321,6 +9895,13 @@
    "count": 1
   },
   {
+   "text": "Installing...",
+   "kinds": [
+    "text"
+   ],
+   "count": 2
+  },
+  {
    "text": "Instructions",
    "kinds": [
     "heading",
@@ -8349,6 +9930,13 @@
     "title"
    ],
    "count": 2
+  },
+  {
+   "text": "Invalid CEL",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
   },
   {
    "text": "Invalid embed: ",
@@ -8409,6 +9997,13 @@
   },
   {
    "text": "Jetski",
+   "kinds": [
+    "text"
+   ],
+   "count": 3
+  },
+  {
+   "text": "JJ worktree",
    "kinds": [
     "text"
    ],
@@ -8499,6 +10094,13 @@
     "tooltip"
    ],
    "count": 4
+  },
+  {
+   "text": "Killed",
+   "kinds": [
+    "subtitle"
+   ],
+   "count": 1
   },
   {
    "text": "Knowledge Generation",
@@ -8604,6 +10206,13 @@
    "count": 1
   },
   {
+   "text": "Leave a comment",
+   "kinds": [
+    "placeholder"
+   ],
+   "count": 1
+  },
+  {
    "text": "Legal Help",
    "kinds": [
     "text"
@@ -8625,6 +10234,13 @@
    "count": 1
   },
   {
+   "text": "License Required",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
    "text": "License:",
    "kinds": [
     "text"
@@ -8635,6 +10251,13 @@
    "text": "Light",
    "kinds": [
     "displayName"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Light Mode",
+   "kinds": [
+    "title"
    ],
    "count": 1
   },
@@ -8656,6 +10279,13 @@
    "text": "Limit the number of macro expansions to the specified number, to prevent e.g. infinite macro loops. If set to Infinity, the macro expander will try to fully expand as in LaTeX.",
    "kinds": [
     "description"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Line ${h+1}",
+   "kinds": [
+    "template"
    ],
    "count": 1
   },
@@ -8697,6 +10327,48 @@
    "count": 1
   },
   {
+   "text": "Listening. Ask anything.",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Live",
+   "kinds": [
+    "aria-label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Live chat",
+   "kinds": [
+    "aria-label"
+   ],
+   "count": 2
+  },
+  {
+   "text": "Live chat in progress",
+   "kinds": [
+    "aria-label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Load older messages",
+   "kinds": [
+    "button"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Load older messages, showing ${b} of ${c}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
    "text": "Loading ",
    "kinds": [
     "fragment",
@@ -8727,6 +10399,13 @@
   },
   {
    "text": "Loading Browser recording...",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Loading connectors…",
    "kinds": [
     "text"
    ],
@@ -8776,6 +10455,13 @@
   },
   {
    "text": "Loading installed plugins...",
+   "kinds": [
+    "label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Loading instances...",
    "kinds": [
     "label"
    ],
@@ -8845,6 +10531,13 @@
    "count": 1
   },
   {
+   "text": "Loading runs…",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
    "text": "Loading skills…",
    "kinds": [
     "text"
@@ -8891,7 +10584,7 @@
    "kinds": [
     "text"
    ],
-   "count": 3
+   "count": 7
   },
   {
    "text": "Loading…",
@@ -9002,6 +10695,20 @@
    "count": 1
   },
   {
+   "text": "Lost connection to the language server. Agent features may not work.",
+   "kinds": [
+    "message"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Lost connection to the remote instance. Please wait a minute or refresh the page.",
+   "kinds": [
+    "message"
+   ],
+   "count": 1
+  },
+  {
    "text": "Low contrast ratio (${M.toFixed(1)}:1). Text may be hard to read.",
    "kinds": [
     "template"
@@ -9020,6 +10727,13 @@
    "text": "MacOS",
    "kinds": [
     "label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "macOS Permissions Ready",
+   "kinds": [
+    "text"
    ],
    "count": 1
   },
@@ -9088,6 +10802,13 @@
    "count": 2
   },
   {
+   "text": "Manage License",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
    "text": "Manage Permissions",
    "kinds": [
     "text"
@@ -9137,6 +10858,13 @@
    "count": 1
   },
   {
+   "text": "Manager Error",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
    "text": "Manifest Changes",
    "kinds": [
     "label"
@@ -9173,6 +10901,13 @@
    "count": 1
   },
   {
+   "text": "Mark Read",
+   "kinds": [
+    "label"
+   ],
+   "count": 1
+  },
+  {
    "text": "Mark This Conversation as Read",
    "kinds": [
     "label"
@@ -9181,6 +10916,13 @@
   },
   {
    "text": "Mark This Conversation as Unread",
+   "kinds": [
+    "label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Mark Unread",
    "kinds": [
     "label"
    ],
@@ -9197,6 +10939,20 @@
    "text": "Markdown view mode",
    "kinds": [
     "aria-label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Marked ${p} conversations as read",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Marked 1 conversation as read",
+   "kinds": [
+    "title"
    ],
    "count": 1
   },
@@ -9304,6 +11060,14 @@
     "label"
    ],
    "count": 1
+  },
+  {
+   "text": "Maximize Pane",
+   "kinds": [
+    "aria-label",
+    "text"
+   ],
+   "count": 2
   },
   {
    "text": "MCP Authentication Error:",
@@ -9451,9 +11215,10 @@
   {
    "text": "Message this chat",
    "kinds": [
-    "aria-label"
+    "aria-label",
+    "placeholder"
    ],
-   "count": 1
+   "count": 2
   },
   {
    "text": "Method not found",
@@ -9519,7 +11284,7 @@
    "kinds": [
     "text"
    ],
-   "count": 3
+   "count": 4
   },
   {
    "text": "Model Credits",
@@ -9710,6 +11475,27 @@
    "count": 1
   },
   {
+   "text": "Multiple markers near page ${d.pageNumber}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Multiple search matches near page ${d.pageNumber}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Mute (m)",
+   "kinds": [
+    "label"
+   ],
+   "count": 1
+  },
+  {
    "text": "Mute Voice Mic",
    "kinds": [
     "label"
@@ -9718,6 +11504,13 @@
   },
   {
    "text": "Mute Voice Speaker",
+   "kinds": [
+    "label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Muted",
    "kinds": [
     "label"
    ],
@@ -9825,6 +11618,13 @@
   },
   {
    "text": "Needs reconnect",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Needs Target",
    "kinds": [
     "text"
    ],
@@ -10010,23 +11810,32 @@
    "text": "New Workspace",
    "kinds": [
     "label",
-    "text"
+    "text",
+    "title"
    ],
-   "count": 5
+   "count": 6
   },
   {
    "text": "New Worktree",
    "kinds": [
     "title"
    ],
-   "count": 2
+   "count": 3
   },
   {
    "text": "Next",
    "kinds": [
+    "label",
     "text"
    ],
-   "count": 2
+   "count": 5
+  },
+  {
+   "text": "Next (→)",
+   "kinds": [
+    "label"
+   ],
+   "count": 1
   },
   {
    "text": "Next card",
@@ -10084,6 +11893,20 @@
    "text": "Next side question",
    "kinds": [
     "aria-label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Next voice",
+   "kinds": [
+    "aria-label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Next: Review Permissions",
+   "kinds": [
+    "text"
    ],
    "count": 1
   },
@@ -10158,6 +11981,20 @@
    "count": 1
   },
   {
+   "text": "No connectors available in this project",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "No connectors match \\u201c${A}\\u201d",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
    "text": "No content available for this resource",
    "kinds": [
     "text"
@@ -10165,9 +12002,30 @@
    "count": 1
   },
   {
+   "text": "No conversation",
+   "kinds": [
+    "title"
+   ],
+   "count": 1
+  },
+  {
+   "text": "No conversations yet",
+   "kinds": [
+    "label"
+   ],
+   "count": 1
+  },
+  {
    "text": "No coordinators",
    "kinds": [
     "label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "No custom flag matches your search.",
+   "kinds": [
+    "description"
    ],
    "count": 1
   },
@@ -10222,6 +12080,20 @@
   },
   {
    "text": "No files or folders found",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "No folder selected",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "No folders added yet.",
    "kinds": [
     "text"
    ],
@@ -10287,6 +12159,13 @@
    "count": 3
   },
   {
+   "text": "No matching ${C}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
    "text": "No matching files",
    "kinds": [
     "text"
@@ -10315,6 +12194,13 @@
    "count": 1
   },
   {
+   "text": "No matching repositories",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
    "text": "No matching resources found.",
    "kinds": [
     "text"
@@ -10330,6 +12216,13 @@
   },
   {
    "text": "No MCP servers installed",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "No message text",
    "kinds": [
     "text"
    ],
@@ -10364,7 +12257,42 @@
    "count": 1
   },
   {
+   "text": "No more older messages",
+   "kinds": [
+    "button"
+   ],
+   "count": 1
+  },
+  {
+   "text": "No more older messages, showing ${b} of ${c}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "No pinned conversations",
+   "kinds": [
+    "label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "No plugin loads from this folder.",
+   "kinds": [
+    "description"
+   ],
+   "count": 1
+  },
+  {
    "text": "No Plugins Available",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "No plugins available in the marketplace.",
    "kinds": [
     "text"
    ],
@@ -10377,6 +12305,20 @@
     "text"
    ],
    "count": 2
+  },
+  {
+   "text": "No plugins found for \"${b}\".",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "No plugins match your search.",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
   },
   {
    "text": "No previous worktrees",
@@ -10435,6 +12377,27 @@
    "count": 1
   },
   {
+   "text": "No remote ${C}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "No repositories found",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "No resources added yet.",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
    "text": "No resources available",
    "kinds": [
     "text"
@@ -10452,6 +12415,13 @@
    "text": "No runs yet",
    "kinds": [
     "text"
+   ],
+   "count": 2
+  },
+  {
+   "text": "No server is listening on port ${c} inside the remote workspace. Start it, or ask the agent to, then retry.",
+   "kinds": [
+    "template"
    ],
    "count": 1
   },
@@ -10478,6 +12448,13 @@
   },
   {
    "text": "No token data available.",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "No upcoming run.",
    "kinds": [
     "text"
    ],
@@ -10575,6 +12552,13 @@
    "count": 1
   },
   {
+   "text": "Nothing is running on port ${c}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
    "text": "Nothing is running right now",
    "kinds": [
     "text"
@@ -10620,9 +12604,10 @@
   {
    "text": "Offline",
    "kinds": [
-    "label"
+    "label",
+    "text"
    ],
-   "count": 1
+   "count": 2
   },
   {
    "text": "Olin",
@@ -10669,12 +12654,34 @@
   {
    "text": "Online",
    "kinds": [
-    "label"
+    "label",
+    "text"
+   ],
+   "count": 2
+  },
+  {
+   "text": "Only Archived",
+   "kinds": [
+    "text"
    ],
    "count": 1
   },
   {
-   "text": "Only Archived",
+   "text": "Only Automations",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Only for",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Only Scheduled",
    "kinds": [
     "text"
    ],
@@ -10715,7 +12722,7 @@
    "kinds": [
     "text"
    ],
-   "count": 1
+   "count": 2
   },
   {
    "text": "Open ${a}",
@@ -10740,6 +12747,27 @@
   },
   {
    "text": "Open ${b}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Open ${c}, ${b}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Open ${c}, ${b}. ${m}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Open ${c}, ${b}. Summarizing call",
    "kinds": [
     "template"
    ],
@@ -10838,6 +12866,13 @@
    "count": 1
   },
   {
+   "text": "Open conversation ${D}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
    "text": "Open Conversation History",
    "kinds": [
     "label"
@@ -10927,6 +12962,13 @@
    "text": "Open In",
    "kinds": [
     "label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Open in ${Z}",
+   "kinds": [
+    "template"
    ],
    "count": 1
   },
@@ -11113,6 +13155,13 @@
    "count": 1
   },
   {
+   "text": "Open Mermaid diagram preview",
+   "kinds": [
+    "aria-label"
+   ],
+   "count": 1
+  },
+  {
    "text": "Open on another device",
    "kinds": [
     "title"
@@ -11123,6 +13172,13 @@
    "text": "Open on phone",
    "kinds": [
     "tooltip"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Open plugin page",
+   "kinds": [
+    "ariaLabel"
    ],
    "count": 1
   },
@@ -11177,9 +13233,23 @@
    "count": 1
   },
   {
+   "text": "Open skill page",
+   "kinds": [
+    "ariaLabel"
+   ],
+   "count": 1
+  },
+  {
    "text": "Open Source Code",
    "kinds": [
     "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Open SSH Host",
+   "kinds": [
+    "title"
    ],
    "count": 1
   },
@@ -11324,9 +13394,30 @@
    "count": 2
   },
   {
+   "text": "Other Conversations",
+   "kinds": [
+    "label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Other Customizations",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
    "text": "Other License",
    "kinds": [
     "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Other Projects",
+   "kinds": [
+    "label"
    ],
    "count": 1
   },
@@ -11368,9 +13459,10 @@
   {
    "text": "Overview",
    "kinds": [
+    "aria-label",
     "label"
    ],
-   "count": 2
+   "count": 3
   },
   {
    "text": "Owner",
@@ -11460,7 +13552,30 @@
   {
    "text": "Pause",
    "kinds": [
-    "aria-label"
+    "aria-label",
+    "button"
+   ],
+   "count": 3
+  },
+  {
+   "text": "Pause (k)",
+   "kinds": [
+    "aria-label",
+    "label"
+   ],
+   "count": 2
+  },
+  {
+   "text": "Pause ${a.displayName}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Pause ${t}",
+   "kinds": [
+    "template"
    ],
    "count": 1
   },
@@ -11468,6 +13583,20 @@
    "text": "Pause this agent; it keeps its place and streams. Resume to continue.",
    "kinds": [
     "title"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Paused.",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Paused. Resume it to schedule the next run.",
+   "kinds": [
+    "text"
    ],
    "count": 1
   },
@@ -11519,7 +13648,7 @@
    "kinds": [
     "label"
    ],
-   "count": 1
+   "count": 2
   },
   {
    "text": "Permission Settings",
@@ -11527,6 +13656,13 @@
     "title"
    ],
    "count": 1
+  },
+  {
+   "text": "Permissions",
+   "kinds": [
+    "title"
+   ],
+   "count": 2
   },
   {
    "text": "Pick one of these themes under Preset in Settings > Appearance.",
@@ -11559,7 +13695,29 @@
    "count": 1
   },
   {
+   "text": "Pin",
+   "kinds": [
+    "label",
+    "tooltip"
+   ],
+   "count": 2
+  },
+  {
    "text": "Pin / Unpin Conversation",
+   "kinds": [
+    "label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Pin conversation",
+   "kinds": [
+    "aria-label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Pin Tab",
    "kinds": [
     "label"
    ],
@@ -11601,6 +13759,21 @@
    "count": 1
   },
   {
+   "text": "Play",
+   "kinds": [
+    "aria-label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Play (k)",
+   "kinds": [
+    "aria-label",
+    "label"
+   ],
+   "count": 2
+  },
+  {
    "text": "Play a sound when your action is needed or the agent finishes.",
    "kinds": [
     "description"
@@ -11637,6 +13810,13 @@
   },
   {
    "text": "Please describe your auth or billing issue. More details will help our support team resolve your issue quicker. Some helpful information includes:",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Please fill out all required values to continue.",
    "kinds": [
     "text"
    ],
@@ -11806,7 +13986,15 @@
   {
    "text": "Previous",
    "kinds": [
+    "label",
     "text"
+   ],
+   "count": 2
+  },
+  {
+   "text": "Previous (←)",
+   "kinds": [
+    "label"
    ],
    "count": 1
   },
@@ -11870,11 +14058,18 @@
    "count": 1
   },
   {
+   "text": "Previous voice",
+   "kinds": [
+    "aria-label"
+   ],
+   "count": 1
+  },
+  {
    "text": "Previous Worktrees",
    "kinds": [
     "text"
    ],
-   "count": 2
+   "count": 3
   },
   {
    "text": "Pricing is based on public API pricing",
@@ -11934,6 +14129,20 @@
    "count": 1
   },
   {
+   "text": "Process Error",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Processing",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
    "text": "Prohibited Use Policy",
    "kinds": [
     "text"
@@ -11946,7 +14155,7 @@
     "label",
     "text"
    ],
-   "count": 4
+   "count": 5
   },
   {
    "text": "Project ",
@@ -11997,6 +14206,13 @@
    "text": "Project options",
    "kinds": [
     "ariaLabel"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Project Required",
+   "kinds": [
+    "text"
    ],
    "count": 1
   },
@@ -12074,6 +14290,20 @@
    "count": 2
   },
   {
+   "text": "Publish ${a.currentRef} to origin",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Published ${k.currentRef} to origin.",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
    "text": "Pull request creation",
    "kinds": [
     "text"
@@ -12105,7 +14335,15 @@
   {
    "text": "Push",
    "kinds": [
-    "label"
+    "label",
+    "tooltip"
+   ],
+   "count": 2
+  },
+  {
+   "text": "Push ${c} commit${c===1?\"\":\"s\"} to ${b}",
+   "kinds": [
+    "template"
    ],
    "count": 1
   },
@@ -12117,11 +14355,33 @@
    "count": 2
   },
   {
+   "text": "Pushed ${z} commit${z===1?\"\":\"s\"} to ${y}.",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Pushed to ${y}.",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
    "text": "Question ${y+1} of ${x.length}",
    "kinds": [
     "template"
    ],
    "count": 1
+  },
+  {
+   "text": "Queue Message",
+   "kinds": [
+    "label",
+    "text"
+   ],
+   "count": 3
   },
   {
    "text": "Queued messages",
@@ -12312,6 +14572,20 @@
    "count": 1
   },
   {
+   "text": "Record voice memo",
+   "kinds": [
+    "aria-label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Recording",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
    "text": "Recording shortcut for ${b}. Press keys to bind, Enter to save, Escape to cancel.",
    "kinds": [
     "template"
@@ -12340,15 +14614,16 @@
     "text",
     "tooltip"
    ],
-   "count": 17
+   "count": 18
   },
   {
    "text": "Refresh all credentials",
    "kinds": [
     "aria-label",
+    "label",
     "text"
    ],
-   "count": 2
+   "count": 3
   },
   {
    "text": "Refresh gcert Credentials",
@@ -12381,11 +14656,19 @@
    "count": 3
   },
   {
+   "text": "Refreshing credentials...",
+   "kinds": [
+    "label",
+    "text"
+   ],
+   "count": 2
+  },
+  {
    "text": "Refreshing...",
    "kinds": [
     "text"
    ],
-   "count": 2
+   "count": 3
   },
   {
    "text": "Reject",
@@ -12414,6 +14697,20 @@
     "text"
    ],
    "count": 1
+  },
+  {
+   "text": "Relaunch the app once to activate Screen Recording.",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Relaunches the app",
+   "kinds": [
+    "tooltip"
+   ],
+   "count": 2
   },
   {
    "text": "Reload",
@@ -12447,7 +14744,7 @@
     "text",
     "title"
    ],
-   "count": 9
+   "count": 11
   },
   {
    "text": "Remote agents are busy",
@@ -12564,6 +14861,13 @@
    "count": 1
   },
   {
+   "text": "Remove All",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
    "text": "Remove audio",
    "kinds": [
     "aria-label"
@@ -12671,13 +14975,27 @@
    "count": 1
   },
   {
+   "text": "Removing the bundle removes all of its plugins.",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Removing...",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
    "text": "Rename",
    "kinds": [
     "label",
     "text",
     "tooltip"
    ],
-   "count": 3
+   "count": 4
   },
   {
    "text": "Rename Conversation",
@@ -12722,6 +15040,13 @@
    "count": 1
   },
   {
+   "text": "Render failed",
+   "kinds": [
+    "message"
+   ],
+   "count": 3
+  },
+  {
    "text": "Render math in display mode, which puts the math in display style (so \\int and \\sum are large, for example), and centers the math on the page on its own line.",
    "kinds": [
     "description"
@@ -12764,6 +15089,13 @@
    "count": 1
   },
   {
+   "text": "Replace",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
    "text": "Replace the default browser right-click menu with quick actions.",
    "kinds": [
     "description"
@@ -12792,9 +15124,23 @@
    "count": 1
   },
   {
+   "text": "Replacing...",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
    "text": "Reply to /help",
    "kinds": [
     "aria-label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Reply to /help... (Esc to minimize)",
+   "kinds": [
+    "placeholder"
    ],
    "count": 1
   },
@@ -12820,6 +15166,13 @@
    "count": 1
   },
   {
+   "text": "Required",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
    "text": "Research anything",
    "kinds": [
     "title"
@@ -12841,6 +15194,13 @@
    "count": 1
   },
   {
+   "text": "Reset ${c} override${c===1?\"\":\"s\"}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
    "text": "Reset all shortcuts to defaults",
    "kinds": [
     "aria-label"
@@ -12851,6 +15211,13 @@
    "text": "Reset All to Defaults",
    "kinds": [
     "tooltip"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Reset overrides",
+   "kinds": [
+    "text"
    ],
    "count": 1
   },
@@ -12912,18 +15279,26 @@
    "count": 1
   },
   {
-   "text": "Resources",
+   "text": "Resolving...",
    "kinds": [
     "text"
    ],
    "count": 1
   },
   {
+   "text": "Resources",
+   "kinds": [
+    "text",
+    "title"
+   ],
+   "count": 2
+  },
+  {
    "text": "Restart",
    "kinds": [
     "text"
    ],
-   "count": 2
+   "count": 3
   },
   {
    "text": "Restart ${t}",
@@ -12937,7 +15312,7 @@
    "kinds": [
     "text"
    ],
-   "count": 1
+   "count": 2
   },
   {
    "text": "Restarted \"${H}\".",
@@ -12964,6 +15339,15 @@
    "text": "Restore",
    "kinds": [
     "label",
+    "text",
+    "tooltip"
+   ],
+   "count": 3
+  },
+  {
+   "text": "Restore Pane",
+   "kinds": [
+    "aria-label",
     "text"
    ],
    "count": 2
@@ -12978,7 +15362,22 @@
   {
    "text": "Resume",
    "kinds": [
-    "aria-label"
+    "aria-label",
+    "button"
+   ],
+   "count": 2
+  },
+  {
+   "text": "Resume ${a.displayName}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Resume ${t}",
+   "kinds": [
+    "template"
    ],
    "count": 1
   },
@@ -12997,6 +15396,13 @@
    "count": 1
   },
   {
+   "text": "Resume environment",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
    "text": "Resume it to load this file.",
    "kinds": [
     "description"
@@ -13011,9 +15417,23 @@
    "count": 1
   },
   {
+   "text": "Resume the conversation to start its workspace again, then start the server on port ${c} and retry.",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
    "text": "Resume this agent where it paused",
    "kinds": [
     "title"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Resuming environment…",
+   "kinds": [
+    "text"
    ],
    "count": 1
   },
@@ -13045,6 +15465,13 @@
    "kinds": [
     "fragment",
     "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Review permissions for ${I}",
+   "kinds": [
+    "template"
    ],
    "count": 1
   },
@@ -13107,6 +15534,20 @@
    "count": 1
   },
   {
+   "text": "Run in a new git worktree",
+   "kinds": [
+    "description"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Run in a new jj workspace or Fig share",
+   "kinds": [
+    "description"
+   ],
+   "count": 1
+  },
+  {
    "text": "Run in a new worktree",
    "kinds": [
     "description"
@@ -13151,14 +15592,22 @@
   {
    "text": "Running",
    "kinds": [
-    "label"
+    "label",
+    "text"
    ],
-   "count": 1
+   "count": 2
   },
   {
    "text": "Running (Dev only)",
    "kinds": [
     "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Running for ${Ws(ha.getTime()-Number(w.startTimeMs))}",
+   "kinds": [
+    "template"
    ],
    "count": 1
   },
@@ -13218,10 +15667,31 @@
     "confirmLabel",
     "text"
    ],
-   "count": 7
+   "count": 8
   },
   {
    "text": "Save audio recordings",
+   "kinds": [
+    "label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Save Configuration",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Save Image",
+   "kinds": [
+    "label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Save Video",
    "kinds": [
     "label"
    ],
@@ -13232,7 +15702,21 @@
    "kinds": [
     "text"
    ],
+   "count": 2
+  },
+  {
+   "text": "Saved!",
+   "kinds": [
+    "tooltip"
+   ],
    "count": 1
+  },
+  {
+   "text": "Saving...",
+   "kinds": [
+    "text"
+   ],
+   "count": 3
   },
   {
    "text": "Saving…",
@@ -13258,11 +15742,18 @@
    "count": 4
   },
   {
+   "text": "Schedule type",
+   "kinds": [
+    "ariaLabel"
+   ],
+   "count": 1
+  },
+  {
    "text": "Scheduled",
    "kinds": [
     "text"
    ],
-   "count": 1
+   "count": 2
   },
   {
    "text": "Scheduled Tasks",
@@ -13322,6 +15813,27 @@
    "count": 1
   },
   {
+   "text": "Scroll turns down",
+   "kinds": [
+    "aria-label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Scroll turns up",
+   "kinds": [
+    "aria-label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Scrollable table",
+   "kinds": [
+    "aria-label"
+   ],
+   "count": 1
+  },
+  {
    "text": "Search",
    "kinds": [
     "aria-label",
@@ -13370,6 +15882,13 @@
    "count": 1
   },
   {
+   "text": "Search conversations, commands, and code...",
+   "kinds": [
+    "placeholder"
+   ],
+   "count": 1
+  },
+  {
    "text": "Search conversations...",
    "kinds": [
     "placeholder"
@@ -13385,6 +15904,13 @@
   },
   {
    "text": "Search file contents...",
+   "kinds": [
+    "placeholder"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Search files...",
    "kinds": [
     "placeholder"
    ],
@@ -13427,11 +15953,18 @@
    "count": 1
   },
   {
+   "text": "Search for files in the project...",
+   "kinds": [
+    "placeholder"
+   ],
+   "count": 1
+  },
+  {
    "text": "Search for MCP servers to add to your configuration",
    "kinds": [
     "text"
    ],
-   "count": 1
+   "count": 2
   },
   {
    "text": "Search Google Drive",
@@ -13456,6 +15989,27 @@
    "count": 3
   },
   {
+   "text": "Search or enter a URL",
+   "kinds": [
+    "placeholder"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Search past workspaces...",
+   "kinds": [
+    "placeholder"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Search past worktrees...",
+   "kinds": [
+    "placeholder"
+   ],
+   "count": 1
+  },
+  {
    "text": "Search projects...",
    "kinds": [
     "placeholder"
@@ -13477,6 +16031,13 @@
    "count": 1
   },
   {
+   "text": "Search tabs, files and more",
+   "kinds": [
+    "placeholder"
+   ],
+   "count": 1
+  },
+  {
    "text": "Search triggers…",
    "kinds": [
     "placeholder"
@@ -13487,6 +16048,13 @@
    "text": "Searching",
    "kinds": [
     "aria-label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Searching...",
+   "kinds": [
+    "title"
    ],
    "count": 1
   },
@@ -13541,6 +16109,13 @@
    "count": 1
   },
   {
+   "text": "See ${d} more",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
    "text": "See ${g.untrustedSidecarDocLinkText}: ${g.untrustedSidecarDocUrl}",
    "kinds": [
     "template"
@@ -13557,14 +16132,73 @@
   {
    "text": "See all",
    "kinds": [
+    "button",
     "label"
+   ],
+   "count": 3
+  },
+  {
+   "text": "See all (${A.items.length})",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "See all (${c})",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "See all (${d.length})",
+   "kinds": [
+    "template"
    ],
    "count": 1
   },
   {
    "text": "See less",
    "kinds": [
+    "button",
+    "label",
     "text"
+   ],
+   "count": 6
+  },
+  {
+   "text": "See less in ${Pa.displayName}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "See less in Plugins",
+   "kinds": [
+    "label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "See more",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "See more in ${Pa.displayName}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "See more in Plugins",
+   "kinds": [
+    "label"
    ],
    "count": 1
   },
@@ -13612,9 +16246,23 @@
    "count": 1
   },
   {
+   "text": "Select ${a} Theme",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
    "text": "Select a folder.",
    "kinds": [
     "tooltipText"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Select a model in the model selector",
+   "kinds": [
+    "text"
    ],
    "count": 1
   },
@@ -13641,6 +16289,13 @@
    "count": 1
   },
   {
+   "text": "Select an option",
+   "kinds": [
+    "aria-label"
+   ],
+   "count": 1
+  },
+  {
    "text": "Select an option...",
    "kinds": [
     "text"
@@ -13658,6 +16313,13 @@
    "text": "Select Billing Model",
    "kinds": [
     "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Select category to search...",
+   "kinds": [
+    "placeholder"
    ],
    "count": 1
   },
@@ -13699,6 +16361,13 @@
    "count": 1
   },
   {
+   "text": "Select model with ${c}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
    "text": "Select Next Conversation",
    "kinds": [
     "label"
@@ -13724,7 +16393,7 @@
    "kinds": [
     "text"
    ],
-   "count": 1
+   "count": 2
   },
   {
    "text": "Select text in the artifact to add a comment",
@@ -13745,6 +16414,13 @@
    "text": "Select the workspace type that will be used for new conversations started with the New Workspace option.",
    "kinds": [
     "description"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Select Theme",
+   "kinds": [
+    "text"
    ],
    "count": 1
   },
@@ -13820,9 +16496,24 @@
    "count": 1
   },
   {
+   "text": "Send Immediately",
+   "kinds": [
+    "label"
+   ],
+   "count": 1
+  },
+  {
    "text": "Send message",
    "kinds": [
     "aria-label"
+   ],
+   "count": 2
+  },
+  {
+   "text": "Send Message",
+   "kinds": [
+    "label",
+    "text"
    ],
    "count": 2
   },
@@ -13836,7 +16527,15 @@
   {
    "text": "Send Now",
    "kinds": [
+    "aria-label",
     "tooltip"
+   ],
+   "count": 2
+  },
+  {
+   "text": "Send now: ${d}",
+   "kinds": [
+    "template"
    ],
    "count": 1
   },
@@ -13919,6 +16618,13 @@
    "count": 1
   },
   {
+   "text": "Set up ${I}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
    "text": "Set up authentication",
    "kinds": [
     "label"
@@ -13949,6 +16655,13 @@
    "text": "Settings - ",
    "kinds": [
     "fragment",
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Settings ↗",
+   "kinds": [
     "text"
    ],
    "count": 1
@@ -14037,7 +16750,7 @@
    "kinds": [
     "text"
    ],
-   "count": 1
+   "count": 4
   },
   {
    "text": "Show ",
@@ -14049,6 +16762,13 @@
    "count": 2
   },
   {
+   "text": "Show ${A.length} breakdown${A.length===1?\"\":\"s\"}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
    "text": "Show ${A} in folder",
    "kinds": [
     "template"
@@ -14056,9 +16776,86 @@
    "count": 1
   },
   {
+   "text": "Show ${b} more subagent${b===\n1?\"\":\"s\"}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Show ${c} earlier steps",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Show ${m.length-8} more subagent${m.length-8===1?\n\"\":\"s\"}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Show ${q.length-8} more subagent${q.length-8===1?\"\":\"s\"}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Show ${ta.host} in the list again",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Show 1 earlier step",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Show all",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Show All",
+   "kinds": [
+    "button"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Show all resources",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
    "text": "Show Details",
    "kinds": [
     "label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Show Error",
+   "kinds": [
+    "button"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Show fewer resources",
+   "kinds": [
+    "text"
    ],
    "count": 1
   },
@@ -14080,6 +16877,28 @@
    "text": "Show in Sidebar",
    "kinds": [
     "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Show in the list again",
+   "kinds": [
+    "tooltip"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Show less",
+   "kinds": [
+    "button",
+    "text"
+   ],
+   "count": 6
+  },
+  {
+   "text": "Show Less",
+   "kinds": [
+    "button"
    ],
    "count": 1
   },
@@ -14113,6 +16932,36 @@
    "count": 1
   },
   {
+   "text": "Show Thumbnail Sidebar",
+   "kinds": [
+    "aria-label"
+   ],
+   "count": 2
+  },
+  {
+   "text": "Show token",
+   "kinds": [
+    "aria-label",
+    "title"
+   ],
+   "count": 2
+  },
+  {
+   "text": "Show Whitespace Changes",
+   "kinds": [
+    "ariaLabel",
+    "tooltip"
+   ],
+   "count": 3
+  },
+  {
+   "text": "Showing first ${p} references",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
    "text": "Side Pane UI Available",
    "kinds": [
     "text"
@@ -14120,9 +16969,32 @@
    "count": 1
   },
   {
-   "text": "Side Question",
+   "text": "Side Panel Preview",
    "kinds": [
     "title"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Side Question",
+   "kinds": [
+    "text",
+    "title"
+   ],
+   "count": 3
+  },
+  {
+   "text": "Side Question:",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Side Question: ",
+   "kinds": [
+    "fragment",
+    "text"
    ],
    "count": 1
   },
@@ -14159,19 +17031,26 @@
    "kinds": [
     "text"
    ],
-   "count": 3
+   "count": 4
   },
   {
    "text": "Sign In",
    "kinds": [
     "text"
    ],
-   "count": 2
+   "count": 3
   },
   {
    "text": "Sign in again",
    "kinds": [
     "label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Sign in from the ${mR} panel.",
+   "kinds": [
+    "template"
    ],
    "count": 1
   },
@@ -14232,6 +17111,13 @@
    "count": 1
   },
   {
+   "text": "Sign in to use ${mR}!",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
    "text": "Sign in with a different account",
    "kinds": [
     "text"
@@ -14252,6 +17138,13 @@
     "text"
    ],
    "count": 4
+  },
+  {
+   "text": "Sign Out",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
   },
   {
    "text": "Sign up for newsletters, tips and tricks, and other notifications about ",
@@ -14299,6 +17192,13 @@
    "count": 1
   },
   {
+   "text": "Signing Out...",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
    "text": "Simulate a different host (Electron, desktop or mobile Web, Extension, remote control, or installed PWA).",
    "kinds": [
     "description"
@@ -14316,6 +17216,20 @@
    "text": "Simulate running on a different OS.",
    "kinds": [
     "description"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Simulated Key Press in Browser",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Simulating Key Press in Browser",
+   "kinds": [
+    "text"
    ],
    "count": 1
   },
@@ -14364,7 +17278,7 @@
     "button",
     "text"
    ],
-   "count": 6
+   "count": 8
   },
   {
    "text": "Skipped",
@@ -14413,6 +17327,20 @@
    "kinds": [
     "fragment",
     "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Sort and filter conversations",
+   "kinds": [
+    "aria-label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Sort and filter conversations (${d.length} active)",
+   "kinds": [
+    "template"
    ],
    "count": 1
   },
@@ -14550,6 +17478,13 @@
    "count": 1
   },
   {
+   "text": "Stage and commit all changes",
+   "kinds": [
+    "tooltip"
+   ],
+   "count": 1
+  },
+  {
    "text": "Stage change",
    "kinds": [
     "tooltip"
@@ -14573,9 +17508,10 @@
   {
    "text": "Standalone",
    "kinds": [
-    "label"
+    "label",
+    "text"
    ],
-   "count": 1
+   "count": 2
   },
   {
    "text": "Standalone Terminals",
@@ -14585,9 +17521,30 @@
    "count": 1
   },
   {
+   "text": "Start",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Start Automation",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
    "text": "Start Best-of-",
    "kinds": [
     "button"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Start Extension",
+   "kinds": [
+    "text"
    ],
    "count": 1
   },
@@ -14606,6 +17563,13 @@
    "count": 1
   },
   {
+   "text": "Started",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
    "text": "Started \"${m}\".",
    "kinds": [
     "template"
@@ -14615,9 +17579,10 @@
   {
    "text": "Starting",
    "kinds": [
-    "label"
+    "label",
+    "text"
    ],
-   "count": 1
+   "count": 4
   },
   {
    "text": "Starting terminal…",
@@ -14645,6 +17610,13 @@
    "text": "Stay up to date.",
    "kinds": [
     "title"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Step ${gb+1} of ${hb.length}",
+   "kinds": [
+    "template"
    ],
    "count": 1
   },
@@ -14687,11 +17659,12 @@
    "text": "Stop",
    "kinds": [
     "aria-label",
+    "button",
     "label",
     "text",
     "tooltip"
    ],
-   "count": 7
+   "count": 8
   },
   {
    "text": "Stop ${$Lb(a)}",
@@ -14744,6 +17717,13 @@
   },
   {
    "text": "Stop execution",
+   "kinds": [
+    "aria-label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Stop recording",
    "kinds": [
     "aria-label"
    ],
@@ -14838,6 +17818,13 @@
    "count": 1
   },
   {
+   "text": "Subagent",
+   "kinds": [
+    "title"
+   ],
+   "count": 1
+  },
+  {
    "text": "Subagent ended",
    "kinds": [
     "text"
@@ -14847,9 +17834,10 @@
   {
    "text": "Subagents",
    "kinds": [
+    "label",
     "title"
    ],
-   "count": 4
+   "count": 5
   },
   {
    "text": "Submit",
@@ -14857,7 +17845,7 @@
     "button",
     "text"
    ],
-   "count": 7
+   "count": 9
   },
   {
    "text": "Submit code",
@@ -14885,7 +17873,7 @@
    "kinds": [
     "text"
    ],
-   "count": 1
+   "count": 2
   },
   {
    "text": "Subscription",
@@ -14961,6 +17949,20 @@
    "text": "Switch To",
    "kinds": [
     "heading"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Switch to Dark Mode",
+   "kinds": [
+    "aria-label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Switch to Light Mode",
+   "kinds": [
+    "aria-label"
    ],
    "count": 1
   },
@@ -15116,6 +18118,13 @@
    "count": 1
   },
   {
+   "text": "Terminal sandbox is not supported in this environment",
+   "kinds": [
+    "tooltip"
+   ],
+   "count": 2
+  },
+  {
    "text": "Terminal: Add to Chat",
    "kinds": [
     "label"
@@ -15160,9 +18169,37 @@
    "count": 1
   },
   {
+   "text": "text resource",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "text resources",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
    "text": "Thank you! Your feedback has been submitted successfully.",
    "kinds": [
     "message"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Thanks for helping make Gemini better! This is a critical part of evaluating and improving our models.",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Thanks for your feedback!",
+   "kinds": [
+    "text"
    ],
    "count": 1
   },
@@ -15224,6 +18261,13 @@
    "count": 1
   },
   {
+   "text": "The browser subagent has been disabled by your administrator. Contact your administrator to enable browser use.",
+   "kinds": [
+    "subtitle"
+   ],
+   "count": 1
+  },
+  {
    "text": "The change was pushed to Gerrit.",
    "kinds": [
     "message"
@@ -15276,6 +18320,34 @@
    "text": "The remote shared a link for this push.",
    "kinds": [
     "message"
+   ],
+   "count": 1
+  },
+  {
+   "text": "The remote workspace is not running",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "The suggested plugin isn't in the marketplace.",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "The voice Jetski speaks with.",
+   "kinds": [
+    "description"
+   ],
+   "count": 1
+  },
+  {
+   "text": "The voice used in Voice mode. Powered by Gemini Live.",
+   "kinds": [
+    "description"
    ],
    "count": 1
   },
@@ -15338,6 +18410,13 @@
    "count": 1
   },
   {
+   "text": "These servers need you to sign in before the agent can use their tools.",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
    "text": "These settings can only be changed on the computer running the app, not from a remote session.",
    "kinds": [
     "text"
@@ -15349,7 +18428,7 @@
    "kinds": [
     "label"
    ],
-   "count": 1
+   "count": 7
   },
   {
    "text": "Thinking ",
@@ -15371,6 +18450,13 @@
    "text": "This ",
    "kinds": [
     "fragment",
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "This automation is currently stopped. Events and stdout streams will appear here once started.",
+   "kinds": [
     "text"
    ],
    "count": 1
@@ -15404,6 +18490,13 @@
    "count": 1
   },
   {
+   "text": "This client was started with no custom flags.",
+   "kinds": [
+    "description"
+   ],
+   "count": 1
+  },
+  {
    "text": "This command ran in the sandbox.",
    "kinds": [
     "aria-label",
@@ -15414,9 +18507,10 @@
   {
    "text": "This computer",
    "kinds": [
+    "text",
     "title"
    ],
-   "count": 1
+   "count": 3
   },
   {
    "text": "This Computer",
@@ -15424,7 +18518,7 @@
     "label",
     "title"
    ],
-   "count": 6
+   "count": 8
   },
   {
    "text": "This conversation grew too large, so the history before this point may be missing or incomplete.",
@@ -15441,6 +18535,13 @@
    "count": 1
   },
   {
+   "text": "This conversation is in a different workspace.",
+   "kinds": [
+    "message"
+   ],
+   "count": 1
+  },
+  {
    "text": "This conversation is not on disk. Delete it to remove it from your sidebar.",
    "kinds": [
     "message"
@@ -15449,6 +18550,13 @@
   },
   {
    "text": "This extension has no declared permissions requiring user input.",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "This extension is currently stopped. Events and stdout streams will appear here once started.",
    "kinds": [
     "text"
    ],
@@ -15518,6 +18626,13 @@
    "count": 2
   },
   {
+   "text": "This project is associated with a different workspace.",
+   "kinds": [
+    "message"
+   ],
+   "count": 1
+  },
+  {
    "text": "This project uses Firebase. Do you want to download the Firebase skill?",
    "kinds": [
     "text"
@@ -15542,6 +18657,13 @@
    "text": "This request is not well-suited for parallel Best-of-N generation.",
    "kinds": [
     "title"
+   ],
+   "count": 1
+  },
+  {
+   "text": "This server needs you to sign in before the agent can use its tools.",
+   "kinds": [
+    "text"
    ],
    "count": 1
   },
@@ -15592,6 +18714,13 @@
    "text": "Time Zone",
    "kinds": [
     "displayName"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Timed out fetching the Google Drive file's title. The link was kept as-is.",
+   "kinds": [
+    "message"
    ],
    "count": 1
   },
@@ -15668,6 +18797,13 @@
   },
   {
    "text": "To update:",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "To use browser tools, you need to enable remote debugging:",
    "kinds": [
     "text"
    ],
@@ -16046,6 +19182,20 @@
    "count": 1
   },
   {
+   "text": "Typed '${a.text}' in Browser",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Typing '${a.text}' in Browser",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
    "text": "Typing your corp password here may trigger a Password Alert reset.",
    "kinds": [
     "aria-label",
@@ -16119,11 +19269,18 @@
    "count": 1
   },
   {
+   "text": "Unfold code block",
+   "kinds": [
+    "aria-label"
+   ],
+   "count": 1
+  },
+  {
    "text": "Unfold lines ${a+1}-${q.endLine}",
    "kinds": [
     "template"
    ],
-   "count": 1
+   "count": 2
   },
   {
    "text": "United States",
@@ -16145,6 +19302,42 @@
     "text"
    ],
    "count": 2
+  },
+  {
+   "text": "Unmute (m)",
+   "kinds": [
+    "label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Unpin",
+   "kinds": [
+    "label",
+    "tooltip"
+   ],
+   "count": 2
+  },
+  {
+   "text": "Unpin ${t}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Unpin conversation",
+   "kinds": [
+    "aria-label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Unpin Tab",
+   "kinds": [
+    "label"
+   ],
+   "count": 1
   },
   {
    "text": "Unpin This Conversation",
@@ -16203,11 +19396,33 @@
    "count": 1
   },
   {
+   "text": "Up ${Ws(g.getTime()-Number(a.startTimeMs))}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Update",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Update Anyway",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
    "text": "Update Available",
    "kinds": [
+    "text",
     "title"
    ],
-   "count": 3
+   "count": 5
   },
   {
    "text": "Updater",
@@ -16215,6 +19430,20 @@
     "title"
    ],
    "count": 1
+  },
+  {
+   "text": "Updating will restart the server and apply the latest changes.",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Updating…",
+   "kinds": [
+    "text"
+   ],
+   "count": 3
   },
   {
    "text": "Upload Debug Bundle",
@@ -16228,6 +19457,20 @@
    "text": "Upload Files",
    "kinds": [
     "label"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Upload to Agent",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Upload to Google Drive",
+   "kinds": [
+    "tooltip"
    ],
    "count": 1
   },
@@ -16249,6 +19492,13 @@
    "text": "Uploaded to Google Drive",
    "kinds": [
     "title"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Uploading to Drive…",
+   "kinds": [
+    "tooltip"
    ],
    "count": 1
   },
@@ -16276,15 +19526,30 @@
   {
    "text": "Usage",
    "kinds": [
+    "text",
     "title"
    ],
-   "count": 1
+   "count": 2
   },
   {
    "text": "Use ",
    "kinds": [
     "button",
     "fragment"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Use Add MCP to browse the store, or add a custom server via the MCP config.",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Use Add MCP to browse the store.",
+   "kinds": [
+    "text"
    ],
    "count": 1
   },
@@ -16430,6 +19695,20 @@
    "count": 1
   },
   {
+   "text": "Using browser",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Using browser \\u00b7 ${k2(d)}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
    "text": "Using default ${d.envName} name",
    "kinds": [
     "template"
@@ -16466,6 +19745,20 @@
   },
   {
    "text": "Validating setup script…",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Validation timed out.",
+   "kinds": [
+    "message"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Variables",
    "kinds": [
     "text"
    ],
@@ -16550,6 +19843,14 @@
    "count": 2
   },
   {
+   "text": "View Branches",
+   "kinds": [
+    "text",
+    "title"
+   ],
+   "count": 2
+  },
+  {
    "text": "View comments",
    "kinds": [
     "aria-label"
@@ -16573,14 +19874,23 @@
   {
    "text": "View Diff",
    "kinds": [
-    "text"
+    "ariaLabel",
+    "text",
+    "tooltip"
    ],
-   "count": 1
+   "count": 3
   },
   {
    "text": "View Diff for ${f}",
    "kinds": [
     "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "View File",
+   "kinds": [
+    "ariaLabel"
    ],
    "count": 1
   },
@@ -16642,6 +19952,22 @@
    "count": 1
   },
   {
+   "text": "View Split Diff",
+   "kinds": [
+    "ariaLabel",
+    "tooltip"
+   ],
+   "count": 3
+  },
+  {
+   "text": "View Stacked Diff",
+   "kinds": [
+    "ariaLabel",
+    "tooltip"
+   ],
+   "count": 3
+  },
+  {
    "text": "View Usage",
    "kinds": [
     "text"
@@ -16649,11 +19975,19 @@
    "count": 1
   },
   {
-   "text": "Voice",
+   "text": "Viewing Diff",
    "kinds": [
-    "label"
+    "tooltip"
    ],
    "count": 1
+  },
+  {
+   "text": "Voice",
+   "kinds": [
+    "label",
+    "title"
+   ],
+   "count": 2
   },
   {
    "text": "Voice engine",
@@ -16670,9 +20004,24 @@
    "count": 1
   },
   {
+   "text": "Voice mode",
+   "kinds": [
+    "aria-label",
+    "title"
+   ],
+   "count": 4
+  },
+  {
    "text": "Voice Mode",
    "kinds": [
     "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Voice mode in progress",
+   "kinds": [
+    "aria-label"
    ],
    "count": 1
   },
@@ -16720,11 +20069,32 @@
    "count": 1
   },
   {
+   "text": "Waiting for command completion (up to ${a.waitDurationSeconds} seconds)",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Waiting for response... (Esc to minimize)",
+   "kinds": [
+    "placeholder"
+   ],
+   "count": 1
+  },
+  {
    "text": "Waiting for the agents’ windows…",
    "kinds": [
     "text"
    ],
    "count": 1
+  },
+  {
+   "text": "Waiting for the SSH connection to finish",
+   "kinds": [
+    "tooltip"
+   ],
+   "count": 2
   },
   {
    "text": "Waiting for tool permission approval — click Open in full conversation (↗) to approve",
@@ -16840,6 +20210,13 @@
    "count": 1
   },
   {
+   "text": "Welcome to ${a}!",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
    "text": "What counts as a document",
    "kinds": [
     "aria-label"
@@ -16920,9 +20297,10 @@
   {
    "text": "When",
    "kinds": [
-    "label"
+    "label",
+    "text"
    ],
-   "count": 1
+   "count": 2
   },
   {
    "text": "When enabled, the agent will include default customizations, including default skills.",
@@ -17108,6 +20486,13 @@
    "count": 1
   },
   {
+   "text": "Worked for ${Ws(l.lastModifiedAtMs-l.createdAtMs)}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
    "text": "Worker sandbox initialization failed: ${z instanceof Error?z.message:String(z)}",
    "kinds": [
     "template"
@@ -17159,12 +20544,20 @@
    "count": 1
   },
   {
+   "text": "Working...",
+   "kinds": [
+    "subtitle"
+   ],
+   "count": 1
+  },
+  {
    "text": "Workspace",
    "kinds": [
     "label",
+    "text",
     "title"
    ],
-   "count": 2
+   "count": 3
   },
   {
    "text": "Workspace > Restore to Snapshot",
@@ -17223,7 +20616,7 @@
     "text",
     "title"
    ],
-   "count": 4
+   "count": 5
   },
   {
    "text": "Worktree",
@@ -17233,9 +20626,23 @@
    "count": 1
   },
   {
+   "text": "Worktree Branches",
+   "kinds": [
+    "title"
+   ],
+   "count": 1
+  },
+  {
    "text": "Write a comment...",
    "kinds": [
     "placeholder"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Write a message",
+   "kinds": [
+    "aria-label"
    ],
    "count": 1
   },
@@ -17254,9 +20661,30 @@
    "count": 1
   },
   {
+   "text": "WSL: ${d}",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "You",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
    "text": "You are in control",
    "kinds": [
     "title"
+   ],
+   "count": 1
+  },
+  {
+   "text": "You can also add or remove each plugin below.",
+   "kinds": [
+    "text"
    ],
    "count": 1
   },
@@ -17269,6 +20697,41 @@
   },
   {
    "text": "You can prompt the model to try again or start a new conversation if the error persists.",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "You don't have access to this Google Drive file, so its title couldn't be added. The link was kept as-is.",
+   "kinds": [
+    "message"
+   ],
+   "count": 1
+  },
+  {
+   "text": "You have ${d.length} conversations in progress. Updating will cancel them and you'll need to manually restart them.",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "You have ${d.length} conversations in progress. Updating will interrupt them, and they will automatically resume once the update completes.",
+   "kinds": [
+    "template"
+   ],
+   "count": 1
+  },
+  {
+   "text": "You have a conversation in progress. Updating will cancel it and you'll need to manually restart it.",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "You have a conversation in progress. Updating will interrupt it, and it will automatically resume once the update completes.",
    "kinds": [
     "text"
    ],
@@ -17366,10 +20829,24 @@
    "count": 1
   },
   {
+   "text": "Your Plan",
+   "kinds": [
+    "text"
+   ],
+   "count": 1
+  },
+  {
    "text": "Your Plan: ",
    "kinds": [
     "fragment",
     "text"
+   ],
+   "count": 1
+  },
+  {
+   "text": "Your Plan: ${F}",
+   "kinds": [
+    "template"
    ],
    "count": 1
   },

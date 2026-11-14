@@ -1,4 +1,5 @@
 import { normalizeModelId } from '../model-identity.js';
+import { resolveDatabaseModelFullName } from '../usage-types.js';
 /**
  * Antigravity 模型有效上下文窗口阈值映射目录
  * 严格对齐 Antigravity 官方运行时与 assets/model-catalog.json 标准上下文阈值 (<=200K / 256K / 128K)
@@ -86,6 +87,7 @@ const DISPLAY_NAME_MAP: Record<string, string> = {
   'gemini-4-argon-trial': 'Gemini 4 Argon Trial',
   'gemini-4-carbon': 'Gemini 4 Carbon',
   'gemini-4-carbon-trial': 'Gemini 4 Carbon Trial',
+  'gemini-4-hydrogen': 'Gemini 4 Hydrogen',
   'gemini-3.9-flash': 'Gemini 3.9 Flash',
   'gemini-3.8-flash': 'Gemini 3.8 Flash',
   'gemini-3.8-flash-control': 'Gemini 3.8 Flash',
@@ -153,6 +155,13 @@ export function resolveModelCapacity(rawModelInput?: string | null): ModelCapaci
     .replace(/[（(]\s*(?:High|Medium|Low|Extra\s+Low|Thinking|高|中|低|思考)\s*[）)]/gi, '')
     .replace(/\s+(?:High|Medium|Low|Extra\s+Low|Thinking)\b.*$/i, '')
     .trim();
+
+  if (/\borchestrator\b|^gemini-flash-worker(?:-agy)?$|^MODEL_PLACEHOLDER_M66[789]$/i.test(cleanedRaw)) {
+    const resolvedAlias = resolveDatabaseModelFullName(cleanedRaw, cleanedRaw);
+    if (resolvedAlias && resolvedAlias !== '未知模型' && resolvedAlias !== cleanedRaw) {
+      return resolveModelCapacity(resolvedAlias);
+    }
+  }
 
   let normalizedId = (cleanedRaw || withoutApiPrefix || raw)
     .toLowerCase()

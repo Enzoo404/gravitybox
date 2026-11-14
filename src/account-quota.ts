@@ -480,7 +480,7 @@ export function normalizedModelFromStored(model: ModelQuota, fallbackSource: Quo
     model_id: model.model_id ?? model.name,
     display_name: displayName,
     family,
-    is_carbon: model.is_carbon, is_argon: model.is_argon ?? family === 'argon',
+    is_carbon: model.is_carbon ?? family === 'carbon', is_argon: model.is_argon ?? family === 'argon',
     disabled: typeof model.disabled === 'boolean' ? model.disabled
       : /(?:^|[-_])disabled(?:$|[-_])/i.test(model.model_id ?? model.name) ? true : null,
     model_or_alias: model.model_or_alias ?? null,

@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
-import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync, chmodSync } from 'node:fs';
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync, chmodSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { aggregateLedger, type AggregateOptions } from './usage-aggregate.js';
@@ -151,6 +151,33 @@ export function revalueLedger(db: DatabaseSync, path: string, options: Aggregate
     }
     finally {
         db.exec('DETACH DATABASE reviewed');
+    }
+    if (options.action === 'restore') {
+        const beforeRatesPath = join(reviews, options.previewId + '-rates-before.json');
+        if (existsSync(beforeRatesPath)) {
+            const tmpRates = `${ratesPath}.${process.pid}.${randomUUID()}.tmp`;
+            writeFileSync(tmpRates, readFileSync(beforeRatesPath), { mode: 0o600 });
+            renameSync(tmpRates, ratesPath);
+        } else if (receipt.rateDigest === null && existsSync(ratesPath)) {
+            unlinkSync(ratesPath);
+        }
+    } else if (existsSync(ratesPath)) {
+        const profiles: unknown[] = [];
+        const profileMap = new Map<string, number>();
+        const entries: Record<string, { usd: number; p: number }> = Object.create(null);
+        for (const row of db.prepare('SELECT event_key, unit_price, usd FROM rate_locks').iterate() as Iterable<any>) {
+            const unitRaw = String(row.unit_price);
+            let idx = profileMap.get(unitRaw);
+            if (idx === undefined) {
+                idx = profiles.length;
+                profileMap.set(unitRaw, idx);
+                profiles.push(JSON.parse(unitRaw));
+            }
+            entries[String(row.event_key)] = { usd: Number(row.usd), p: idx };
+        }
+        const tmpRates = `${ratesPath}.${process.pid}.${randomUUID()}.tmp`;
+        writeFileSync(tmpRates, JSON.stringify({ version: 1, profiles, entries }) + '\n', { mode: 0o600 });
+        renameSync(tmpRates, ratesPath);
     }
     writeFileSync(receiptPath, JSON.stringify({ ...receipt, phase: options.action === 'restore' ? 'restored' : 'applied', appliedFeesDigest: feesDigest(db), completedAt: new Date().toISOString() }, null, 2), { mode: 0o600 });
     return { before: receipt.before, after: options.action === 'restore' ? receipt.before : receipt.after, previewId: receipt.previewId, backupPath: receipt.backup,

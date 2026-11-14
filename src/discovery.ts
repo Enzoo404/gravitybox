@@ -166,8 +166,4 @@ export async function resolveVerifiedLanguageServerPorts(pid: number, appPath = 
   }
 }
 
-/** Verify the real executable and official bundle before trusting a language-server listener. */
-export async function verifyLanguageServerIdentity(pid: number, appPath = '/Applications/Antigravity.app'): Promise<boolean> {
-  const ports = await resolveVerifiedLanguageServerPorts(pid, appPath);
-  return ports !== null;
-}
+
