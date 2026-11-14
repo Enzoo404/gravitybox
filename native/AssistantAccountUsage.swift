@@ -93,6 +93,9 @@ extension Assistant {
                 self.singleAccountRefreshErrors[id] = error.localizedDescription
             case .success:
                 self.singleAccountRefreshErrors[id] = nil
+                if let globalErr = self.quotaRefreshError, !InterfaceText.isMultiAccountSummary(globalErr) {
+                    self.quotaRefreshError = nil
+                }
                 self.fetchAccountList(notifyPage: true)
                 self.overview?.update(force: true)
             }
@@ -342,6 +345,21 @@ extension Assistant {
                     let r = rhs.element["id"] as? String == resolvedActiveId
                     return l == r ? lhs.offset < rhs.offset : l
                 }.map(\.element)
+                if let globalErr = self.quotaRefreshError, InterfaceText.isMultiAccountSummary(globalErr) {
+                    let anyAccountHasIssue = self.cachedAccounts.contains { acc in
+                        if acc["disabled"] as? Bool == true { return false }
+                        let err = (acc["quota_refresh_error"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !err.isEmpty && !err.contains("双周期") { return true }
+                        if let quota = acc["quota"] as? [String: Any],
+                           let stale = quota["stale_groups"] as? [[String: Any]], !stale.isEmpty {
+                            return true
+                        }
+                        return false
+                    }
+                    if !anyAccountHasIssue {
+                        self.quotaRefreshError = nil
+                    }
+                }
                 self.updateQuotaRefreshControls()
                 if shouldNotifyPage { self.accountsPage?.fetch(val) }
             }

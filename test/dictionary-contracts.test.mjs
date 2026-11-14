@@ -294,4 +294,43 @@ test('版本登记幂等且术语校验共用同一策略源', async () => {
   }
 
 });
+
+test('基础词典零大小写异译冲突、零术语表违规且无控制台代码脏键', async () => {
+  const { GLOSSARY_RULES } = await import('../dist/coverage.js');
+  const raw = JSON.parse(await readFile(fileURLToPath(new URL('../dict/base.json', import.meta.url)), 'utf8'));
+  const byLower = new Map();
+  const glossaryViolations = [];
+  const consoleDirty = [];
+
+  for (const [key, value] of Object.entries(raw)) {
+    if (!key.startsWith('@ui:')) {
+      const lower = key.toLowerCase();
+      const list = byLower.get(lower) ?? [];
+      list.push([key, value]);
+      byLower.set(lower, list);
+    }
+    const plainKey = key.startsWith('@ui:') ? key.split('|').slice(2).join('|') : key;
+    if (!/google chat|chatgpt|wechat/i.test(plainKey)) {
+      for (const rule of GLOSSARY_RULES) {
+        if (rule.en.test(plainKey) && rule.forbid.some(f => value.includes(f))) {
+          glossaryViolations.push({ key, value, rule: rule.note });
+        }
+      }
+    }
+    if (/addToBrowserAllowlist|document\.execCommand|ContextScopeItem/.test(key)) {
+      consoleDirty.push(key);
+    }
+  }
+
+  const caseConflicts = [];
+  for (const [lower, items] of byLower) {
+    if (items.length > 1 && new Set(items.map(([, v]) => v)).size > 1) {
+      caseConflicts.push({ lower, items });
+    }
+  }
+
+  assert.deepEqual(caseConflicts, [], '不应存在大小写不同但译文冲突的词条');
+  assert.deepEqual(glossaryViolations, [], '不应存在违反 GLOSSARY_RULES 的译文');
+  assert.deepEqual(consoleDirty, [], '不应包含无界面引用的控制台/JS 调试脏键');
+});
 });

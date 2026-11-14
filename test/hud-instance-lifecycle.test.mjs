@@ -692,7 +692,7 @@ describe('HudInstance 与 AntigravityHudManager 生产模块生命周期、垂�
       assert.equal(cap.hasAttribute('title'), false, '胶囊按钮不得携带原生 title 属性');
     }
 
-    // 验证 Issue 2 (v2.1): 子智能体独立运行时 (1 subagent running)，状态栏实时检测并反映工作状态
+    // 验证方案 A: 主对话模型已停止而子智能体独立运行时 (1 subagent running)，状态栏保留子智能体运行态与计时，但小圆点保持灰色 idle
     const subagentStatusNode = new FakeElement('div', doc);
     subagentStatusNode.setAttribute('data-testid', 'idle-status-text');
     subagentStatusNode.textContent = '1 subagent running';
@@ -701,20 +701,26 @@ describe('HudInstance 与 AntigravityHudManager 生产模块生命周期、垂�
     const subState = manager.resolveSubagentState(paneA.view);
     assert.equal(subState.isSubagentRunning, true, '应准确检测到 [data-testid="idle-status-text"] 中的子智能体运行状态');
     assert.equal(subState.runningSubagentCount, 1);
-    assert.equal(manager.resolveStreamingState(paneA.view), true, '子智能体运行时流式状态必须为 true');
+    assert.equal(manager.resolveStreamingState(paneA.view), false, '仅子智能体运行时主栏前台流式状态为 false');
     assert.equal(
       manager.resolveActivityPhase(paneA.view),
-      'executing',
-      '无前台生成但有后台任务/子智能体运行时阶段必须为 executing（蓝色呼吸）'
+      'idle',
+      '主对话模型已停止而仅子智能体运行时，主对话小圆点必须保持 idle（灰色）'
     );
 
     manager.reconcileMounts();
-    assert.equal(instA.isStreaming, true);
-    assert.equal(instA.activityPhase, 'executing');
+    assert.equal(instA.isStreaming, false);
+    assert.equal(instA.activityPhase, 'idle');
+    assert.equal(instA.hasActiveWork, true);
+    assert.equal(
+      instA.shadow.querySelector('.capsule-session').classList.contains('is-streaming'),
+      false,
+      '仅后台子智能体运行时主栏胶囊不得携带 is-streaming'
+    );
     assert.equal(
       instA.shadow.querySelector('.capsule-session').classList.contains('is-executing'),
-      true,
-      '脚本/后台任务执行时胶囊必须携带 is-executing 蓝色呼吸类'
+      false,
+      '仅后台子智能体运行时主栏胶囊不得携带 is-executing 呼吸类'
     );
     assert.equal(instA.isSubagentRunning, true);
     assert.equal(
@@ -732,9 +738,9 @@ describe('HudInstance 与 AntigravityHudManager 生产模块生命周期、垂�
       '1 个运行中'
     );
 
-    // 验证后端 SQLite 报告子智能体运行而前端 DOM 空闲时，不会触发无限 STREAMING_CHANGED 乒乓风暴
+    // 移除子智能体状态文本，确认无前台残留
     subagentStatusNode.remove();
-    assert.equal(manager.resolveStreamingState(paneA.view), false, '子智能体结束后流式状态恢复为 false');
+    assert.equal(manager.resolveStreamingState(paneA.view), false, '子智能体结束后流式状态保持为 false');
 
     // 验证后台普通终端任务 ("1 task running" / "1 个后台任务正在运行")、普通 Working 状态与权限指示器不会误报为子智能体运行中
     const bgTaskStatusNode = new FakeElement('div', doc);
@@ -779,6 +785,11 @@ describe('HudInstance 与 AntigravityHudManager 生产模块生命周期、垂�
       false,
       '模型本身思考/输出时不得携带呼吸类'
     );
+    const thinkingShimmer = new FakeElement('span', doc);
+    thinkingShimmer.className = 'animate-shimmer-text';
+    thinkingShimmer.textContent = 'Thinking';
+    paneA.view.appendChild(thinkingShimmer);
+
     const cmdShimmer = new FakeElement('span', doc);
     cmdShimmer.className = 'animate-shimmer-text';
     cmdShimmer.textContent = 'Running npm test';
@@ -786,15 +797,22 @@ describe('HudInstance 与 AntigravityHudManager 生产模块生命周期、垂�
     assert.equal(
       manager.resolveActivityPhase(paneA.view),
       'executing',
-      '模型暂停、脚本命令执行时必须切换为 executing（蓝色呼吸）'
+      '前台轮次中思考文本与工具运行并存时必须识别为 executing（蓝色呼吸）'
     );
-    cmdShimmer.remove();
+
+    // 前台模型停止（Cancel 按钮消失）但后台工具 shimmer 与 .codicon-loading 仍存在时，小圆点必须立即恢复灰色 idle
+    const codiconLoading = new FakeElement('span', doc);
+    codiconLoading.className = 'codicon-loading';
+    paneA.view.appendChild(codiconLoading);
     cancelBtn.remove();
     assert.equal(
       manager.resolveActivityPhase(paneA.view),
       'idle',
-      '模型与脚本均停止后必须立即恢复为 idle（灰色）'
+      '停止按钮消失后，即使工具 shimmer 与 .codicon-loading 仍存在也必须恢复为 idle（灰色）'
     );
+    codiconLoading.remove();
+    thinkingShimmer.remove();
+    cmdShimmer.remove();
     manager.reconcileMounts();
     const streamingEventsBefore = events.filter((e) => e.type === 'STREAMING_CHANGED').length;
     instA.updateMetrics({
@@ -1021,5 +1039,237 @@ describe('HudInstance 与 AntigravityHudManager 生产模块生命周期、垂�
     assert.equal(sr.querySelector('#hud-txt-session .hud-turn-dur').textContent, '· 本轮 23s');
     assert.ok(inst.turnClockTimer !== null, '子智能体恢复活跃后客户端时钟必须继续运行');
     inst.dispose();
+  });
+
+  it('模型用时与工具调用用时共用客户端走表器：按活跃阶段分相每秒递增、切换不回退闪烁、结束后校准权威值', async () => {
+    const inst = new HudInstance({ cascadeId: 'pane-sub-clocks', isPrimaryPane: true });
+    const composer = new FakeElement('div');
+    composer.setAttribute('data-testid', 'agent-input-box');
+    inst.mount(composer);
+    const sr = inst.host.shadowRoot;
+
+    // 1. 模型思考阶段 (activeModelStepCount=1, activeToolStepCount=0)：模型用时走表，工具用时冻结
+    inst.switchConversation('conv-sub-clocks', 'gemini-3.8-flash', true, false, 0, null, 'generating');
+    inst.updateMetrics({
+      conversationId: 'conv-sub-clocks',
+      sessionRevision: inst.getSessionRevision(),
+      metricsSequence: 1,
+      isStreaming: true,
+      activityPhase: 'generating',
+      session: {
+        turns: 1,
+        steps: 3,
+        modelDurationSeconds: 10,
+        modelDurationFormatted: '10秒',
+        modelDurationFormattedEn: '10s',
+        inFlightModelDurationSeconds: 5,
+        activeModelStepCount: 1,
+        toolDurationSeconds: 4,
+        toolDurationFormatted: '4秒',
+        toolDurationFormattedEn: '4s',
+        inFlightToolDurationSeconds: 0,
+        activeToolStepCount: 0,
+        currentTurnDurationSeconds: 9,
+        currentTurnDurationFormatted: '9秒',
+        currentTurnDurationFormattedEn: '9s',
+        currentTurnDurationCompactZh: '本轮 9s',
+        currentTurnDurationCompactEn: 'Turn 9s',
+      },
+      tokens: { totalTokens: 100 },
+      context: { hasUsageData: true, usedRatio: 0.1 },
+    });
+    assert.equal(sr.querySelector('#val-model-dur').textContent, '15秒');
+    assert.equal(sr.querySelector('#val-tool-dur').textContent, '4秒');
+
+    await new Promise((resolve) => setTimeout(resolve, 1150));
+    assert.ok(
+      ['16秒', '17秒'].includes(sr.querySelector('#val-model-dur').textContent),
+      `模型活跃阶段模型用时应每秒推进，实际 ${sr.querySelector('#val-model-dur').textContent}`
+    );
+    assert.equal(sr.querySelector('#val-tool-dur').textContent, '4秒', '模型思考时工具用时不得同时走表');
+
+    // 2. 刚切入工具阶段但 DB 尚未落盘上一步模型耗时 (modelDurationSeconds 暂仍为 10, active=0)，模型用时不得回退到 10s
+    inst.notifyModelOrStreamingChange(null, true, false, 0, null, 'executing');
+    inst.updateMetrics({
+      conversationId: 'conv-sub-clocks',
+      sessionRevision: inst.getSessionRevision(),
+      metricsSequence: 2,
+      isStreaming: true,
+      activityPhase: 'executing',
+      session: {
+        turns: 1,
+        steps: 4,
+        modelDurationSeconds: 10,
+        modelDurationFormatted: '10秒',
+        modelDurationFormattedEn: '10s',
+        inFlightModelDurationSeconds: 0,
+        activeModelStepCount: 0,
+        toolDurationSeconds: 4,
+        toolDurationFormatted: '4秒',
+        toolDurationFormattedEn: '4s',
+        inFlightToolDurationSeconds: 1,
+        activeToolStepCount: 1,
+        currentTurnDurationSeconds: 11,
+        currentTurnDurationFormatted: '11秒',
+        currentTurnDurationFormattedEn: '11s',
+        currentTurnDurationCompactZh: '本轮 11s',
+        currentTurnDurationCompactEn: 'Turn 11s',
+      },
+      tokens: { totalTokens: 100 },
+      context: { hasUsageData: true, usedRatio: 0.1 },
+    });
+    const heldModelText = sr.querySelector('#val-model-dur').textContent;
+    assert.ok(['16秒', '17秒'].includes(heldModelText), `切换瞬间模型用时应保持高水位不回退，实际 ${heldModelText}`);
+    assert.equal(sr.querySelector('#val-tool-dur').textContent, '5秒');
+
+    await new Promise((resolve) => setTimeout(resolve, 1150));
+    assert.equal(sr.querySelector('#val-model-dur').textContent, heldModelText, '工具执行期间模型用时应暂停走表');
+    assert.ok(
+      ['6秒', '7秒'].includes(sr.querySelector('#val-tool-dur').textContent),
+      `工具活跃阶段工具用时应每秒推进，实际 ${sr.querySelector('#val-tool-dur').textContent}`
+    );
+
+    // 3. 结束后归位到数据库权威耗时且时钟停止
+    inst.notifyModelOrStreamingChange(null, false, false, 0, null, 'idle');
+    inst.updateMetrics({
+      conversationId: 'conv-sub-clocks',
+      sessionRevision: inst.getSessionRevision(),
+      metricsSequence: 3,
+      isStreaming: false,
+      activityPhase: 'idle',
+      session: {
+        turns: 1,
+        steps: 5,
+        modelDurationSeconds: 16.4,
+        modelDurationFormatted: '16秒',
+        modelDurationFormattedEn: '16s',
+        inFlightModelDurationSeconds: 0,
+        activeModelStepCount: 0,
+        toolDurationSeconds: 6.3,
+        toolDurationFormatted: '6秒',
+        toolDurationFormattedEn: '6s',
+        inFlightToolDurationSeconds: 0,
+        activeToolStepCount: 0,
+        currentTurnDurationSeconds: 12.7,
+        currentTurnDurationFormatted: '13秒',
+        currentTurnDurationFormattedEn: '13s',
+        currentTurnDurationCompactZh: '本轮 13s',
+        currentTurnDurationCompactEn: 'Turn 13s',
+      },
+      tokens: { totalTokens: 200 },
+      context: { hasUsageData: true, usedRatio: 0.1 },
+    });
+    assert.equal(inst.turnClockTimer, null);
+    assert.equal(inst.modelClockAnchor, null);
+    assert.equal(inst.toolClockAnchor, null);
+    assert.equal(sr.querySelector('#val-model-dur').textContent, '16秒');
+    assert.equal(sr.querySelector('#val-tool-dur').textContent, '6秒');
+    inst.dispose();
+  });
+
+  it('独立子智能体分栏 (isSubpane) 采用同一套小圆点状态机语义，且不自报嵌套子智能体', () => {
+    const doc = new FakeElement('document');
+    doc.body = new FakeElement('body', doc);
+    const mgr = new AntigravityHudManager();
+    const subView = new FakeElement('div', doc);
+    subView.setAttribute('data-testid', 'subagent-tab-conversation');
+    subView.setAttribute('data-cascade-id', 'sub-conv-1');
+    subView.setAttribute('data-media-drop-scope', 'subpane');
+
+    // 1. 子智能体分栏自身思考中 -> generating（常亮蓝），且不误报 nested subagent
+    const thinkingMarker = new FakeElement('div', doc);
+    thinkingMarker.setAttribute('data-testid', 'browser-subagent-thinking');
+    subView.appendChild(thinkingMarker);
+    assert.equal(mgr.resolveSubagentState(subView, { isSubpane: true }).isSubagentRunning, false);
+    assert.equal(mgr.resolveActivityPhase(subView, null, { isSubpane: true }), 'generating');
+
+    // 2. 子智能体自身执行工具（Stop subagent + 工具 shimmer）-> executing（呼吸蓝）
+    thinkingMarker.remove();
+    const stopSubBtn = new FakeElement('button', doc);
+    stopSubBtn.setAttribute('aria-label', 'Stop subagent');
+    subView.appendChild(stopSubBtn);
+    const toolShimmer = new FakeElement('span', doc);
+    toolShimmer.className = 'animate-shimmer-text';
+    toolShimmer.textContent = 'Running read_file';
+    subView.appendChild(toolShimmer);
+    assert.equal(mgr.resolveSubagentState(subView, { isSubpane: true }).isSubagentRunning, false);
+    assert.equal(mgr.resolveActivityPhase(subView, null, { isSubpane: true }), 'executing');
+
+    // 3. 子智能体停止，即使残留 .codicon-loading 与旧 shimmer -> idle（灰色）
+    stopSubBtn.remove();
+    const staleLoading = new FakeElement('span', doc);
+    staleLoading.className = 'codicon-loading';
+    subView.appendChild(staleLoading);
+    assert.equal(mgr.resolveActivityPhase(subView, null, { isSubpane: true }), 'idle');
+
+    mgr.dispose();
+  });
+
+  it('上下文进度条采用单色渐深蓝平滑演进，压缩次数徽章严格呈 1 轻蓝 / 2 实心琥珀 / 3+ 实心正红三级联动', () => {
+    const parseRgb = (str) => {
+      const m = String(str).match(/rgb\(\s*(\d+),\s*(\d+),\s*(\d+)\s*\)/i);
+      assert.ok(m, `应输出 rgb() 格式颜色，实际 ${str}`);
+      return [Number(m[1]), Number(m[2]), Number(m[3])];
+    };
+    const renderMeter = ({ compactionCount = 0, usedRatio = 0.2, dark = false }) => {
+      const instance = new HudInstance();
+      const host = new FakeElement('div');
+      const shadow = host.attachShadow({ mode: 'open' });
+      host.shadowRoot = shadow;
+      if (dark) host.setAttribute('data-theme', 'dark');
+      instance.host = host;
+      instance.shadow = shadow;
+      shadow.innerHTML = instance.buildHudHtml();
+      instance.isDarkTheme = dark;
+      instance.switchConversation('conv-ctx-meter');
+      instance.applyMetricsToDom({
+        conversationId: 'conv-ctx-meter',
+        sessionRevision: instance.getSessionRevision(),
+        updatedAt: Date.now(),
+        isStreaming: false,
+        session: { turns: 1, steps: 2, compactionCount },
+        tokens: { totalTokens: 1000 },
+        context: { hasUsageData: true, usedTokens: 1000, usedRatio, isFallbackCapacity: false },
+      });
+      return instance;
+    };
+
+    // 1. 浅色模式下 15% -> 50% -> 95% 保持单调加深的同一蓝色系，95% 也不跳变黄/红
+    const r15 = renderMeter({ compactionCount: 1, usedRatio: 0.15 });
+    const r50 = renderMeter({ compactionCount: 2, usedRatio: 0.5 });
+    const r95 = renderMeter({ compactionCount: 4, usedRatio: 0.95 });
+
+    const fill15 = parseRgb(r15.shadow.querySelector('#hud-meter-fill').getAttribute('fill'));
+    const fill50 = parseRgb(r50.shadow.querySelector('#hud-meter-fill').getAttribute('fill'));
+    const fill95 = parseRgb(r95.shadow.querySelector('#hud-meter-fill').getAttribute('fill'));
+    assert.ok(fill15[2] > fill15[0] && fill50[2] > fill50[0] && fill95[2] > fill95[0], '所有阶段必须保持蓝色主通道占优');
+    assert.ok(fill15[0] > fill50[0] && fill50[0] > fill95[0], '浅色模式红色分量应随占比递增而单调加深');
+    assert.ok(fill15[1] > fill50[1] && fill50[1] > fill95[1], '浅色模式绿色分量应随占比递增而单调加深');
+
+    // 2. 深色模式下同样保持冰蓝 -> 品牌亮蓝 -> 电光深蓝单调加深
+    const dark10Inst = renderMeter({ compactionCount: 1, usedRatio: 0.1, dark: true });
+    const dark90Inst = renderMeter({ compactionCount: 3, usedRatio: 0.9, dark: true });
+    const dark10 = parseRgb(dark10Inst.shadow.querySelector('#hud-meter-fill').getAttribute('fill'));
+    const dark90 = parseRgb(dark90Inst.shadow.querySelector('#hud-meter-fill').getAttribute('fill'));
+    assert.ok(dark10[2] > dark10[0] && dark90[2] > dark90[0], '深色模式同样必须保持单色蓝通道占优');
+    assert.ok(dark10[0] > dark90[0] && dark10[1] > dark90[1], '深色模式由浅冰蓝平滑过渡到高饱电光蓝');
+
+    // 3. 压缩次数徽章三级语义类与属性：1 -> low, 2 -> warn, 3+ -> danger, 0 -> 隐藏并清除
+    const badge1 = r15.shadow.querySelector('#hud-compaction-badge');
+    const badge2 = r50.shadow.querySelector('#hud-compaction-badge');
+    const badge4 = r95.shadow.querySelector('#hud-compaction-badge');
+    assert.equal(badge1.getAttribute('data-compaction-tier'), 'low');
+    assert.equal(badge1.classList.contains('is-compaction-low'), true);
+    assert.equal(badge2.getAttribute('data-compaction-tier'), 'warn');
+    assert.equal(badge2.classList.contains('is-compaction-warn'), true);
+    assert.equal(badge4.getAttribute('data-compaction-tier'), 'danger');
+    assert.equal(badge4.classList.contains('is-compaction-danger'), true);
+
+    const cleared = renderMeter({ compactionCount: 0, usedRatio: 0.3 });
+    const badge0 = cleared.shadow.querySelector('#hud-compaction-badge');
+    assert.equal(badge0.hasAttribute('hidden'), true);
+    assert.equal(badge0.getAttribute('data-compaction-tier'), null);
+    assert.equal(badge0.classList.contains('is-compaction-warn'), false);
+    assert.equal(badge0.classList.contains('is-compaction-danger'), false);
   });
 });

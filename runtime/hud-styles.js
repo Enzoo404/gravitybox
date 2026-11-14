@@ -36,8 +36,18 @@ export const HUD_STYLES_CSS = `
   --hud-seg-sys-color: #3186FF;
   --hud-seg-tool-color: #38BDF8;
   --hud-seg-msg-color: #10B981;
-  --hud-warn-color: #F59E0B;
-  --hud-danger-color: #EF4444;
+  /* 与原生 App / 菜单栏 accessibleWarningColor (#B45309) / accessibleDangerColor (#B91C1C) 同色系 */
+  --hud-warn-color: #B45309;
+  --hud-danger-color: #B91C1C;
+  --hud-compaction-low-bg: rgba(49, 134, 255, 0.14);
+  --hud-compaction-low-fg: #1D63D6;
+  --hud-compaction-low-border: rgba(49, 134, 255, 0.28);
+  --hud-compaction-warn-bg: linear-gradient(180deg, #D97706 0%, #B45309 100%);
+  --hud-compaction-warn-fg: #FFFFFF;
+  --hud-compaction-warn-shadow: 0 1px 2px rgba(180, 83, 9, 0.28), inset 0 0.5px 0 rgba(255, 255, 255, 0.24);
+  --hud-compaction-danger-bg: linear-gradient(180deg, #DC2626 0%, #B91C1C 100%);
+  --hud-compaction-danger-fg: #FFFFFF;
+  --hud-compaction-danger-shadow: 0 1px 2px rgba(185, 28, 28, 0.30), inset 0 0.5px 0 rgba(255, 255, 255, 0.24);
 
   /* 骨架屏扫描动效 Tokens (Light) */
   --hud-skeleton-base: rgba(10, 10, 12, 0.04);
@@ -84,8 +94,18 @@ export const HUD_STYLES_CSS = `
   --hud-seg-sys-color: #589BFF;
   --hud-seg-tool-color: #38BDF8;
   --hud-seg-msg-color: #34D399;
-  --hud-warn-color: #FBBF24;
-  --hud-danger-color: #F87171;
+  /* 与原生 App / 菜单栏 Dark systemOrange (#FF9F0A) / systemRed (#FF453A) 同色系 */
+  --hud-warn-color: #FF9F0A;
+  --hud-danger-color: #FF453A;
+  --hud-compaction-low-bg: rgba(88, 155, 255, 0.18);
+  --hud-compaction-low-fg: #93C5FD;
+  --hud-compaction-low-border: rgba(88, 155, 255, 0.34);
+  --hud-compaction-warn-bg: linear-gradient(180deg, #FF9F0A 0%, #D97706 100%);
+  --hud-compaction-warn-fg: #1C1917;
+  --hud-compaction-warn-shadow: 0 1px 2px rgba(217, 119, 6, 0.34), inset 0 0.5px 0 rgba(255, 255, 255, 0.28);
+  --hud-compaction-danger-bg: linear-gradient(180deg, #FF453A 0%, #DC2626 100%);
+  --hud-compaction-danger-fg: #FFFFFF;
+  --hud-compaction-danger-shadow: 0 1px 3px rgba(239, 68, 68, 0.36), inset 0 0.5px 0 rgba(255, 255, 255, 0.26);
 
   /* 骨架屏扫描动效 Tokens (Dark) */
   --hud-skeleton-base: rgba(255, 255, 255, 0.05);
@@ -251,7 +271,7 @@ export const HUD_STYLES_CSS = `
   opacity: 0.85;
 }
 
-/* 上下文常驻胶囊左侧压缩次数徽章 (0 次隐藏，>=1 次显示，不改变状态栏尺寸) */
+/* 上下文常驻胶囊左侧压缩次数徽章 (0 次隐藏，1 轻蓝 / 2 实心琥珀 / 3+ 实心正红) */
 .hud-compaction-badge {
   display: inline-flex;
   align-items: center;
@@ -261,8 +281,9 @@ export const HUD_STYLES_CSS = `
   padding: 0 3px;
   margin-right: 8px;
   border-radius: 9999px;
-  background: linear-gradient(180deg, #4794FF 0%, var(--hud-accent-blue) 100%);
-  color: #FFFFFF;
+  border: 1px solid var(--hud-compaction-low-border);
+  background: var(--hud-compaction-low-bg);
+  color: var(--hud-compaction-low-fg);
   font-size: 9px;
   font-weight: 600;
   line-height: 1;
@@ -270,20 +291,46 @@ export const HUD_STYLES_CSS = `
   font-variant-numeric: tabular-nums;
   flex-shrink: 0;
   box-sizing: border-box;
-  box-shadow: 0 1px 2px rgba(49, 134, 255, 0.24), inset 0 0.5px 0 rgba(255, 255, 255, 0.28);
+  box-shadow: none;
+  transition: background 180ms ease, color 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
+}
+
+.hud-compaction-badge.is-compaction-low {
+  border-color: var(--hud-compaction-low-border);
+  background: var(--hud-compaction-low-bg);
+  color: var(--hud-compaction-low-fg);
+  box-shadow: none;
+}
+
+.hud-compaction-badge.is-compaction-warn {
+  border-color: transparent;
+  background: var(--hud-compaction-warn-bg);
+  color: var(--hud-compaction-warn-fg);
+  box-shadow: var(--hud-compaction-warn-shadow);
+}
+
+.hud-compaction-badge.is-compaction-danger {
+  border-color: transparent;
+  background: var(--hud-compaction-danger-bg);
+  color: var(--hud-compaction-danger-fg);
+  box-shadow: var(--hud-compaction-danger-shadow);
 }
 
 .hud-compaction-badge[hidden] {
   display: none !important;
 }
 
-/* Antigravity 原生横向微缩计量条 (替代 DeepSeek 圆环图) */
+/* Antigravity 原生横向微缩计量条 (单色渐深蓝平滑填充) */
 .capsule-donut {
   width: 56px;
   height: 8px;
   flex-shrink: 0;
   margin-right: 6px;
   transition: width 150ms ease, margin-right 150ms ease;
+}
+
+#hud-meter-fill {
+  transition: width 150ms ease, fill 180ms ease;
 }
 
 .capsule-context.has-compaction {

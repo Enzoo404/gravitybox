@@ -28,7 +28,7 @@ export interface ConversationHudMetrics {
   updatedAt: number;
   /** 当前是否处于活跃流式生成中（含主智能体生成与子智能体后台运行） */
   isStreaming: boolean;
-  /** 当前精确活动阶段：idle=空闲灰，generating=模型思考输出常亮蓝，executing=脚本/工具/后台执行蓝色呼吸 */
+  /** 当前精确活动阶段（与当前分栏前台模型绑定）：idle=模型已停止/等待审批/仅后台任务或独立子智能体/空闲灰，generating=模型思考输出常亮蓝，executing=模型与工具互动蓝色呼吸 */
   activityPhase?: HudActivityPhase;
   /** 当前是否有子智能体正在运行 */
   isSubagentRunning?: boolean;
@@ -90,6 +90,14 @@ export interface ConversationHudMetrics {
     currentTurnModelDurationSeconds?: number;
     /** 本轮工具调用用时 (秒) */
     currentTurnToolDurationSeconds?: number;
+    /** 进行中（未完结）模型步骤实时累计用时 (秒) */
+    inFlightModelDurationSeconds?: number;
+    /** 当前活跃（未完结）模型步骤数量 */
+    activeModelStepCount?: number;
+    /** 进行中（未完结）工具步骤实时累计用时 (秒) */
+    inFlightToolDurationSeconds?: number;
+    /** 当前活跃（未完结）工具步骤数量 */
+    activeToolStepCount?: number;
   };
 
   /** 模块 2 & Popover 2: 累计 Token 账本 (100% 源自 steps.metadata field 9 ModelUsageStats) */

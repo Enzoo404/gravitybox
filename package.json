@@ -56,7 +56,9 @@
     "verify:2.31.0": "node tools/verify.mjs --target-app-version 2.31.0",
     "package:mac:2.31.0": "npm run verify:2.31.0 && node tools/package-mac.mjs --target-app-version 2.31.0",
     "verify:2.31.2": "node tools/verify.mjs --target-app-version 2.31.2",
-    "package:mac:2.31.2": "npm run verify:2.31.2 && node tools/package-mac.mjs --target-app-version 2.31.2"
+    "package:mac:2.31.2": "npm run verify:2.31.2 && node tools/package-mac.mjs --target-app-version 2.31.2",
+    "verify:2.32.1": "node tools/verify.mjs --target-app-version 2.32.1",
+    "package:mac:2.32.1": "npm run verify:2.32.1 && node tools/package-mac.mjs --target-app-version 2.32.1"
   },
   "engines": {
     "node": ">=22.15.0 <23"

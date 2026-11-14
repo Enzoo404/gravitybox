@@ -945,15 +945,11 @@ export function buildConversationHudMetrics(input: ComputeHudMetricsInput): Conv
   const isSubagentRunning = Boolean(input.isSubagentRunning || runningSubagentCount > 0);
   const dbForegroundActive = input.allowDbActiveStepInference === true && latestActiveForegroundKind !== null;
   const isStreaming = Boolean(input.isStreaming || isSubagentRunning || dbForegroundActive);
+  // 小圆点活动阶段严格绑定当前分栏前台模型状态（input.isStreaming）：
+  // 前台模型停止或等待审批时，即使仍有后台工具或独立子智能体运行，小圆点也保持 idle（灰色），同时保留 isStreaming 维持 300ms 轮询与计时。
   let activityPhase: HudActivityPhase = 'idle';
-  if (isStreaming) {
-    if (latestActiveForegroundKind === 'model') {
-      activityPhase = 'generating';
-    } else if (latestActiveForegroundKind === 'tool') {
-      activityPhase = 'executing';
-    } else if (input.activityPhase === 'executing' || input.activityPhase === 'generating') {
-      activityPhase = input.activityPhase;
-    } else if (!input.isStreaming && isSubagentRunning) {
+  if (input.isStreaming) {
+    if (input.activityPhase === 'executing' || latestActiveForegroundKind === 'tool') {
       activityPhase = 'executing';
     } else {
       activityPhase = 'generating';
@@ -995,6 +991,46 @@ export function buildConversationHudMetrics(input: ComputeHudMetricsInput): Conv
   let hasSubagentStepInTurn = false;
   const nowSeconds = nowMs / 1000;
   const allowActiveInference = input.allowDbActiveStepInference !== false;
+
+  let inFlightModelDurationSeconds = 0;
+  let activeModelStepCount = 0;
+  let inFlightToolDurationSeconds = 0;
+  let activeToolStepCount = 0;
+  for (let i = 0; i < steps.length; i++) {
+    const rawStep = steps[i]!;
+    const step =
+      i < contextSteps.length &&
+      contextSteps[i]?.idx === rawStep.idx &&
+      (contextSteps[i]?.step_type ?? contextSteps[i]?.stepType ?? 0) ===
+        (rawStep.step_type ?? rawStep.stepType ?? 0)
+        ? contextSteps[i]!
+        : rawStep;
+    const stepType = step.step_type ?? step.stepType ?? 0;
+    if (stepType === 14) continue;
+    const start = step.t_start ?? step.startTimeSeconds;
+    const end = step.t_end ?? step.endTimeSeconds;
+    const rawStatus = step.status ?? 3;
+    const complete =
+      rawStatus === 3 ||
+      (rawStatus === 5 &&
+        (step.generation !== undefined ||
+          step.finishedGeneratingSeconds != null ||
+          step.completedAtSeconds != null ||
+          step.t_end != null));
+    if (complete || !validSeconds(start)) continue;
+    const isStepActive = ACTIVE_STEP_STATUSES.has(rawStatus)
+      ? allowActiveInference || isStreaming
+      : isStreaming && rawStatus !== 4 && end == null;
+    if (!isStepActive) continue;
+    const elapsed = Math.max(0, nowSeconds - start);
+    if (stepType === 15) {
+      inFlightModelDurationSeconds += elapsed;
+      activeModelStepCount++;
+    } else if (!NON_TOOL_STEP_TYPES.has(stepType)) {
+      inFlightToolDurationSeconds += elapsed;
+      activeToolStepCount++;
+    }
+  }
 
   const trackWallStart = (ts: number | null | undefined) => {
     if (validSeconds(ts)) {
@@ -1164,6 +1200,10 @@ export function buildConversationHudMetrics(input: ComputeHudMetricsInput): Conv
       currentTurnDurationCompactEn,
       currentTurnModelDurationSeconds,
       currentTurnToolDurationSeconds,
+      inFlightModelDurationSeconds,
+      activeModelStepCount,
+      inFlightToolDurationSeconds,
+      activeToolStepCount,
     },
     tokens: {
       totalTokens,

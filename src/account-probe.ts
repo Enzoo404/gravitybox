@@ -65,7 +65,8 @@ export async function localRpcFetch(
   port: number,
   path: string,
   csrfToken: string,
-  body = '{}'
+  body = '{}',
+  timeoutMs = 2500
 ): Promise<any> {
   return new Promise((resolveReply, rejectReply) => {
     const isHttps = protocol === 'https';
@@ -82,7 +83,7 @@ export async function localRpcFetch(
           'Content-Length': Buffer.byteLength(body),
         },
         rejectUnauthorized: false,
-        timeout: 2500,
+        timeout: timeoutMs,
       },
       res => {
         let data = '';
@@ -231,12 +232,13 @@ export async function probeLiveLanguageServerOnce(
         } else {
           const fallbackProtocol: 'https' | 'http' = activeProtocol === 'https' ? 'http' : 'https';
           const reqBody = JSON.stringify({ forceRefresh: options.forceRefresh === true });
+          const summaryTimeoutMs = 6000;
           try {
-            const qRes = await localRpcFetch(activeProtocol, port, '/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary', csrfToken, reqBody);
+            const qRes = await localRpcFetch(activeProtocol, port, '/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary', csrfToken, reqBody, summaryTimeoutMs);
             quotaSummaryData = qRes?.response || qRes;
           } catch {
             try {
-              const qRes = await localRpcFetch(fallbackProtocol, port, '/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary', csrfToken, reqBody);
+              const qRes = await localRpcFetch(fallbackProtocol, port, '/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary', csrfToken, reqBody, summaryTimeoutMs);
               quotaSummaryData = qRes?.response || qRes;
             } catch {}
           }

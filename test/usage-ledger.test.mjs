@@ -270,13 +270,13 @@ test('账号下钻筛选器：首项全部账号，后续依次排列真实账�
   }
 });
 
-test('同 Gmail 账号无论个人订阅还是企业 Vertex AI 均合并归入该 Gmail 账号', async () => {
+test('同账号无论个人订阅还是企业 Vertex AI 均合并归入该账号', async () => {
   const tempDir = await mkdtemp(join(tmpdir(), 'gb-same-gmail-merge-'));
   try {
     const manager = new UsageStatsManager({ stateDir: tempDir, geminiDir: '/synthetic/gemini' });
     manager.setKnownAccounts([
-      { id: 'acc_same', email: 'sameuser@gmail.com', name: 'SameUser' },
-      { id: 'acc_other', email: 'other@gmail.com', name: 'OtherUser' },
+      { id: 'acc_same', email: 'sameuser@example.com', name: 'SameUser' },
+      { id: 'acc_other', email: 'other@example.com', name: 'OtherUser' },
     ]);
 
     const now = Math.floor(Date.now() / 1000);
@@ -292,7 +292,7 @@ test('同 Gmail 账号无论个人订阅还是企业 Vertex AI 均合并归入�
           total_tokens: 1200,
           timestamp_seconds: now - 120,
           account_id: 'acc_same',
-          account_email: 'sameuser@gmail.com',
+          account_email: 'sameuser@example.com',
           account_type: 'consumer',
           account_confidence: 'observed',
         },
@@ -305,7 +305,7 @@ test('同 Gmail 账号无论个人订阅还是企业 Vertex AI 均合并归入�
           total_tokens: 2500,
           timestamp_seconds: now - 60,
           account_id: 'acc_same',
-          account_email: 'sameuser@gmail.com',
+          account_email: 'sameuser@example.com',
           account_type: 'enterprise_vertex',
           account_confidence: 'observed',
         },

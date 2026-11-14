@@ -1079,10 +1079,10 @@ final class MenuPanelController: NSViewController {
         }
         if let singleErr = app.singleAccountRefreshErrors[id], !singleErr.isEmpty {
             warnings.append(InterfaceText.quotaMessage(singleErr))
-        } else if let globalErr = app.quotaRefreshError, !globalErr.isEmpty {
-            warnings.append(InterfaceText.quotaMessage(globalErr))
         } else if let refreshErr = account["quota_refresh_error"] as? String, !refreshErr.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !refreshErr.contains("双周期") {
             warnings.append(InterfaceText.quotaMessage(refreshErr))
+        } else if let globalErr = app.quotaRefreshError, !globalErr.isEmpty, !InterfaceText.isMultiAccountSummary(globalErr) {
+            warnings.append(InterfaceText.quotaMessage(globalErr))
         }
         if let quota = account["quota"] as? [String: Any], let staleGroups = quota["stale_groups"] as? [[String: Any]], !staleGroups.isEmpty {
             let names = staleGroups.compactMap { $0["name"] as? String }.filter { !$0.isEmpty }

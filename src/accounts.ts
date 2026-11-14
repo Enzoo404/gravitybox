@@ -1298,10 +1298,15 @@ export class AccountsManager {
     if (!account) throw new Error(`找不到 ID 为 ${targetId} 的账号`);
 
     // 1) 本机 live 优先：仅当邮箱严格匹配且返回模型记录时采用（不跨账号借数据）。
+    // 若 RetrieveUserQuotaSummary 超时/失败导致 quota_groups 为空，且账号具备 refresh_token，则回退云端接口补全分组。
     signal?.throwIfAborted();
     const lsStatus = await this.probeLiveLanguageServer(fetchImpl, {forceRefresh:true});
     signal?.throwIfAborted();
-    if (lsStatus && account.email && lsStatus.email && lsStatus.email.trim().toLowerCase() === account.email.trim().toLowerCase() && (lsStatus.quota.models?.length ?? 0) > 0) {
+    const liveSummaryFailed = lsStatus?.quota?.refresh_state?.endpointsAttempted?.includes('live:RetrieveUserQuotaSummary') === true
+      && lsStatus.quota.refresh_state?.endpointsSucceeded?.includes('live:RetrieveUserQuotaSummary') !== true
+      && (lsStatus.quota.quota_groups?.length ?? 0) === 0;
+    const canFallbackToCloud = liveSummaryFailed && Boolean(account.token?.refresh_token);
+    if (lsStatus && account.email && lsStatus.email && lsStatus.email.trim().toLowerCase() === account.email.trim().toLowerCase() && (lsStatus.quota.models?.length ?? 0) > 0 && !canFallbackToCloud) {
       const fresh = lsStatus.quota;
       const freshState = this.getAccountQuotaOverview({ quota: fresh }).refreshState;
       const old = account.quota;

@@ -72,12 +72,12 @@
   if (globalThis[KEY]) { globalThis[KEY].setShortcutEnabled?.(options.shortcutEnabled !== false); globalThis[KEY].update(options.dictionary); return; }
   let shortcutEnabled = options.path === '/fixture' && options.shortcutEnabled !== false;
   const ownedProjectMarkers = new Set();
-  const UI = '[data-gravitybox-ui],button,a[href],h1,h2,h3,h4,[role="navigation"],[role="button"],[role="menuitem"],[role="tab"],[role="option"],[role="tooltip"],[role="dialog"],[role="status"],[role="alert"],[role="banner"],label,th,td,summary,figcaption,.monaco-menu-item,[data-sonner-toast],[role="listitem"],[role="region"],[data-testid*="settings"],[data-testid*="preferences"],[data-testid*="empty"],[data-testid*="notice"],[data-testid*="banner"],[data-testid*="card"],[data-testid*="header"],[data-testid*="sidecar"],[data-testid*="trigger"],[data-testid="agent-input-box"],[contenteditable="true"][role="combobox"]+p,[data-testid="cascade-system-message-toolbar"],[data-testid="turn-cards-container"],[data-select-popup],[role="menu"],[role="listbox"]';
+  const UI = '[data-gravitybox-ui],button,a[href],h1,h2,h3,h4,[role="navigation"],[role="button"],[role="menuitem"],[role="tab"],[role="option"],[role="tooltip"],[role="dialog"],[role="status"],[role="alert"],[role="banner"],label,th,td,summary,figcaption,.monaco-menu-item,[data-sonner-toast],[role="listitem"],[role="region"],[data-testid*="settings"],[data-testid*="preferences"],[data-testid*="empty"],[data-testid*="notice"],[data-testid*="banner"],[data-testid*="card"],[data-testid*="header"],[data-testid*="sidecar"],[data-testid*="trigger"],[data-testid="agent-input-box"],[contenteditable="true"][role="combobox"]+p,[data-testid="cascade-system-message-toolbar"],[data-testid="turn-cards-container"],[data-testid="side-question-followup-thinking"],[data-select-popup],[role="menu"],[role="listbox"]';
   const UI_SELECTOR = 'button, [role="button"], [role="tab"], [role="menuitem"], [role="tooltip"], [role="option"], label, option, th, td, summary, figcaption, .monaco-menu-item, [data-sonner-toast], [role="listitem"], [role="region"], h1, h2, h3, h4, [data-select-popup], [role="menu"], [role="listbox"]';
   /* PROTECTED keeps user content, code and editors in English. `[data-testid="conversation-row-sidebar"]`
      is the container the app really uses for the conversation list: its title <span> is NOT inside
      `a[href^="/c/"]`, so relying on the anchor alone left conversation titles translatable. */
-  const PROTECTED = 'script,style,code,pre,input,textarea,svg,canvas,.file-tree,[data-message-id],[contenteditable]:not([contenteditable="false"]),[data-gravitybox-protect],[data-message-author-role],[data-testid*="message"]:not([data-testid="cascade-system-message-toolbar"]),[data-testid*="conversation-title"],[data-testid="conversation-row-sidebar"],[data-testid*="conversation-row"],[data-testid*="model"],[data-testid*="artifact"],[data-testid="planner-response-text"],[data-testid="user-input-step"],[data-testid="breadcrumb-segment"],[data-testid="project-header"],[data-testid="project-selector-trigger"],a[href^="/c/"],a[href*="/c/"],.monaco-editor,.xterm,.markdown,.markdown-frontmatter,.markdown-alert-title,.notebook-markdown-cell,.prose,[role="log"],.chat-message,.message-content,.conversation-title,.terminal,.output-view,.debug-console,.code-view,.artifact-container,.model-item,.gravitybox-project-name,[data-testid*="attachment"],[data-testid*="file-chip"],[data-testid*="context-chip"]';
+  const PROTECTED = 'script,style,code,pre,input,textarea,svg,canvas,.file-tree,[data-message-id],[contenteditable]:not([contenteditable="false"]),[data-gravitybox-protect],[data-message-author-role],[data-testid*="message"]:not([data-testid="cascade-system-message-toolbar"]),[data-testid*="conversation-title"],[data-testid="conversation-row-sidebar"],[data-testid*="conversation-row"],[data-testid*="model"],[data-testid*="artifact"],[data-testid="planner-response-text"],[data-testid="user-input-step"],[data-testid="breadcrumb-segment"],[data-testid="project-header"],[data-testid="project-selector-trigger"],a[href^="/c/"],a[href*="/c/"],.monaco-editor,.xterm,.markdown,.markdown-frontmatter,.markdown-alert-title,.notebook-markdown-cell,.prose,[role="log"],.chat-message,.message-content,.conversation-title,.terminal,.output-view,.debug-console,.code-view,.artifact-container,.model-item,.gravitybox-project-name,[data-testid*="attachment"],[data-testid*="file-chip"],[data-testid*="context-chip"],[data-testid="side-question-followup-user"],[data-testid="voice-transcript-summary"],[data-testid="coordinator-card-latest-line"],[data-testid="coordinator-worker-card"] .truncate';
   /* J01 positive user-content contract. A container marked `data-gravitybox-user-content` or an element
      marked `data-gravitybox-user-name` is user-authored text: never translated, never collected. On top
      of the explicit contract (usable by adapters and tests) entity surfaces are recognised
@@ -87,7 +87,7 @@
      (buttons, tabs, command menus) remain translatable: a `[role="menuitem"]` only counts as a name
      inside an entity container or a row with per-item actions. */
   const USER_CONTENT = '[data-gravitybox-user-content],[data-gravitybox-user-name]';
-  const ENTITY_HREF = /^\/(?:c(?:\/|\/(?:[0-9a-f-]{36}|_new)(?:\/.*)?)?|customizations\/(?:plugins|skills|automations)\/[\w.-]+|marketplaces\/[\w.-]+\/plugins\/[\w.-]+|automations\/[\w.-]+|projects\/[\w.-]+|sidecars\/[\w.-]+)$/i;
+  const ENTITY_HREF = /^\/(?:c(?:\/|\/(?:[0-9a-f-]{36}|_new)(?:\/.*)?)?|customizations\/(?:plugins|skills|automations|sidecars)\/[\w.-]+|(?:customizations\/)?marketplaces\/[\w.-]+\/(?:plugins|skills|bundles)\/[\w.-]+|automations\/[\w.-]+|projects\/[\w.-]+|sidecars\/(?:triggers\/)?[\w.-]+)$/i;
   const ENTITY_CONTAINER = '[data-gravitybox-user-content],[data-testid="automation-card"],[data-testid="automation-row"],[data-testid="automation-item"],[data-testid="automation-list-item"],[data-testid*="workspace"],[data-testid*="project"],[data-testid*="skill"],[data-testid*="plugin"],[data-testid*="marketplace"],[data-testid*="session"]';
   const ENTITY_ROW = '[data-testid*="card"],[data-testid*="row"],li,[role="listitem"],[role="option"],[role="menuitem"],tr';
   const ROW_ACTIONS = '[data-testid*="actions"],[data-testid*="menu-trigger"],[aria-label*="More actions" i],[aria-label*="更多操作"],[aria-label="More options" i]';
@@ -187,7 +187,7 @@
   function isValidUiText(raw) {
     if (!raw || typeof raw !== 'string') return false;
     const text = normalize(raw);
-    if (text.length < 2 || text.length > 120) return false;
+    if (text.length < 2 || text.length > 400) return false;
     if (!/[a-zA-Z]{2,}/.test(text)) return false;
     if (/[\u3400-\u9fff]/.test(text)) return false;
     if (/(?:https?:\/\/|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}|(?:^|\s)(?:\/|~\/|[A-Za-z]:\\)|\b(?:sk-|AIza)[A-Za-z0-9_-]{12,})/.test(text)) return false;
@@ -426,7 +426,7 @@
 
   const MODEL_LABELS = new Set(['Model', 'Usage', 'View Usage', 'Weekly limit', 'Daily limit', 'Weekly Limit Remaining', 'Five Hour Limit Remaining', 'Gemini Models', 'Claude and GPT models', 'Gemini 4 Argon', 'Gemini 4 Argon Weekly Limit', 'Gemini 4 Carbon', 'Gemini 4 Carbon Weekly Limit', 'New', 'Notice', 'Unavailable', 'Refreshing...', 'No quota information available.', '% left']);
   const MODEL_GROUP_LABEL = /^Models within this group:\s*((?:(?:Gemini|Claude|GPT)[\w .,+()/-]{0,399})?)$/i;
-  const MODEL_LIMIT_LABEL = /^(?:\d+[smhd]\s+limit|Gemini \d+(?:\.\d+)? [A-Za-z][\w-]{0,48} (?:Weekly|Daily|Five Hour) Limit)$/i;
+  const MODEL_LIMIT_LABEL = /^(?:\d+[smhd]\s+limit|Gemini(?:\s+\d+(?:\.\d+)?)?(?:\s+[A-Za-z][\w-]{0,48}){1,3}\s+(?:Weekly|Daily|Five Hour)\s+Limit)$/i;
   const MODEL_PERCENT_LEFT = /^(?:\d+%\s+)?left$/i;
   const MODEL_RESET_LABEL = /^(?:(?:Weekly|Daily|\d+[smhd])\s+limit,\s*)?resets in (?:<1m|\d+[dhms](?:\s+\d+[dhms])*)$/i;
   function modelUiLabel(element) {
@@ -457,7 +457,7 @@
     if(!root?.contains(button))return false;
     // The small standalone expansion control is built-in navigation, unlike project rows.
     const original=nodeSlots.get(button.firstChild)?.get('')?.original??button.textContent??'';
-    if(button.matches('.text-xs.mx-4.hover\\:underline')&&['Show All','Show all','显示全部','Collapse','收起'].includes(normalize(original)))return false;
+    if(button.matches('.mx-4.hover\\:underline:is(.text-xs,.text-sm)')&&['Show All','Show all','Show Less','Show less','显示全部','Collapse','收起'].includes(normalize(original)))return false;
     const headings=[...root.querySelectorAll('h2')].filter(e=>!pane.contains(e));
     const label=e=>(e.textContent||'').replace(/\s+/g,' ').trim();
     const start=headings.find(e=>['Projects','Project list','项目列表','项目'].includes(label(e)));
@@ -527,7 +527,9 @@
   }
 
   const TEMPLATE_RULES = [
-    { key: "{model} Weekly Limit", pattern: /^(Gemini \d+(?:\.\d+)? [A-Za-z][\w-]{0,48}) Weekly Limit$/i, replace: (_, model) => `${model} 每周限额` },
+    { key: "{model} Weekly Limit", pattern: /^(Gemini(?:\s+\d+(?:\.\d+)?)?(?:\s+[A-Za-z][\w-]{0,48}){1,3})\s+Weekly\s+Limit$/i, replace: (_, model) => `${model} 每周限额` },
+    { key: "{model} Daily Limit", pattern: /^(Gemini(?:\s+\d+(?:\.\d+)?)?(?:\s+[A-Za-z][\w-]{0,48}){1,3})\s+Daily\s+Limit$/i, replace: (_, model) => `${model} 每日限额` },
+    { key: "{model} Five Hour Limit", pattern: /^(Gemini(?:\s+\d+(?:\.\d+)?)?(?:\s+[A-Za-z][\w-]{0,48}){1,3})\s+Five\s+Hour\s+Limit$/i, replace: (_, model) => `${model} 5小时限额` },
     { key: "Models within this group: {models}", pattern: MODEL_GROUP_LABEL, replace: (_, models) => `此组包含的模型：${models}` },
     { key: "Load older messages, showing {shown} of {total}", pattern: /^Load older messages, showing (\d+) of (\d+)$/i, replace: (_,shown,total) => `加载更早消息（已显示 ${shown} / ${total} 条）` },
     {
@@ -1414,6 +1416,11 @@
     {
       key: "Open the {name} plugin", pattern: /^Open\s+the\s+(.+?)\s+plugin$/i,
       replace: (_, n) => `打开 ${n} 插件`
+    },
+    {
+      key: "Cancel Questionnaire and Stop the Agent ({shortcut})",
+      pattern: /^Cancel\s+Questionnaire\s+and\s+Stop\s+the\s+Agent\s+\(([^)]+)\)$/i,
+      replace: (_, s) => `取消问卷并停止智能体 (${s})`
     }
   ];
 

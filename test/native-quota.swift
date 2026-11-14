@@ -76,6 +76,8 @@ import Cocoa
         check(ultraWithNewModel.carbon?.percentage == 85 && ultraWithNewModel.carbon?.title == "Gemini 4 Carbon · 每周", "Ultra Carbon quota parsed")
         check(ultraWithNewModel.extraStandaloneModels.count == 1 && ultraWithNewModel.extraStandaloneModels.first?.title == "Gemini 4 Neon · 每周" && ultraWithNewModel.extraStandaloneModels.first?.percentage == 92, "Auto-detected standalone model parsed")
         check(InterfaceText.quotaMessage("HTTP 403 (#3501)") == "许可校验失败 · 3501", "Concise service state")
+        check(InterfaceText.isMultiAccountSummary("已读取 1 个账号；2 个刷新失败。详情见账号卡片。"), "Detects multi-account summary message")
+        check(InterfaceText.quotaMessage("已读取 1 个账号；2 个刷新失败。详情见账号卡片。") == "部分账号配额未更新", "Multi-account partial error must not misreport current account failure")
         // Replaces JS copies of retired UI algorithms with production Swift contracts.
         let dual = QuotaPresentation.contract(["familyWindows":["gemini":[
             "fiveHour":["remaining":1.0,"known":true,"stale":false],

@@ -39,6 +39,14 @@ import Cocoa
         view.cacheDisplay(in:view.bounds,to:rep)
         try rep.representation(using:.png,properties:[:])!.write(to:url)
     }
+    static func allTextValues(_ v: NSView) -> [String] {
+        var values: [String] = []
+        if let tf = v as? NSTextField { values.append(tf.stringValue) }
+        if let btn = v as? NSButton { values.append(btn.title) }
+        if let pop = v as? NSPopUpButton { values.append(contentsOf: pop.itemTitles) }
+        for sub in v.subviews { values.append(contentsOf: allTextValues(sub)) }
+        return values
+    }
     static func main() throws {
         let application = NSApplication.shared
         let interactive = CommandLine.arguments.contains("--interactive")
@@ -59,7 +67,7 @@ import Cocoa
             let windows:[String:Any] = ["gemini":["fiveHour":bucket(91),"weekly":bucket(33)],"claude":["fiveHour":bucket(current ? 0 : 100),"weekly":bucket(48)]]
             return ["id":id,"name":name,"email":email,"subscription_tier":"PRO","revision":id,"familyWindows":windows,"argonStatus":["availability":"available","quotaState":"known","period":"weekly","remaining":0.008],"quota":["last_updated":Date().timeIntervalSince1970,"source":"live"],"models":[]]
         }
-        var accounts = [account("a","Alex","alex@example.invalid",true),account("b","无限","second-long-email@example.invalid",false),account("c","Charlie","third@example.invalid",false)]
+        var accounts = [account("a","Alex","alex@example.invalid",true),account("b","Bob","bob@example.invalid",false),account("c","Charlie","charlie@example.invalid",false)]
         accounts[2]["subscription_tier"] = "FREE"
         accounts[2]["familyWindows"] = ["gemini":["weekly":bucket(100,reset:"6天23小时后重置")],"claude":["weekly":bucket(100,reset:"6天23小时后重置")]]
         accounts[2]["familyModelQuota"] = ["gemini":bucket(100,reset:"4小时59分后重置"),"claude":bucket(100,reset:"6天23小时后重置")]
@@ -291,7 +299,7 @@ import Cocoa
             freeHost.contentViewController = freeMenuPanel
             freeMenuPanel.selectTab(1, persist: false); freeMenuPanel.panelWillOpen(); pump()
             freeHost.setContentSize(freeMenuPanel.preferredContentSize); freeHost.contentView?.layoutSubtreeIfNeeded(); pump()
-            check(freeMenuPanel.quotaEmailLabel.stringValue == "third@example.invalid", "Full email lost on MenuPanelController")
+            check(freeMenuPanel.quotaEmailLabel.stringValue == "charlie@example.invalid", "Full email lost on MenuPanelController")
             check(freeMenuPanel.quotaGemini5h.titleLabel.stringValue == "模型配额" && freeMenuPanel.quotaGemini5h.valueLabel.stringValue == "100%", "Menu must show FREE model quota")
             check(freeMenuPanel.quotaClaude5h.resetLabel.stringValue.contains("6天23小时"), "Menu must preserve the real long model reset")
             try capture(freeHost.contentView!,output.appendingPathComponent("\(theme)-free-model-menu.png"))
@@ -435,6 +443,107 @@ import Cocoa
             secondCard.stateButton.performClick(nil)
             check(switchedAccountId == secondCard.accountId, "Clicking account stateButton must trigger account switch independently")
         }
+
+        // Package C: MenuPanelController edge states & switches
+        check(menuPanel.openAntigravityBtn.title == "打开 Antigravity", "MenuPanel openAntigravityBtn title must be 打开 Antigravity")
+        check(menuPanel.openMainBtn.title.hasPrefix("打开") && menuPanel.openMainBtn.title.hasSuffix("↗"), "MenuPanel openMainBtn title must be 打开... ↗")
+
+        // Tab 0 (Usage) empty models & toggle
+        menuPanel.selectTab(0, persist: false); pump()
+        if var emptyModelReport = assistant.cachedUsageReportsByPeriod["today"] {
+            emptyModelReport["byModel"] = []
+            emptyModelReport["snapshotId"] = "empty-models-snap"
+            assistant.cachedUsageReportsByPeriod["today"] = emptyModelReport
+            menuPanel.onUsageReportUpdated(period: "today", result: .success(emptyModelReport))
+            check(menuPanel.modelsHeaderCountLabel.stringValue == "暂无记录", "Empty models must show 暂无记录")
+            check(allTextValues(menuPanel.modelsListStack).contains { $0.contains("当前时间范围暂无模型调用记录") }, "Empty models must show placeholder")
+            check(menuPanel.toggleModelsButton.isHidden == true, "Empty models must hide toggleModelsButton")
+        }
+
+        // Tab 0 period switching
+        menuPanel.selectPeriod(1, persist: false); pump()
+        check(menuPanel.trendTitleLabel.stringValue == "近 7 天趋势", "Period 1 must show 近 7 天趋势")
+        menuPanel.selectPeriod(3, persist: false); pump()
+        check(menuPanel.trendTitleLabel.stringValue == "全部趋势", "Period 3 must show 全部趋势")
+        menuPanel.selectPeriod(0, persist: false); pump()
+
+        // Tab 0 offline state
+        assistant.reachable = false
+        assistant.cachedUsageReportsByPeriod.removeValue(forKey: "today")
+        menuPanel.selectTab(0, persist: false); pump()
+        check(menuPanel.usageScopeLabel.stringValue == "正在等待本机服务…", "Offline Tab 0 must show 正在等待本机服务…")
+        check(menuPanel.usageFooterLabel.stringValue == "本机服务离线", "Offline Tab 0 footer must show 本机服务离线")
+        check(menuPanel.tokensTile.valueLabel.stringValue == "—", "Offline metric tiles must show —")
+
+        // Tab 0 unavailable state
+        assistant.reachable = true
+        assistant.cachedUsageReportsByPeriod["today"] = [
+            "summary": ["availability": "unavailable"]
+        ]
+        menuPanel.selectTab(0, persist: false); pump()
+        check(menuPanel.usageScopeLabel.stringValue == "所选会话数据库均读取失败", "Unavailable Tab 0 must show 所选会话数据库均读取失败")
+        check(menuPanel.usageFooterLabel.stringValue.contains("统计暂不可用"), "Unavailable Tab 0 footer must show 统计暂不可用")
+
+        // Tab 1 (Quota) empty & live unsaved
+        let savedFixtureAccounts = accounts
+        let savedMenuAccounts = assistant.cachedAccounts
+        let savedActiveId = assistant.activeAccountId
+        let savedLiveStatus = assistant.statusValue
+
+        accounts = []
+        assistant.cachedAccounts = []
+        assistant.activeAccountId = ""
+        assistant.statusValue = LiveStatus(["mode": "adaptive", "liveAccountEmail": ""])
+        menuPanel.selectTab(1, persist: false); pump()
+        check(menuPanel.quotaAccountNameLabel.stringValue == "尚未保存账号", "Empty quota tab must show 尚未保存账号")
+        check(menuPanel.quotaEmptyButton.isHidden == false, "Empty quota tab must show quotaEmptyButton")
+        check(menuPanel.quotaGroupsContainer.isHidden == true, "Empty quota tab must hide quotaGroupsContainer")
+
+        assistant.statusValue = LiveStatus(["mode": "adaptive", "liveAccountEmail": "unsaved@example.invalid"])
+        menuPanel.selectTab(1, persist: false); pump()
+        check(menuPanel.quotaAccountNameLabel.stringValue == "运行中账号尚未保存", "Unsaved live account must show 运行中账号尚未保存")
+        check(menuPanel.quotaEmailLabel.stringValue.contains("unsaved@example.invalid"), "Unsaved live account must show email in subtitle")
+
+        // Tab 1 refreshing state & global multi-account summary isolation
+        accounts = savedFixtureAccounts
+        assistant.cachedAccounts = savedMenuAccounts
+        assistant.activeAccountId = savedActiveId
+        assistant.quotaRefreshError = "已读取 1 个账号；2 个刷新失败。详情见账号卡片。"
+        menuPanel.selectTab(1, persist: false); pump()
+        check(menuPanel.quotaWarningLabel.isHidden == true, "Multi-account partial summary must not pollute healthy current account warning label")
+        assistant.quotaRefreshError = "刷新超时，请重试；保留上次配额"
+        menuPanel.selectTab(1, persist: false); pump()
+        check(menuPanel.quotaWarningLabel.isHidden == false && menuPanel.quotaWarningLabel.stringValue == "配额查询超时", "Transport/timeout global error must still display on current quota tab")
+        assistant.quotaRefreshError = nil
+        assistant.quotaRefreshing = true
+        menuPanel.selectTab(1, persist: false); pump()
+        check(menuPanel.quotaFooterLabel.stringValue == "正在刷新配额…", "Refreshing quota must show 正在刷新配额…")
+        assistant.quotaRefreshing = false
+
+        // Tab 2 (Accounts) empty online & offline
+        accounts = []
+        assistant.cachedAccounts = []
+        assistant.reachable = true
+        menuPanel.selectTab(2, persist: false); pump()
+        check(menuPanel.accountsCountLabel.stringValue == "0 个账号", "Empty accounts count must be 0 个账号")
+        check(allTextValues(menuPanel.accountsCardsStack).contains { $0.contains("尚未保存任何 Google 账号") }, "Empty accounts tab must show guidance")
+
+        assistant.reachable = false
+        menuPanel.selectTab(2, persist: false); pump()
+        check(allTextValues(menuPanel.accountsCardsStack).contains { $0.contains("正在等待本机服务读取账号列表…") }, "Offline accounts tab must show waiting message")
+
+        // Restore accounts and reports
+        accounts = savedFixtureAccounts
+        assistant.reachable = true
+        assistant.cachedAccounts = savedMenuAccounts
+        assistant.activeAccountId = savedActiveId
+        assistant.statusValue = savedLiveStatus
+        assistant.cachedUsageReportsByPeriod["today"] = [
+            "summary": totals,
+            "byModel": models,
+            "todayHourly": todayHourly
+        ]
+        menuPanel.selectTab(0, persist: false); pump()
         assistant.openMainWindowFromMenuPanel(tab: 0, usagePeriod: 2); pump()
         check(assistant.currentPage == 2 && assistant.usageSelectedPeriod == 2, "Footer deep-link from Usage tab must navigate to UsagePage and carry selected period")
         check(assistant.usagePage!.donutChart.totalUsd == 23.78, "Donut chart must receive total equivalent USD")
@@ -555,14 +664,6 @@ import Cocoa
         check(assistant.targetApplication.bundleIdentifier == "com.google.antigravity", "Native target must be stable")
         check(DesktopApplicationTarget.installedChannels() == ["stable"], "Insiders must not be discoverable")
         let stableSettings = PreferencesController(app: assistant)
-        func allTextValues(_ v: NSView) -> [String] {
-            var values: [String] = []
-            if let tf = v as? NSTextField { values.append(tf.stringValue) }
-            if let btn = v as? NSButton { values.append(btn.title) }
-            if let pop = v as? NSPopUpButton { values.append(contentsOf: pop.itemTitles) }
-            for sub in v.subviews { values.append(contentsOf: allTextValues(sub)) }
-            return values
-        }
         check(!allTextValues(stableSettings.view).contains { $0.localizedCaseInsensitiveContains("Insiders") || $0.contains("目标应用") }, "Settings UI must not display target application switcher or Insiders text")
         check(stableSettings.manageCacheBtn.title == "管理存储…", "Storage settings row button must display 管理存储…")
         check(stableSettings.pricingSyncCheckBtn.title == "立即检查" && stableSettings.pricingSyncCheckBtn.intrinsicContentSize.height == 28, "Pricing check button must use fixed-width InlineRefreshButton matching global 28pt height")
@@ -713,6 +814,42 @@ import Cocoa
             updateSheet.sheet.contentView?.layoutSubtreeIfNeeded()
             check(updateSheet.primaryBtn.frame.minX > updateSheet.closeBtn.frame.maxX, "Update available state must place primary update action at far bottom-right")
 
+            // Package B: UpdateSheetController 4 core states
+            if let rel = savedRelease {
+                // 1. .downloading state
+                assistant.updateManager.simulateDownloading(rel)
+                updateSheet.renderState()
+                check(updateSheet.closeBtn.title == "后台下载", "Downloading state must offer 后台下载")
+                check(updateSheet.primaryBtn.title == "取消下载" && updateSheet.primaryBtn.showsSpinner == true, "Downloading state must show 取消下载 with spinner")
+                updateSheet.primaryAction()
+
+                // 2. .readyToInstall state
+                let fakeReadyDMG = state.appendingPathComponent("fake-ready.dmg")
+                assistant.updateManager.simulateReadyToInstall(rel, dmgURL: fakeReadyDMG)
+                updateSheet.renderState()
+                check(updateSheet.primaryBtn.title == "立即更新" && updateSheet.primaryBtn.showsSpinner == false, "Ready to install state must show 立即更新 without spinner")
+                check(updateSheet.closeBtn.title == "稍后" && updateSheet.closeBtn.isEnabled == true, "Ready to install closeBtn must be 稍后")
+
+                // 3. .installing state
+                assistant.updateManager.simulateInstalling(rel)
+                updateSheet.renderState()
+                check(updateSheet.primaryBtn.title == "正在安装…" && updateSheet.primaryBtn.isEnabled == false, "Installing state must show disabled 正在安装…")
+                check(updateSheet.closeBtn.isEnabled == false, "Installing state must disable close button")
+                check(updateSheet.windowShouldClose(updateSheet.sheet) == false, "Installing state must prevent window close")
+
+                // 4. .failed state
+                assistant.updateManager.simulateFailed("网络连接中断 (ETIMEDOUT)")
+                updateSheet.renderState()
+                check(updateSheet.changelogHeading.stringValue == "检查结果", "Failed state heading must be 检查结果")
+                check(updateSheet.changelogTextView.string.contains("网络连接中断"), "Failed state changelog must contain error message")
+                check(updateSheet.primaryBtn.title == "重试" && updateSheet.primaryBtn.isEnabled == true, "Failed state primaryBtn must be 重试")
+                check(updateSheet.closeBtn.title == "完成" && updateSheet.closeBtn.isEnabled == true, "Failed state closeBtn must be 完成")
+
+                // Restore available state
+                assistant.updateManager.simulateRelease(rel)
+                updateSheet.renderState()
+            }
+
             check(updateSheet.autoUpdateSwitch.state == .off, "Auto update switch in sheet footer must default to off")
             updateSheet.autoUpdateSwitch.state = .off
             updateSheet.toggleAutoUpdate()
@@ -723,6 +860,36 @@ import Cocoa
             assistant.dismissAllSheetsAndPopovers(); pump()
             check(window.activeSheetWindow == nil, "dismissAllSheetsAndPopovers must cleanly end attached modal update sheet before update restart")
         }
+
+        // Package D: AboutPage states and system specs
+        let sampleRelease = AppReleaseInfo(
+            version: "1.1.0",
+            tagName: "v1.1.0",
+            title: "GravityBox v1.1.0",
+            changelog: "### 更新亮点\n- 新增功能",
+            publishedDate: "2026-11-04",
+            htmlURL: URL(string: "https://github.com/Enzoo404/gravitybox/releases/tag/v1.1.0")!,
+            dmgURL: nil,
+            sha256URL: nil
+        )
+        assistant.updateManager.simulateDownloading(sampleRelease)
+        aboutPage.refreshUpdateState()
+        check(aboutPage.cancelDownloadBtn.isHidden == false && aboutPage.updateMetaLabel.stringValue == "下载中", "About page downloading state must show cancel button and 下载中")
+
+        let fakeReadyDMG = state.appendingPathComponent("fake-ready.dmg")
+        assistant.updateManager.simulateReadyToInstall(sampleRelease, dmgURL: fakeReadyDMG)
+        aboutPage.refreshUpdateState()
+        check(aboutPage.installNowBtn.isHidden == false && aboutPage.updateMetaLabel.stringValue == "已校验", "About page readyToInstall state must show installNowBtn and 已校验")
+
+        assistant.updateManager.simulateFailed("本地校验异常")
+        aboutPage.refreshUpdateState()
+        check(aboutPage.checkUpdateBtn.isHidden == false && aboutPage.updateMetaLabel.stringValue == "可重试", "About page failed state must show checkUpdateBtn and 可重试")
+
+        check(!aboutPage.versionSpecLabel.stringValue.isEmpty, "About page versionSpecLabel must not be empty")
+        check(aboutPage.osSpecLabel.stringValue.contains("arm64"), "About page osSpecLabel must contain arm64")
+        check(aboutPage.revealDataBtn.title == "在访达中显示", "About page revealDataBtn title must be 在访达中显示")
+        check(aboutPage.githubReleasesBtn.title == "GitHub ↗", "About page githubReleasesBtn title must be GitHub ↗")
+
         assistant.updateManager.simulateRelease(nil)
         aboutPage.refreshUpdateState()
         check(!aboutPage.checkUpdateBtn.isHidden && aboutPage.installNowBtn.isHidden, "Clearing available release must restore 检查更新 button on About page")
@@ -1012,6 +1179,66 @@ import Cocoa
             page.updateReadStatus(["databasesScanned": 377, "databasesDiscovered": 378, "failedDatabasesCount": 1, "skippedLargeRecords": 0, "unknownTimeRecords": 0, "unpricedModels": 0, "availability": "partial"])
             check(!page.footerBox.isHidden && page.statusSummary.stringValue.contains("1"), "Usage footerBox must appear when failedDatabasesCount > 0")
             let pricingSheet = PricingSyncSheetController(app: isolated)
+
+            // Package A: Modal sheet lifecycle, healed count, badge varieties, empty state and recheck
+            let testParentWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 600), styleMask: [.titled], backing: .buffered, defer: false)
+            pricingSheet.show(in: testParentWindow, payload: [
+                "synced": true,
+                "count": 3,
+                "healedCount": 12,
+                "version": "2026-11-13",
+                "status": ["lastCheckAt": 1794539810722.0, "modelCount": 3],
+                "prices": [
+                    "gemini-custom": [
+                        "input": 0.5, "output": 2.5, "cached": 0.05,
+                        "provenance": ["platform": "Custom", "checkedAt": "2026-11-13"]
+                    ],
+                    "gemini-expired": [
+                        "input": 1.0, "output": 5.0, "cached": 0.1,
+                        "provenance": ["platform": "Google Cloud", "checkedAt": "2026-01-01"]
+                    ],
+                    "gemini-legacy": [
+                        "input": 0.8, "output": 4.0, "cached": 0.08
+                    ]
+                ],
+                "pricingStatus": ["gemini-custom": "user", "gemini-expired": "expired", "gemini-legacy": "historical"]
+            ])
+            check(pricingSheet.sheet.sheetParent === testParentWindow, "PricingSyncSheetController must attach to parent window")
+            check(pricingSheet.renderedSummaryLines.contains { $0.contains("gemini-custom [自定义]") }, "Must render user pricing status as 自定义")
+            check(pricingSheet.renderedSummaryLines.contains { $0.contains("gemini-expired [已过期]") }, "Must render expired pricing status as 已过期")
+            check(pricingSheet.renderedSummaryLines.contains { $0.contains("gemini-legacy [历史基准]") }, "Must render default pricing status as 历史基准")
+            check(pricingSheet.subtitleLabel.stringValue.contains("已自动补齐 12 条历史未计价记录"), "Must display auto-healed count in subtitle")
+            check(allTextValues(pricingSheet.sheet.contentView!).contains("价格基准已同步并补齐历史记录"), "Must display healed title")
+            pricingSheet.closeSheet()
+            pump()
+            check(testParentWindow.attachedSheet == nil, "PricingSyncSheetController must cleanly detach on close")
+
+            // Empty prices dictionary
+            pricingSheet.apply(payload: ["synced": true, "prices": [:]])
+            check(allTextValues(pricingSheet.sheet.contentView!).contains("暂无可用的模型价格基准记录"), "Empty prices must render empty label")
+
+            // Recheck button
+            check(pricingSheet.recheckBtn.title == "重新检查" && pricingSheet.recheckBtn.frame.width >= 88, "Recheck button must be titled 重新检查 with width >= 88")
+            pricingSheet.recheck()
+            pump()
+
+            // Triggering pricingSheet from PreferencesController
+            let testPrefs = PreferencesController(app: isolated)
+            isolated.window = testParentWindow
+            let prevReply = isolated.bridge.fixtureReply
+            isolated.bridge.fixtureReply = { payload in
+                if payload["command"] as? String == "pricing_sync_check" {
+                    return ["ok": true, "synced": true, "prices": ["model-a": ["input": 1.0, "output": 2.0, "cached": 0.1]]]
+                }
+                return prevReply?(payload) ?? ["ok": true]
+            }
+            testPrefs.checkPricingSync()
+            pump()
+            check(testPrefs.pricingSheet != nil && testPrefs.pricingSheet?.sheet.sheetParent === testParentWindow, "checkPricingSync must show pricingSheet attached to window")
+            testPrefs.pricingSheet?.closeSheet()
+            pump()
+            isolated.bridge.fixtureReply = prevReply
+
             pricingSheet.apply(payload: [
                 "synced": true,
                 "count": 2,
@@ -1090,6 +1317,21 @@ import Cocoa
                 isolated.suppressLifecycleAutoQuitUntil >= longDeadline,
                 "Shorter lifecycle auto-quit suppression must not shorten an existing longer deadline"
             )
+
+            // Package E: AssistantAccountUsage switch menu and cache invalidation
+            isolated.cachedAccounts = []
+            let emptyAccountMenu = isolated.buildAccountSwitchMenu()
+            check(emptyAccountMenu.items.contains { $0.title == "暂无可用账号快照" }, "Empty account switch menu must show 暂无可用账号快照")
+            isolated.cachedAccounts = accounts
+            isolated.activeAccountId = "a"
+            let fullAccountMenu = isolated.buildAccountSwitchMenu()
+            check(fullAccountMenu.items.contains { $0.title == "管理账号…" }, "Account switch menu must contain 管理账号…")
+            check(fullAccountMenu.items.contains { $0.title.contains("Alex") && $0.title.contains("PRO") }, "Account switch menu must show account name and tier")
+
+            isolated.cachedUsageReportsByPeriod["today"] = ["summary": totals]
+            check(!isolated.cachedUsageReportsByPeriod.isEmpty, "Usage report cache must be populated")
+            isolated.invalidateUsageReportCache()
+            check(isolated.cachedUsageReportsByPeriod.isEmpty, "invalidateUsageReportCache must clear cachedUsageReportsByPeriod")
         }
 
         // Exercise the real countdown view, rather than a JS reimplementation of its old colors.

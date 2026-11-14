@@ -62,16 +62,22 @@ function mergeLiveQuotaWithSaved(savedQuota: any, liveQuota: any): any {
   const hasLiveGroups = Array.isArray(liveQuota.quota_groups) && liveQuota.quota_groups.length > 0;
   const hasKnownLiveModels = Array.isArray(liveQuota.models) && liveQuota.models.some((m: any) => m?.percentage_known || m?.own_percentage_known);
   const hasSavedModels = Array.isArray(savedQuota.models) && savedQuota.models.length > 0;
-  return {
+  const liveComplete = liveQuota.refresh_state?.complete === true;
+  const mergedStaleGroups = liveQuota.stale_groups?.length
+    ? liveQuota.stale_groups
+    : (hasLiveGroups && liveComplete ? undefined : savedQuota.stale_groups);
+  const merged: any = {
     ...savedQuota,
     ...liveQuota,
     quota_groups: hasLiveGroups ? liveQuota.quota_groups : (savedQuota.quota_groups ?? []),
     models: (hasLiveGroups || hasKnownLiveModels || !hasSavedModels) ? liveQuota.models : savedQuota.models,
-    stale_groups: liveQuota.stale_groups?.length ? liveQuota.stale_groups : savedQuota.stale_groups,
     subscription_tier: (liveQuota.subscription_tier && liveQuota.subscription_tier !== 'FREE')
       ? liveQuota.subscription_tier
       : (savedQuota.subscription_tier || liveQuota.subscription_tier),
   };
+  if (mergedStaleGroups?.length) merged.stale_groups = mergedStaleGroups;
+  else delete merged.stale_groups;
+  return merged;
 }
 
 export type DashboardAggregateDeps = {

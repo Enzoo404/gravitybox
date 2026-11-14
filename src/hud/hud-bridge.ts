@@ -170,16 +170,12 @@ export class CdpHudBridge implements ICdpHudBridge {
         ? parsed.isStreaming
         : (sameConv?.foregroundStreaming ?? false);
     const resolvedStreaming = foregroundStreaming || isSubagentRunning;
-    const resolvedPhase: HudActivityPhase = !resolvedStreaming
+    const resolvedPhase: HudActivityPhase = !foregroundStreaming
       ? 'idle'
       : parsed.activityPhase === 'generating' || parsed.activityPhase === 'executing'
       ? parsed.activityPhase
-      : parsed.activityPhase === 'idle' && isSubagentRunning
-      ? 'executing'
       : sameConv?.activityPhase && sameConv.activityPhase !== 'idle'
       ? sameConv.activityPhase
-      : isSubagentRunning && !foregroundStreaming
-      ? 'executing'
       : 'generating';
 
     const nowMs = Date.now();
@@ -252,6 +248,8 @@ export class CdpHudBridge implements ICdpHudBridge {
         currentTurnDurationSeconds: Math.round(metrics.session.currentTurnDurationSeconds ?? 0),
         currentTurnModelDurationSeconds: Math.round(metrics.session.currentTurnModelDurationSeconds ?? 0),
         currentTurnToolDurationSeconds: Math.round(metrics.session.currentTurnToolDurationSeconds ?? 0),
+        inFlightModelDurationSeconds: Math.round(metrics.session.inFlightModelDurationSeconds ?? 0),
+        inFlightToolDurationSeconds: Math.round(metrics.session.inFlightToolDurationSeconds ?? 0),
       },
       tokens: metrics.tokens,
       context: metrics.context,
@@ -275,8 +273,9 @@ export class CdpHudBridge implements ICdpHudBridge {
       latestSession.lastMetricsKey = fingerprint;
       latestSession.lastUpdatedAt = Date.now();
       latestSession.isStreaming = Boolean(latestSession.foregroundStreaming || metrics.isStreaming);
-      latestSession.activityPhase = metrics.activityPhase ?? (latestSession.isStreaming ? 'generating' : 'idle');
-      if (metrics.isStreaming || metrics.isSubagentRunning) {
+      latestSession.activityPhase =
+        metrics.activityPhase ?? (latestSession.foregroundStreaming ? 'generating' : 'idle');
+      if (latestSession.foregroundStreaming || metrics.isStreaming || metrics.isSubagentRunning) {
         latestSession.lastActivityAt = Date.now();
       }
       if (metrics.availability === 'partial' || metrics.availability === 'cached') {

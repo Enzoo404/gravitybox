@@ -621,12 +621,14 @@ test('长耗时工具运行超5分钟且带占位end时间戳、即使DOM进入�
     isStreaming: false,
     activityPhase: 'idle',
   });
+  // 后台工具活跃时 isStreaming=true 维持轮询与本轮计时，但前台模型未运行因此 activityPhase 保持 idle（灰色）
   assert.equal(result.isStreaming, true);
-  assert.equal(result.activityPhase, 'executing');
+  assert.equal(result.activityPhase, 'idle');
   assert.ok(
     result.session.currentTurnDurationSeconds >= 780,
     `应持续累计 188s + 600s (>=780s)，不能回退冻结在 188s，实际 ${result.session.currentTurnDurationSeconds}`
   );
+  assert.ok(result.session.inFlightToolDurationSeconds >= 599);
 });
 
 test('异步与并行子智能体期间本轮用时不暂停、不重复叠加且完成后不回退', () => {
@@ -670,4 +672,79 @@ test('异步与并行子智能体期间本轮用时不暂停、不重复叠加�
     steps: parallelSteps,
   });
   assert.equal(Number(parallelMetrics.session.currentTurnDurationSeconds.toFixed(1)), 20);
+});
+
+test('进行中模型与工具耗时通过 inFlight 字段实时可观测，且不污染已完成累计值与 TPS', () => {
+  const nowSec = Date.now() / 1000;
+  const activeSteps = [
+    step({ idx: 0, stepType: 14, startTimeSeconds: nowSec - 20, endTimeSeconds: nowSec - 20 }),
+    step({
+      idx: 1,
+      stepType: 15,
+      status: 3,
+      startTimeSeconds: nowSec - 20,
+      endTimeSeconds: nowSec - 10,
+      outputTokens: 500,
+      generation: { timeToFirstTokenSeconds: 2, streamingDurationSeconds: 8 },
+    }),
+    step({
+      idx: 2,
+      stepType: 15,
+      status: 2,
+      startTimeSeconds: nowSec - 4,
+      endTimeSeconds: null,
+      hasUsage: false,
+      outputTokens: 0,
+    }),
+    step({
+      idx: 3,
+      stepType: 21,
+      status: 2,
+      startTimeSeconds: nowSec - 6,
+      endTimeSeconds: null,
+    }),
+  ];
+  const live = metrics(activeSteps, { isStreaming: true, allowDbActiveStepInference: true });
+  assert.equal(live.session.modelDurationSeconds, 10, '已完成模型用时不得混入未完结步骤');
+  assert.equal(live.session.outputTps, 50, 'TPS 仍仅基于已完成计时请求');
+  assert.equal(live.session.activeModelStepCount, 1);
+  assert.ok(live.session.inFlightModelDurationSeconds >= 3.8 && live.session.inFlightModelDurationSeconds <= 6);
+  assert.equal(live.session.toolDurationSeconds, 0);
+  assert.equal(live.session.activeToolStepCount, 1);
+  assert.ok(live.session.inFlightToolDurationSeconds >= 5.8 && live.session.inFlightToolDurationSeconds <= 8);
+
+  const stale = metrics(activeSteps, { isStreaming: false, allowDbActiveStepInference: false });
+  assert.equal(stale.session.activeModelStepCount, 0);
+  assert.equal(stale.session.inFlightModelDurationSeconds, 0);
+  assert.equal(stale.session.activeToolStepCount, 0);
+  assert.equal(stale.session.inFlightToolDurationSeconds, 0);
+});
+
+test('主对话模型停止时即使子智能体仍在运行，activityPhase 也保持 idle 而保留子智能体标识与计时', () => {
+  const nowSec = Date.now() / 1000;
+  const activeWithSubagent = buildConversationHudMetrics({
+    conversationId: 'subagent-only-idle-dot',
+    isStreaming: false,
+    activityPhase: 'idle',
+    isSubagentRunning: true,
+    runningSubagentCount: 1,
+    steps: [
+      step({ idx: 0, stepType: 14, startTimeSeconds: nowSec - 15, endTimeSeconds: nowSec - 15 }),
+      step({ idx: 1, stepType: 15, status: 3, startTimeSeconds: nowSec - 15, endTimeSeconds: nowSec - 5, outputTokens: 100 }),
+    ],
+  });
+  assert.equal(activeWithSubagent.isSubagentRunning, true);
+  assert.equal(activeWithSubagent.isStreaming, true);
+  assert.equal(activeWithSubagent.activityPhase, 'idle');
+
+  const foregroundExecuting = buildConversationHudMetrics({
+    conversationId: 'foreground-tool-executing',
+    isStreaming: true,
+    activityPhase: 'executing',
+    steps: [
+      step({ idx: 0, stepType: 14, startTimeSeconds: nowSec - 10, endTimeSeconds: nowSec - 10 }),
+      step({ idx: 1, stepType: 21, status: 2, startTimeSeconds: nowSec - 3, endTimeSeconds: null }),
+    ],
+  });
+  assert.equal(foregroundExecuting.activityPhase, 'executing');
 });

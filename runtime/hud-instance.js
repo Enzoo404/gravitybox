@@ -83,6 +83,29 @@ function formatDuration(value, formatted, isEn) {
   return durationText(value, isEn ? 'en' : 'zh');
 }
 
+/**
+ * 上下文进度条同色系渐进演进配色（0% → 100%）：
+ * 浅色模式由清透天蓝渐深至深钴蓝；深色模式由柔和冰蓝过渡至饱满电光蓝（避免深底吞色）。
+ */
+function computeContextProgressColor(ratio, isDark = false) {
+  const r = Math.min(1, Math.max(0, Number(ratio) || 0));
+  const stops = isDark
+    ? [
+        [147, 197, 253], // #93C5FD
+        [88, 155, 255],  // #589BFF
+        [37, 99, 235],   // #2563EB
+      ]
+    : [
+        [132, 186, 255], // #84BAFF
+        [49, 134, 255],  // #3186FF
+        [20, 73, 196],   // #1449C4
+      ];
+  const [start, end, t] =
+    r <= 0.5 ? [stops[0], stops[1], r * 2] : [stops[1], stops[2], (r - 0.5) * 2];
+  const ch = (idx) => Math.round(start[idx] + (end[idx] - start[idx]) * t);
+  return `rgb(${ch(0)}, ${ch(1)}, ${ch(2)})`;
+}
+
 function createDefaultMetrics(conversationId = 'default', sessionRevision = 1) {
   return {
     conversationId,
@@ -120,6 +143,10 @@ function createDefaultMetrics(conversationId = 'default', sessionRevision = 1) {
       currentTurnDurationCompactEn: 'Turn 0s',
       currentTurnModelDurationSeconds: 0,
       currentTurnToolDurationSeconds: 0,
+      inFlightModelDurationSeconds: 0,
+      activeModelStepCount: 0,
+      inFlightToolDurationSeconds: 0,
+      activeToolStepCount: 0,
     },
     tokens: {
       totalTokens: 0,
@@ -197,12 +224,14 @@ export class HudInstance {
     this.backendRunningSubagentCount = 0;
     this.childConversationIds = [];
     this.isStreaming = false;
+    this.hasActiveWork = false;
     this.isSubagentRunning = false;
     this.runningSubagentCount = 0;
     this.abortController = null;
     this.resizeObserver = null;
     this.host = null;
     this.shadow = null;
+    this.isDarkTheme = false;
     this.domRefs = null;
     this.domRefsShadow = null;
     this.targetComposer = null;
@@ -212,6 +241,8 @@ export class HudInstance {
     this.hoverLeaveTimer = null;
     this.turnClockTimer = null;
     this.turnClockAnchor = null;
+    this.modelClockAnchor = null;
+    this.toolClockAnchor = null;
     this.turnHighWaterMark = null;
     this.lastMetrics = createDefaultMetrics('default', 0);
   }
@@ -231,6 +262,7 @@ export class HudInstance {
     this.backendRunningSubagentCount = 0;
     this.childConversationIds = [];
     this.isStreaming = false;
+    this.hasActiveWork = false;
     this.isSubagentRunning = false;
     this.runningSubagentCount = 0;
     this.pinnedPopoverId = null;
@@ -265,15 +297,13 @@ export class HudInstance {
     else if (modelId) this.currentModelId = modelId;
     this.domIsSubagentRunning = Boolean(isSubagentRunning);
     this.domRunningSubagentCount = Math.max(0, Number(runningSubagentCount) || 0);
-    this.domIsStreaming = Boolean(isStreaming || this.domIsSubagentRunning);
-    this.domActivityPhase =
-      activityPhase === 'generating' || activityPhase === 'executing' || activityPhase === 'idle'
-        ? activityPhase
-        : !this.domIsStreaming
-        ? 'idle'
-        : !isStreaming && this.domIsSubagentRunning
-        ? 'executing'
-        : 'generating';
+    // domIsStreaming 与 domActivityPhase 仅由当前分栏前台模型/流式状态决定，不与独立子智能体混用
+    this.domIsStreaming = Boolean(isStreaming);
+    this.domActivityPhase = !this.domIsStreaming
+      ? 'idle'
+      : activityPhase === 'executing'
+      ? 'executing'
+      : 'generating';
     if (Array.isArray(childConversationIds)) {
       this.childConversationIds = [...new Set(childConversationIds.filter(Boolean))];
     } else if (changed) {
@@ -288,6 +318,7 @@ export class HudInstance {
       this.isSubagentRunning = this.domIsSubagentRunning;
       this.runningSubagentCount = this.domRunningSubagentCount;
       this.isStreaming = this.domIsStreaming;
+      this.hasActiveWork = Boolean(this.domIsStreaming || this.isSubagentRunning);
       this.activityPhase = this.computeMergedActivityPhase();
       this.sessionRevision = this.allocateRevision
         ? Math.max(this.sessionRevision + 1, this.allocateRevision())
@@ -305,7 +336,13 @@ export class HudInstance {
         this.domRunningSubagentCount,
         this.backendRunningSubagentCount
       );
-      this.isStreaming = Boolean(this.domIsStreaming || this.isSubagentRunning);
+      this.isStreaming = this.domIsStreaming;
+      this.hasActiveWork = Boolean(
+        this.domIsStreaming ||
+          this.isSubagentRunning ||
+          (this.lastMetrics?.session?.activeModelStepCount || 0) > 0 ||
+          (this.lastMetrics?.session?.activeToolStepCount || 0) > 0
+      );
       this.activityPhase = this.computeMergedActivityPhase();
       this.syncStreamingClass();
     }
@@ -313,15 +350,12 @@ export class HudInstance {
   }
 
   computeMergedActivityPhase() {
-    if (!this.isStreaming && !this.isSubagentRunning) return 'idle';
-    if (this.domActivityPhase === 'executing') return 'executing';
-    if (this.domActivityPhase === 'generating') {
-      if (this.backendActivityPhase === 'executing') return 'executing';
-      return 'generating';
+    // 当前分栏前台模型未处于流式轮次时，即使仍有后台工具或独立子智能体运行，小圆点也必须保持灰色 idle
+    if (!this.domIsStreaming) return 'idle';
+    if (this.domActivityPhase === 'executing' || this.backendActivityPhase === 'executing') {
+      return 'executing';
     }
-    if (this.backendActivityPhase === 'generating') return 'generating';
-    if (this.backendActivityPhase === 'executing' || this.isSubagentRunning) return 'executing';
-    return this.isStreaming ? 'generating' : 'idle';
+    return 'generating';
   }
 
   notifyModelOrStreamingChange(
@@ -340,15 +374,12 @@ export class HudInstance {
     }
     const nextDomSubagentRunning = Boolean(isSubagentRunning);
     const nextDomSubagentCount = Math.max(0, Number(runningSubagentCount) || 0);
-    const nextDomStreaming = Boolean(isStreaming || nextDomSubagentRunning);
-    const nextDomPhase =
-      activityPhase === 'generating' || activityPhase === 'executing' || activityPhase === 'idle'
-        ? activityPhase
-        : !nextDomStreaming
-        ? 'idle'
-        : !isStreaming && nextDomSubagentRunning
-        ? 'executing'
-        : 'generating';
+    const nextDomStreaming = Boolean(isStreaming);
+    const nextDomPhase = !nextDomStreaming
+      ? 'idle'
+      : activityPhase === 'executing'
+      ? 'executing'
+      : 'generating';
     const nextChildIds = Array.isArray(childConversationIds)
       ? [...new Set(childConversationIds.filter(Boolean))]
       : this.childConversationIds;
@@ -377,13 +408,19 @@ export class HudInstance {
         this.domRunningSubagentCount,
         this.backendRunningSubagentCount
       );
-      this.isStreaming = Boolean(this.domIsStreaming || this.isSubagentRunning);
+      this.isStreaming = this.domIsStreaming;
+      this.hasActiveWork = Boolean(
+        this.domIsStreaming ||
+          this.isSubagentRunning ||
+          (this.lastMetrics?.session?.activeModelStepCount || 0) > 0 ||
+          (this.lastMetrics?.session?.activeToolStepCount || 0) > 0
+      );
       this.activityPhase = this.computeMergedActivityPhase();
       this.syncStreamingClass();
       if (this.lastMetrics && this.shadow) {
         this.applyMetricsToDom({
           ...this.lastMetrics,
-          isStreaming: this.isStreaming,
+          isStreaming: this.hasActiveWork,
           activityPhase: this.activityPhase,
           isSubagentRunning: this.isSubagentRunning,
           runningSubagentCount: this.runningSubagentCount,
@@ -478,7 +515,16 @@ export class HudInstance {
     );
     this.isSubagentRunning = mergedSubagentRunning;
     this.runningSubagentCount = mergedSubagentCount;
-    this.isStreaming = Boolean(metrics.isStreaming || this.domIsStreaming || mergedSubagentRunning);
+    const activeModelSteps = Math.max(0, Number(metrics.session?.activeModelStepCount) || 0);
+    const activeToolSteps = Math.max(0, Number(metrics.session?.activeToolStepCount) || 0);
+    this.isStreaming = Boolean(this.domIsStreaming);
+    this.hasActiveWork = Boolean(
+      this.domIsStreaming ||
+        mergedSubagentRunning ||
+        metrics.isStreaming ||
+        activeModelSteps > 0 ||
+        activeToolSteps > 0
+    );
     this.backendActivityPhase =
       metrics.activityPhase === 'generating' ||
       metrics.activityPhase === 'executing' ||
@@ -569,12 +615,18 @@ export class HudInstance {
       }
     }
 
+    this.isDarkTheme = isDark;
     if (isDark) {
       if (this.host.getAttribute('data-theme') !== 'dark') {
         this.host.setAttribute('data-theme', 'dark');
       }
     } else if (this.host.hasAttribute('data-theme')) {
       this.host.removeAttribute('data-theme');
+    }
+    const meterFillEl = this.getShadowEl('#hud-meter-fill');
+    if (meterFillEl && this.lastMetrics?.context?.hasUsageData) {
+      const ratioClamped = Math.min(1.0, Math.max(0, Number(this.lastMetrics.context.usedRatio) || 0));
+      meterFillEl.setAttribute('fill', computeContextProgressColor(ratioClamped, isDark));
     }
   }
 
@@ -930,6 +982,8 @@ export class HudInstance {
       compBadgeEl.textContent = '';
       compBadgeEl.setAttribute('hidden', '');
       compBadgeEl.removeAttribute('aria-label');
+      compBadgeEl.removeAttribute('data-compaction-tier');
+      compBadgeEl.classList?.remove('is-compaction-low', 'is-compaction-warn', 'is-compaction-danger');
     }
     this.hideAllPopovers();
   }
@@ -939,8 +993,10 @@ export class HudInstance {
     const isEn = this.languageMode === 'en';
     const sessionCapsule = this.getShadowEl('.capsule-session');
     const sessionPopover = this.getShadowEl('#hud-popover-session');
-    const isWorking = Boolean(this.isStreaming || this.isSubagentRunning);
-    const phase = isWorking ? (this.activityPhase === 'executing' ? 'executing' : 'generating') : 'idle';
+    const phase =
+      this.activityPhase === 'generating' || this.activityPhase === 'executing'
+        ? this.activityPhase
+        : 'idle';
     const applyPhaseClasses = (targetElement) => {
       if (!targetElement || !targetElement.classList) return;
       if (phase !== 'idle') {
@@ -1038,6 +1094,88 @@ export class HudInstance {
       this.turnClockTimer = null;
     }
     this.turnClockAnchor = null;
+    this.modelClockAnchor = null;
+    this.toolClockAnchor = null;
+  }
+
+  getLiveClockSeconds(anchor, nowMs = Date.now()) {
+    if (!anchor) return 0;
+    return Math.max(0, anchor.baseSeconds + ((nowMs - anchor.anchorMs) / 1000) * anchor.rate);
+  }
+
+  syncSubClock(anchorKey, backendTotal, completedBase, rate, isWorkingNow, nowMs) {
+    if (!isWorkingNow || !this.shadow) {
+      this[anchorKey] = null;
+      return;
+    }
+    const existing = this[anchorKey];
+    if (!existing) {
+      this[anchorKey] = {
+        baseSeconds: backendTotal,
+        anchorMs: nowMs,
+        rate,
+        lastCompletedBase: completedBase,
+        lastRenderedSec: Math.round(backendTotal),
+      };
+      return;
+    }
+    const prevElapsed = this.getLiveClockSeconds(existing, nowMs);
+    const completedAdvanced = completedBase > existing.lastCompletedBase + 1e-6;
+    if (rate !== existing.rate) {
+      let nextBase = backendTotal;
+      if (rate === 0 && !completedAdvanced && backendTotal <= prevElapsed) {
+        nextBase = Math.max(backendTotal, prevElapsed);
+      } else if (rate > 0 && existing.rate === 0) {
+        nextBase = Math.max(backendTotal, prevElapsed);
+      }
+      this[anchorKey] = {
+        baseSeconds: nextBase,
+        anchorMs: nowMs,
+        rate,
+        lastCompletedBase: completedBase,
+        lastRenderedSec: existing.lastRenderedSec,
+      };
+      return;
+    }
+    if (rate > 0) {
+      if (
+        backendTotal > prevElapsed + 0.6 ||
+        (completedAdvanced && Math.abs(backendTotal - prevElapsed) > 0.6)
+      ) {
+        this[anchorKey] = {
+          baseSeconds: backendTotal,
+          anchorMs: nowMs,
+          rate,
+          lastCompletedBase: completedBase,
+          lastRenderedSec: existing.lastRenderedSec,
+        };
+      } else if (completedAdvanced) {
+        existing.lastCompletedBase = completedBase;
+      }
+    } else if (completedAdvanced || backendTotal > prevElapsed + 0.6) {
+      this[anchorKey] = {
+        baseSeconds: backendTotal,
+        anchorMs: nowMs,
+        rate: 0,
+        lastCompletedBase: completedBase,
+        lastRenderedSec: existing.lastRenderedSec,
+      };
+    }
+  }
+
+  updateSubClockDom(anchor, selector, isEn, nowMs) {
+    if (!anchor || !this.shadow || anchor.rate <= 0) return;
+    const elapsedSec = this.getLiveClockSeconds(anchor, nowMs);
+    const roundedSec = Math.max(0, Math.round(elapsedSec));
+    if (roundedSec === anchor.lastRenderedSec) return;
+    anchor.lastRenderedSec = roundedSec;
+    const el = this.getShadowEl(selector);
+    if (el) {
+      const nextText = durationText(elapsedSec, isEn ? 'en' : 'zh');
+      if (el.textContent !== nextText) {
+        el.textContent = nextText;
+      }
+    }
   }
 
   syncTurnClock(metrics, isWorkingNow) {
@@ -1067,6 +1205,23 @@ export class HudInstance {
       return;
     }
     const nowMs = Date.now();
+    const modelBase = isRawNumber(s.modelDurationSeconds) ? Math.max(0, s.modelDurationSeconds) : 0;
+    const modelInFlight = isRawNumber(s.inFlightModelDurationSeconds) ? Math.max(0, s.inFlightModelDurationSeconds) : 0;
+    const modelBackendTotal = modelBase + modelInFlight;
+    const activeModels = isRawNumber(s.activeModelStepCount) ? Math.max(0, Math.floor(s.activeModelStepCount)) : 0;
+    const toolBase = isRawNumber(s.toolDurationSeconds) ? Math.max(0, s.toolDurationSeconds) : 0;
+    const toolInFlight = isRawNumber(s.inFlightToolDurationSeconds) ? Math.max(0, s.inFlightToolDurationSeconds) : 0;
+    const toolBackendTotal = toolBase + toolInFlight;
+    const activeTools = isRawNumber(s.activeToolStepCount) ? Math.max(0, Math.floor(s.activeToolStepCount)) : 0;
+    let modelRate = activeModels;
+    let toolRate = activeTools;
+    if (activeModels === 0 && activeTools === 0) {
+      if (this.activityPhase === 'executing') toolRate = 1;
+      else modelRate = 1;
+    }
+    this.syncSubClock('modelClockAnchor', modelBackendTotal, modelBase, modelRate, isWorkingNow, nowMs);
+    this.syncSubClock('toolClockAnchor', toolBackendTotal, toolBase, toolRate, isWorkingNow, nowMs);
+
     if (!this.turnClockAnchor) {
       const sameTurnResumeFloor =
         this.turnHighWaterMark &&
@@ -1135,18 +1290,25 @@ export class HudInstance {
   }
 
   tickTurnClock() {
-    if (!this.turnClockAnchor || !this.shadow || !(this.isStreaming || this.isSubagentRunning)) {
+    if (
+      !this.turnClockAnchor ||
+      !this.shadow ||
+      !(this.hasActiveWork || this.isStreaming || this.isSubagentRunning)
+    ) {
       this.stopTurnClock();
       return;
     }
-    const elapsedSec = this.turnClockAnchor.baseSeconds + (Date.now() - this.turnClockAnchor.anchorMs) / 1000;
+    const nowMs = Date.now();
+    const isEn = this.languageMode === 'en';
+    this.updateSubClockDom(this.modelClockAnchor, '#val-model-dur', isEn, nowMs);
+    this.updateSubClockDom(this.toolClockAnchor, '#val-tool-dur', isEn, nowMs);
+    const elapsedSec = this.turnClockAnchor.baseSeconds + (nowMs - this.turnClockAnchor.anchorMs) / 1000;
     if (this.turnHighWaterMark && this.turnHighWaterMark.turns === this.turnClockAnchor.turns) {
       this.turnHighWaterMark.seconds = Math.max(this.turnHighWaterMark.seconds, elapsedSec);
     }
     const roundedSec = Math.max(0, Math.round(elapsedSec));
     if (roundedSec === this.turnClockAnchor.lastRenderedSec) return;
     this.turnClockAnchor.lastRenderedSec = roundedSec;
-    const isEn = this.languageMode === 'en';
     this.setTurnDurationText(this.formatCompactTurnDuration(elapsedSec, isEn));
     const valTurnDurEl = this.getShadowEl('#val-turn-dur');
     if (valTurnDurEl) {
@@ -1200,8 +1362,10 @@ export class HudInstance {
     const turnsPopCount = formatDetailCompactNumber(rawTurns);
     const stepsPopCount = formatDetailCompactNumber(rawSteps);
     const activeSubagentsBar = formatCompactCount(activeSubagents);
-    const isWorkingNow = Boolean(this.isStreaming || this.isSubagentRunning);
-    this.syncTurnClock(metrics, isWorkingNow);
+    const isWorkingNow = Boolean(this.hasActiveWork || this.isStreaming || this.isSubagentRunning);
+    const clockActive = isWorkingNow && !unavailable;
+    this.syncTurnClock(metrics, clockActive);
+    const clockNowMs = Date.now();
     const subagentTurnFloor =
       !isWorkingNow &&
       this.turnHighWaterMark &&
@@ -1216,12 +1380,24 @@ export class HudInstance {
         : subagentTurnFloor > 0
         ? subagentTurnFloor
         : null;
-    const liveElapsedSec = isWorkingNow && this.turnClockAnchor
+    const liveElapsedSec = clockActive && this.turnClockAnchor
       ? Math.max(
           rawBackendTurnSec ?? 0,
-          this.turnClockAnchor.baseSeconds + (Date.now() - this.turnClockAnchor.anchorMs) / 1000
+          this.turnClockAnchor.baseSeconds + (clockNowMs - this.turnClockAnchor.anchorMs) / 1000
         )
       : effectiveIdleTurnSec;
+    const liveModelSec = clockActive && this.modelClockAnchor
+      ? this.getLiveClockSeconds(this.modelClockAnchor, clockNowMs)
+      : s.modelDurationSeconds;
+    const liveToolSec = clockActive && this.toolClockAnchor
+      ? this.getLiveClockSeconds(this.toolClockAnchor, clockNowMs)
+      : s.toolDurationSeconds;
+    if (this.modelClockAnchor && isRawNumber(liveModelSec)) {
+      this.modelClockAnchor.lastRenderedSec = Math.max(0, Math.round(liveModelSec));
+    }
+    if (this.toolClockAnchor && isRawNumber(liveToolSec)) {
+      this.toolClockAnchor.lastRenderedSec = Math.max(0, Math.round(liveToolSec));
+    }
     const tpsText = (digits) =>
       s.outputTpsFormatted === '计算中...' ||
       (isWorkingNow && !(Number(s.samples?.timed) > 0) && s.outputTpsFormatted === '—')
@@ -1279,10 +1455,14 @@ export class HudInstance {
     const meterFillEl = q('#hud-meter-fill');
     const compCount = Math.max(0, Math.floor(Number(s.compactionCount) || 0));
     if (compBadgeEl) {
+      compBadgeEl.classList?.remove('is-compaction-low', 'is-compaction-warn', 'is-compaction-danger');
       if (compCount >= 1) {
+        const compTier = compCount >= 3 ? 'danger' : compCount === 2 ? 'warn' : 'low';
         const compBarText = formatCompactCount(compCount);
         compBadgeEl.textContent = compBarText;
         compBadgeEl.removeAttribute('hidden');
+        compBadgeEl.setAttribute('data-compaction-tier', compTier);
+        compBadgeEl.classList?.add(`is-compaction-${compTier}`);
         compBadgeEl.setAttribute(
           'aria-label',
           isEn ? `Compacted ${compBarText} times` : `已压缩 ${compBarText} 次`
@@ -1292,6 +1472,7 @@ export class HudInstance {
         compBadgeEl.textContent = '';
         compBadgeEl.setAttribute('hidden', '');
         compBadgeEl.removeAttribute('aria-label');
+        compBadgeEl.removeAttribute('data-compaction-tier');
         ctxCapsule?.classList?.remove('has-compaction');
       }
     }
@@ -1306,12 +1487,8 @@ export class HudInstance {
       ctxTxtEl.setAttribute('data-used-tokens', usedCompact);
     }
 
-    const strokeColor =
-      ratioClamped >= 0.9 && !c.isFallbackCapacity
-        ? 'var(--hud-danger-color)'
-        : ratioClamped >= 0.75
-        ? 'var(--hud-warn-color)'
-        : 'var(--hud-seg-sys-color)';
+    const isDark = Boolean(this.isDarkTheme || this.host?.getAttribute?.('data-theme') === 'dark');
+    const strokeColor = computeContextProgressColor(ratioClamped, isDark);
 
     if (meterFillEl) {
       const fillWidth = Number((54 * ratioClamped).toFixed(2));
@@ -1332,12 +1509,12 @@ export class HudInstance {
     setTxt('#lbl-model-dur', isEn ? 'Model Duration' : '模型用时');
     setTxt(
       '#val-model-dur',
-      formatDuration(s.modelDurationSeconds, s.modelDurationFormatted, isEn)
+      formatDuration(liveModelSec, s.modelDurationFormatted, isEn)
     );
     setTxt('#lbl-tool-dur', isEn ? 'Tool Duration' : '工具调用用时');
     setTxt(
       '#val-tool-dur',
-      formatDuration(s.toolDurationSeconds, s.toolDurationFormatted, isEn)
+      formatDuration(liveToolSec, s.toolDurationFormatted, isEn)
     );
     setTxt('#lbl-ttft', isEn ? 'Avg TTFT' : '首 token 平均（TTFT）');
     setTxt(
@@ -1525,8 +1702,10 @@ export class HudInstance {
         toolbarEl.setAttribute('data-availability', String(metrics.availability));
       }
     }
-    const isWorking = Boolean(this.isStreaming || this.isSubagentRunning);
-    const phase = isWorking ? (this.activityPhase === 'executing' ? 'executing' : 'generating') : 'idle';
+    const phase =
+      this.activityPhase === 'generating' || this.activityPhase === 'executing'
+        ? this.activityPhase
+        : 'idle';
     const phaseText = isEn
       ? phase === 'generating'
         ? 'Generating'

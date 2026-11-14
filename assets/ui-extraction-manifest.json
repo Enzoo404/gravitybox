@@ -78,6 +78,13 @@
       "extractor": "legacy-regex",
       "trust": "reviewed-repository-snapshot",
       "byteVerifiedThisRun": false
+    },
+    "2.32.1": {
+      "bundleSha256": "4c0a1ff5659e7dd92e6ad249a386c0dbce2c8e94b88522a2f366ff20b397081e",
+      "snapshotSha256": "6fa68676567ca13e028b2fe99796052bbfb99179ccc4f3e83cc7e3f433fd05e2",
+      "extractor": "typescript-ast-v1",
+      "trust": "explicit-byte-extraction",
+      "byteVerifiedAt": "2026-11-14T01:34:14.881Z"
     }
   }
 }

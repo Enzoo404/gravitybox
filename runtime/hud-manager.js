@@ -223,8 +223,8 @@ export class AntigravityHudManager {
       const isSubpane = Boolean(subConvNode || view.getAttribute?.('data-media-drop-scope') === 'subpane');
       const convId = this.resolveConversationId(view, rawCascadeId, views.length);
       const modelId = this.resolveActiveModel(view, views.length);
-      const subagentState = this.resolveSubagentState(view);
-      const activityPhase = this.resolveActivityPhase(view, subagentState);
+      const subagentState = this.resolveSubagentState(view, { isSubpane });
+      const activityPhase = this.resolveActivityPhase(view, subagentState, { isSubpane });
       const isStreaming = activityPhase !== 'idle';
       let instance = this.instances.get(slotId);
       if (!instance) {
@@ -422,9 +422,17 @@ export class AntigravityHudManager {
    * 2. `[data-testid="running-subagent-steps-toggle"]`, `[data-testid="running-subagent-browser-steps"]`, `[data-testid="browser-subagent-thinking"]`
    * 3. `[aria-label^="Open Subagent:"]` / `[data-testid="browser-subagent-row"]` 中不含 `agent-status-done` / `agent-status-killed` / `agent-status-canceled` 的活跃卡片
    */
-  resolveSubagentState(view) {
+  resolveSubagentState(view, options = {}) {
     const fallback = { isSubagentRunning: false, runningSubagentCount: 0 };
     if (!view || typeof view.querySelectorAll !== 'function') return fallback;
+
+    const isSubpane =
+      typeof options?.isSubpane === 'boolean'
+        ? options.isSubpane
+        : Boolean(
+            view.getAttribute?.('data-testid') === 'subagent-tab-conversation' ||
+              view.getAttribute?.('data-media-drop-scope') === 'subpane'
+          );
 
     let runningCount = 0;
     let detected = false;
@@ -453,22 +461,25 @@ export class AntigravityHudManager {
       });
     }
 
-    const activeSubagentMarkers = view.querySelectorAll(
-      '[data-testid="running-subagent-steps-toggle"], [data-testid="running-subagent-browser-steps"], [data-testid="browser-subagent-thinking"]'
-    );
-    if (activeSubagentMarkers && activeSubagentMarkers.length > 0) {
-      detected = true;
-      const markerContainers = new Set();
-      if (typeof activeSubagentMarkers.forEach === 'function') {
-        activeSubagentMarkers.forEach((m) => {
-          const container =
-            m.closest?.('[data-testid="browser-subagent-row"], [id^="subagentView-"], [data-cascade-id]') || m;
-          markerContainers.add(container);
-        });
-      }
-      const markerCount = Math.max(1, markerContainers.size);
-      if (runningCount < markerCount) {
-        runningCount = markerCount;
+    // 子智能体自身分栏内的 running-subagent / browser-subagent-thinking 与 Stop subagent 属于本栏自身运行态，不作为嵌套子智能体计数
+    if (!isSubpane) {
+      const activeSubagentMarkers = view.querySelectorAll(
+        '[data-testid="running-subagent-steps-toggle"], [data-testid="running-subagent-browser-steps"], [data-testid="browser-subagent-thinking"]'
+      );
+      if (activeSubagentMarkers && activeSubagentMarkers.length > 0) {
+        detected = true;
+        const markerContainers = new Set();
+        if (typeof activeSubagentMarkers.forEach === 'function') {
+          activeSubagentMarkers.forEach((m) => {
+            const container =
+              m.closest?.('[data-testid="browser-subagent-row"], [id^="subagentView-"], [data-cascade-id]') || m;
+            markerContainers.add(container);
+          });
+        }
+        const markerCount = Math.max(1, markerContainers.size);
+        if (runningCount < markerCount) {
+          runningCount = markerCount;
+        }
       }
     }
 
@@ -517,7 +528,10 @@ export class AntigravityHudManager {
           btn.textContent ||
           ''
         ).trim();
-        if (/^(?:Stop All Subagents|Stop subagent|停止所有子智能体|停止子智能体)$/i.test(label)) {
+        const isSubagentStopBtn = isSubpane
+          ? /^(?:Stop All Subagents|停止所有子智能体)$/i.test(label)
+          : /^(?:Stop All Subagents|Stop subagent|停止所有子智能体|停止子智能体)$/i.test(label);
+        if (isSubagentStopBtn) {
           detected = true;
           if (runningCount < 1) runningCount = 1;
         }
@@ -530,6 +544,7 @@ export class AntigravityHudManager {
     );
     if (activeToolNodes && typeof activeToolNodes.forEach === 'function') {
       activeToolNodes.forEach((node) => {
+        if (isSubpane && node === view) return;
         if (
           node.getAttribute?.('data-testid') === 'subagent-permission-source' ||
           node.closest?.('[data-testid="subagent-permission-source"]')
@@ -566,14 +581,38 @@ export class AntigravityHudManager {
     };
   }
 
-  resolveActivityPhase(view, precomputedSubagentState = null) {
+  resolveActivityPhase(view, precomputedSubagentState = null, options = {}) {
     if (!view || typeof view.querySelectorAll !== 'function') return 'idle';
-    const subState = precomputedSubagentState || this.resolveSubagentState(view);
+    const isSubpane =
+      typeof options?.isSubpane === 'boolean'
+        ? options.isSubpane
+        : Boolean(
+            view.getAttribute?.('data-testid') === 'subagent-tab-conversation' ||
+              view.getAttribute?.('data-media-drop-scope') === 'subpane'
+          );
+    void precomputedSubagentState;
 
+    // 仅认准当前分栏的前台轮次终止信号（排除 .codicon-loading，避免后台工具或异步任务残留 spinner 伪装前台活跃）
     const foregroundTurnNodes = view.querySelectorAll(
-      '[data-testid="input-cancel-button"], [data-testid="send-button-loading"], [data-testid="send-button-pending"], [data-testid="agent-loading"], [data-state="streaming"], [data-streaming="true"], .codicon-loading'
+      '[data-testid="input-cancel-button"], [data-testid="send-button-loading"], [data-testid="send-button-pending"], [data-testid="agent-loading"], [data-state="streaming"], [data-streaming="true"]'
     );
     let hasForegroundTurn = Boolean(foregroundTurnNodes && foregroundTurnNodes.length > 0);
+    let hasSubpaneThinkingMarker = false;
+
+    if (isSubpane) {
+      const subpaneThinking = view.querySelectorAll?.('[data-testid="browser-subagent-thinking"]');
+      if (subpaneThinking && subpaneThinking.length > 0) {
+        hasForegroundTurn = true;
+        hasSubpaneThinkingMarker = true;
+      } else {
+        const subpaneActiveNodes = view.querySelectorAll(
+          '[data-testid="running-subagent-steps-toggle"], [data-testid="running-subagent-browser-steps"]'
+        );
+        if (subpaneActiveNodes && subpaneActiveNodes.length > 0) {
+          hasForegroundTurn = true;
+        }
+      }
+    }
 
     if (!hasForegroundTurn) {
       const buttons = (this.resolveComposerElement(view) || view).querySelectorAll('button, [role="button"]');
@@ -588,18 +627,35 @@ export class AntigravityHudManager {
           if (
             /^(?:Stop generating|Stop|Cancel generation|Cancel\s*[（(][^）)]+[）)]|停止生成|停止|中断|取消\s*[（(][^）)]+[）)])$/i.test(
               label
-            )
+            ) ||
+            (isSubpane && /^(?:Stop subagent|停止子智能体)$/i.test(label))
           ) {
             hasForegroundTurn = true;
           }
         });
+      }
+      if (!hasForegroundTurn && isSubpane) {
+        const viewButtons = view.querySelectorAll('button, [role="button"]');
+        if (viewButtons && typeof viewButtons.forEach === 'function') {
+          viewButtons.forEach((btn) => {
+            const label = (
+              btn.getAttribute?.('aria-label') ||
+              btn.getAttribute?.('title') ||
+              btn.textContent ||
+              ''
+            ).trim();
+            if (/^(?:Stop subagent|停止子智能体)$/i.test(label)) {
+              hasForegroundTurn = true;
+            }
+          });
+        }
       }
     }
 
     const toolStatusNodes = view.querySelectorAll('[data-testid="ephemeral-tool-status"]');
     let hasApprovalWait = false;
     let hasEphemeralToolRunning = false;
-    let hasEphemeralThinking = false;
+    let hasEphemeralThinking = hasSubpaneThinkingMarker;
     if (toolStatusNodes && typeof toolStatusNodes.forEach === 'function') {
       toolStatusNodes.forEach((node) => {
         const statusText = (node.textContent || '').replace(/\s+/g, ' ').trim();
@@ -638,14 +694,8 @@ export class AntigravityHudManager {
       });
     }
 
+    // 当前分栏前台模型已停止（无终止/停止按钮）：无论是否存在后台工具或独立子智能体，小圆点一律保持灰色 idle
     if (!hasForegroundTurn) {
-      if (hasApprovalWait) return 'idle';
-      if (subState.isSubagentRunning || hasTaskSpinner || hasEphemeralToolRunning || hasToolCardShimmer) {
-        return 'executing';
-      }
-      if (hasEphemeralThinking || hasModelThinkingShimmer) {
-        return 'generating';
-      }
       return 'idle';
     }
 
@@ -659,10 +709,7 @@ export class AntigravityHudManager {
       return 'idle';
     }
 
-    if (hasModelThinkingShimmer || hasEphemeralThinking) {
-      return 'generating';
-    }
-
+    // 前台轮次活跃且正在与工具互动（包括同时存在思考文本与工具运行卡片时）：优先显示蓝色呼吸 executing
     if (hasEphemeralToolRunning || hasToolCardShimmer || hasTaskSpinner) {
       return 'executing';
     }
@@ -670,8 +717,8 @@ export class AntigravityHudManager {
     return 'generating';
   }
 
-  resolveStreamingState(view, precomputedSubagentState = null) {
-    return this.resolveActivityPhase(view, precomputedSubagentState) !== 'idle';
+  resolveStreamingState(view, precomputedSubagentState = null, options = {}) {
+    return this.resolveActivityPhase(view, precomputedSubagentState, options) !== 'idle';
   }
 
   dispatchMetrics(metrics) {

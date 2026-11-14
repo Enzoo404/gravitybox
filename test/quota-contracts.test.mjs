@@ -980,4 +980,104 @@ test('Keychain 免密写入、倒计时格式化与 5 桶配额架构', async ()
     await rm(sandbox, { recursive: true, force: true });
   }
 });
+
+test('live RetrieveUserQuotaSummary 失败返回空分组时自动回退云端补全分组，且 dashboard 不残留旧 stale_groups', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'gb-live-fallback-'));
+  await mkdir(join(dir, '词典'), { recursive: true });
+  const mgr = new AccountsManager(dir);
+  try {
+    const nowMs = Date.now();
+    const resetMs = 4 * 60 * 60 * 1000 + 19 * 60 * 1000;
+    const resetIso = new Date(nowMs + resetMs).toISOString();
+    const account = await mgr.upsertAccount({
+      email: 'live-fallback@example.test',
+      refreshToken: 'tok-refresh',
+      accessToken: 'tok-access',
+      expiresIn: 3600,
+    });
+    const oldObserved = Math.floor((nowMs - 3600_000) / 1000);
+    const oldQuota = {
+      models: [{ name: 'gemini-3.8-flash', percentage: 50, percentage_known: true, reset_time: resetIso }],
+      quota_groups: [
+        { display_name: 'Gemini', buckets: [{ bucket_id: 'gemini-5h', window: '5h', remaining_fraction: 0.5, remaining_fraction_known: true, reset_time: resetIso }] },
+        { display_name: 'Claude/GPT', buckets: [{ bucket_id: 'claude-weekly', window: 'weekly', remaining_fraction: 0.5, remaining_fraction_known: true, reset_time: resetIso }] },
+      ],
+      last_updated: oldObserved,
+      is_forbidden: false,
+      model_forwarding_rules: {},
+      subscription_tier: 'PRO',
+      source: 'live',
+      stale_groups: [{ name: 'Gemini', observed_at: oldObserved }],
+    };
+    account.quota = oldQuota;
+    await mgr.saveAccount(account);
+
+    // 模拟 language_server 的 GetUserStatus 成功但 RetrieveUserQuotaSummary 超时/失败（quota_groups 为空）
+    const partialLiveQuota = {
+      models: [{ name: 'gemini-3.8-flash', percentage: 0, percentage_known: false, reset_time: '' }],
+      quota_groups: [],
+      is_forbidden: false,
+      subscription_tier: 'PRO',
+      last_updated: Math.floor(nowMs / 1000),
+      model_forwarding_rules: {},
+      source: 'live',
+      refresh_state: {
+        complete: false,
+        endpointsAttempted: ['live:GetUserStatus', 'live:RetrieveUserQuotaSummary'],
+        endpointsSucceeded: ['live:GetUserStatus'],
+        missingFamilies: ['gemini'],
+        missingWindows: [],
+        carriedGroups: 0,
+        refreshedAt: Math.floor(nowMs / 1000),
+      },
+    };
+    mgr.probeLiveLanguageServer = async () => ({
+      email: account.email,
+      tier: 'PRO',
+      quota: partialLiveQuota,
+    });
+
+    let cloudCalled = false;
+    const cloudFetch = async value => {
+      cloudCalled = true;
+      const url = String(value);
+      if (url.includes('loadCodeAssist')) return Response.json({});
+      if (url.includes('fetchAvailableModels')) {
+        return Response.json({ models: { 'gemini-3.8-flash': { quotaInfo: { remainingFraction: 0.85 } } } });
+      }
+      return Response.json({
+        groups: [
+          { displayName: 'Gemini', buckets: [{ bucketId: 'gemini-5h', window: '5h', remainingFraction: 0.85, resetTime: resetIso }, { bucketId: 'gemini-weekly', window: 'weekly', remainingFraction: 0.8, resetTime: resetIso }] },
+          { displayName: 'Claude/GPT', buckets: [{ bucketId: 'claude-weekly', window: 'weekly', remainingFraction: 0.7, resetTime: resetIso }] },
+        ],
+      });
+    };
+
+    const refreshed = await mgr.refreshQuota(account.id, cloudFetch);
+    assert.equal(cloudCalled, true, 'live 仅缺分组时应回退云端补全分组');
+    assert.equal(refreshed.quota.source, 'cloud');
+    assert.equal(refreshed.quota.stale_groups, undefined);
+    assert.equal(refreshed.quota_refresh_error, null);
+
+    // 验证 buildDashboardAggregate 在 live 恢复完整分组时清除旧 savedQuota.stale_groups
+    const completeLiveQuota = mgr.fuseQuota(
+      { models: { 'gemini-3.8-flash': { quotaInfo: { remainingFraction: 0.9 } } } },
+      { groups: [{ displayName: 'Gemini', buckets: [{ bucketId: 'gemini-5h', window: '5h', remainingFraction: 0.9, resetTime: resetIso }] }] }
+    );
+    completeLiveQuota.refresh_state = { complete: true };
+    const savedWithStale = { ...refreshed, quota: oldQuota };
+    const agg = await buildDashboardAggregate({
+      listAccounts: async () => ({ accounts: [savedWithStale], active_account: savedWithStale, active_account_id: savedWithStale.id, revision: 'r1' }),
+      getAutoSwitchConfig: async () => ({ enabled: false }),
+      probeLiveLanguageServer: async () => ({ email: account.email, quota: completeLiveQuota }),
+      getAccount: async () => savedWithStale,
+      getAccountQuotaOverview: a => mgr.getAccountQuotaOverview(a),
+      getUsageSummary: async () => ({ today: { totals: { total_tokens: 0, request_count: 0 }, estimated_usd: 0 }, all_time: { totals: { total_tokens: 0, request_count: 0 }, estimated_usd: 0 }, by_model: [] }),
+      getPricingTable: async () => ({}),
+    });
+    assert.deepEqual(agg.accounts.stale_groups, [], '完整 live 数据合并后不得残留旧 stale_groups');
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+});
 });

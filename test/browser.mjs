@@ -605,7 +605,6 @@ ${engine}`,login.executionContextId);assert.equal(await text(cdp,'button'),'Sett
 
     }finally{cdp?.close();await browserCommand('Target.closeTarget',{targetId:target.targetId}).catch(error => { chromeErrors += '\nTarget cleanup: ' + error.message; });}
   });
-
   await check('模型关闭使用受控事件序列，设置关闭只操作本轮容器',async()=>{
     const target=await browserCommand('Target.createTarget',{url:origin+'/customizations'});let isolated;
     try { const page=await until(async()=>(await(await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find(t=>t.id===target.targetId));isolated=new CDP(page.webSocketDebuggerUrl);await isolated.connect();await documentReady(isolated);await isolated.evaluate("document.body.innerHTML=''");const tree=await isolated.send('Page.getFrameTree'),ctx=await isolated.send('Page.createIsolatedWorld',{frameId:tree.frameTree.frame.id,worldName:'GRAVITYBOX-close-guards-test'});
@@ -699,13 +698,41 @@ ${engine}`,auth.executionContextId);assert.equal(await cdp.evaluate('!!globalThi
     const target=await browserCommand('Target.createTarget',{url:origin+'/?settingsOpen=true&settingsScreen=General'});let cdp;
     try {
       const page=await until(async()=>(await(await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find(t=>t.id===target.targetId));cdp=new CDP(page.webSocketDebuggerUrl);await cdp.connect();await documentReady(cdp);
-      const html='<div role="dialog" aria-label="Settings"><button aria-label="Close">Close</button><aside><h1>Settings</h1><button>General</button><button>App Settings</button><button>Appearance</button><h2>Project list</h2><button id="settings-project">Queued Messages</button><button id="settings-expand" class="text-xs mx-4 hover:underline">Show All</button><h2>Not in a project</h2><button>Chats</button></aside><main><h2>General</h2><div id="settings-description">Configure agent execution, queued message delivery, and permissions.</div><div><span id="settings-queued">Queued Messages</span><div>Configure when follow-up messages are sent.</div><span id="settings-policy">Permission Preset</span><p id="settings-inline">Type <code>/</code> and select <code>plan</code> to have the agent generate a plan.</p><div class="font-mono" style="white-space: pre"><div><span id="settings-code-name">Name</span></div></div><div data-gravitybox-user-content id="settings-private">Permission Preset</div><input value="Queued Messages"></div></main></div><div id="settings-outside">Permission Preset</div>';
+      const html='<div role="dialog" aria-label="Settings"><button aria-label="Close">Close</button><aside><h1>Settings</h1><button>General</button><button>App Settings</button><button>Appearance</button><h2>Project list</h2><button id="settings-project">Queued Messages</button><button id="settings-expand" class="text-xs mx-4 hover:underline">Show All</button><button id="settings-expand-sm" class="text-sm mx-4 hover:underline">Show All</button><button id="settings-expand-less" class="text-sm mx-4 hover:underline">Show Less</button><h2>Not in a project</h2><button>Chats</button></aside><main><h2>General</h2><div id="settings-description">Configure agent execution, queued message delivery, and permissions.</div><div><span id="settings-queued">Queued Messages</span><div>Configure when follow-up messages are sent.</div><span id="settings-policy">Permission Preset</span><p id="settings-inline">Type <code>/</code> and select <code>plan</code> to have the agent generate a plan.</p><div class="font-mono" style="white-space: pre"><div><span id="settings-code-name">Name</span></div></div><div data-gravitybox-user-content id="settings-private">Permission Preset</div><input value="Queued Messages"></div></main></div><div id="settings-outside">Permission Preset</div>';
       await cdp.evaluate('document.body.innerHTML='+JSON.stringify(html));
-      const entries={Name:'名称','Show All':'显示全部',Settings:'设置',General:'通用','App Settings':'应用设置',Appearance:'外观','Queued Messages':'排队消息','Permission Preset':'权限预设','Configure when follow-up messages are sent.':'配置何时发送后续追问消息。','Configure agent execution, queued message delivery, and permissions.':'配置智能体执行、排队消息发送及权限。','Type {0} and select {1} to have the agent generate a plan.':'输入 {0} 并选择 {1}，让智能体生成规划。'};
+      const entries={Name:'名称','Show All':'显示全部','Show less':'收起',Settings:'设置',General:'通用','App Settings':'应用设置',Appearance:'外观','Queued Messages':'排队消息','Permission Preset':'权限预设','Configure when follow-up messages are sent.':'配置何时发送后续追问消息。','Configure agent execution, queued message delivery, and permissions.':'配置智能体执行、排队消息发送及权限。','Type {0} and select {1} to have the agent generate a plan.':'输入 {0} 并选择 {1}，让智能体生成规划。'};
       const engine=await readFile(join(root,'dist/engine.js'),'utf8');await cdp.evaluate('globalThis.__GRAVITYBOX_BOOT__='+JSON.stringify({origin,path:'/',dictionary:{schema:1,version:'real-settings-regression',entries},conservative:true})+';'+engine);
       await until(async()=>await text(cdp,'#settings-queued')==='排队消息');assert.equal(await text(cdp,'#settings-policy'),'权限预设');assert.equal(await text(cdp,'#settings-description'),'配置智能体执行、排队消息发送及权限。');
-      assert.equal(await text(cdp,'#settings-inline'),'输入 / 并选择 plan，让智能体生成规划。');assert.equal(await cdp.evaluate('document.querySelector("input").value'),'Queued Messages');assert.equal(await text(cdp,'#settings-project'),'Queued Messages');assert.equal(await text(cdp,'#settings-expand'),'显示全部');assert.equal(await text(cdp,'#settings-code-name'),'Name');assert.equal(await text(cdp,'#settings-private'),'Permission Preset');assert.equal(await text(cdp,'#settings-outside'),'Permission Preset');assert.equal(await text(cdp,'code'),' /'.trim());
+      assert.equal(await text(cdp,'#settings-inline'),'输入 / 并选择 plan，让智能体生成规划。');assert.equal(await cdp.evaluate('document.querySelector("input").value'),'Queued Messages');assert.equal(await text(cdp,'#settings-project'),'Queued Messages');assert.equal(await text(cdp,'#settings-expand'),'显示全部');assert.equal(await text(cdp,'#settings-expand-sm'),'显示全部');assert.equal(await text(cdp,'#settings-expand-less'),'收起');assert.equal(await text(cdp,'#settings-code-name'),'Name');assert.equal(await text(cdp,'#settings-private'),'Permission Preset');assert.equal(await text(cdp,'#settings-outside'),'Permission Preset');assert.equal(await text(cdp,'code'),' /'.trim());
       await cdp.evaluate('globalThis.__GRAVITYBOX_ENGINE_V1__.dispose()');assert.equal(await text(cdp,'#settings-queued'),'Queued Messages');assert.equal(await text(cdp,'#settings-inline'),'Type / and select plan to have the agent generate a plan.');
+    }finally{cdp?.close();await browserCommand('Target.closeTarget',{targetId:target.targetId}).catch(error => { chromeErrors += '\nTarget cleanup: ' + error.message; });}
+  });
+  await check('2.31-2.32 适配：新交互卡片选择性保护、新版实体路由、长文案采集与新动态模板', async () => {
+    const target=await browserCommand('Target.createTarget',{url:origin+'/'});let cdp;
+    try {
+      const page=await until(async()=>(await(await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find(t=>t.id===target.targetId));cdp=new CDP(page.webSocketDebuggerUrl);await cdp.connect();await documentReady(cdp);
+      const longCopy='Run a swarm: several agents working in parallel on one task, each in its own conversation, collaborating through a shared message board. Use when work splits cleanly.';
+      const html=`<main><div data-testid="coordinator-worker-card" role="button"><span id="v232-worker-name" class="text-sm truncate">Settings</span><div id="v232-worker-latest" data-testid="coordinator-card-latest-line">Settings</div><button id="v232-worker-stop" title="Stop Subagent">Stop Subagent</button></div><button id="v232-side-popout" data-testid="side-question-popout" aria-label="Open in full conversation"></button><div id="v232-side-user" data-testid="side-question-followup-user">Settings</div><div id="v232-side-thinking" data-testid="side-question-followup-thinking">Thinking...</div><div id="v232-voice-summary" data-testid="voice-transcript-summary">Settings</div><nav aria-label="Sidebar"><a id="v232-link-skill" href="/customizations/marketplaces/official/skills/my-skill">Settings</a><a id="v232-link-bundle" href="/customizations/marketplaces/official/bundles/my-bundle">Settings</a><a id="v232-link-sidecar" href="/customizations/sidecars/my-sidecar">Settings</a><a id="v232-link-trigger" href="/sidecars/triggers/my-trigger">Settings</a><a id="v232-link-nav" href="/customizations">Customizations</a></nav><div role="menu"><div data-testid="model-selector-panel"><span id="v232-model-weekly">Gemini Flash Next Weekly Limit</span><span id="v232-model-daily">Gemini Flash Next Daily Limit</span></div></div><div role="tooltip" id="v232-cancel-q">Cancel Questionnaire and Stop the Agent (Esc)</div><button id="v232-long-btn">${longCopy}</button></main>`;
+      await cdp.evaluate('document.body.innerHTML='+JSON.stringify(html));
+      const entries={Settings:'设置','Stop Subagent':'停止子智能体','Open in full conversation':'在完整对话中打开','Thinking...':'思考中...',Customizations:'自定义项'};
+      const engine=await readFile(join(root,'dist/engine.js'),'utf8');
+      await cdp.evaluate('globalThis.__GRAVITYBOX_BOOT__='+JSON.stringify({origin,path:'/',dictionary:{schema:1,version:'v232-regression',entries}})+';'+engine);
+      await until(async()=>await text(cdp,'#v232-worker-stop')==='停止子智能体');
+      assert.equal(await cdp.evaluate('document.querySelector("#v232-worker-stop").getAttribute("title")'),'停止子智能体');
+      assert.equal(await text(cdp,'#v232-worker-name'),'Settings');
+      assert.equal(await text(cdp,'#v232-worker-latest'),'Settings');
+      assert.equal(await cdp.evaluate('document.querySelector("#v232-side-popout").getAttribute("aria-label")'),'在完整对话中打开');
+      assert.equal(await text(cdp,'#v232-side-user'),'Settings');
+      assert.equal(await text(cdp,'#v232-side-thinking'),'思考中...');
+      assert.equal(await text(cdp,'#v232-voice-summary'),'Settings');
+      for(const id of ['#v232-link-skill','#v232-link-bundle','#v232-link-sidecar','#v232-link-trigger'])assert.equal(await text(cdp,id),'Settings');
+      assert.equal(await text(cdp,'#v232-link-nav'),'自定义项');
+      assert.equal(await text(cdp,'#v232-model-weekly'),'Gemini Flash Next 每周限额');
+      assert.equal(await text(cdp,'#v232-model-daily'),'Gemini Flash Next 每日限额');
+      assert.equal(await text(cdp,'#v232-cancel-q'),'取消问卷并停止智能体 (Esc)');
+      const collected=await cdp.evaluate('globalThis.__GRAVITYBOX_ENGINE_V1__.collectUntranslated()');
+      assert.equal(collected.some(item=>item.key===longCopy),true,'超过 120 字符的安全界面文案应被 collectUntranslated 采集');
+      await cdp.evaluate('globalThis.__GRAVITYBOX_ENGINE_V1__.dispose()');
     }finally{cdp?.close();await browserCommand('Target.closeTarget',{targetId:target.targetId}).catch(error => { chromeErrors += '\nTarget cleanup: ' + error.message; });}
   });
   await check('设置首帧、同词典刷新、热更新和退出动画保持译文，不跨帧回写英文', async () => {
@@ -995,14 +1022,25 @@ ${engine}`,auth.executionContextId);assert.equal(await cdp.evaluate('!!globalThi
     assert.equal(executingDotState.capAnim, 'hud-breathe-dot', '模型暂停且脚本执行时胶囊圆点必须呈蓝色呼吸');
     assert.equal(executingDotState.popAnim, 'hud-breathe-dot', '模型暂停且脚本执行时展开卡片圆点同步呈蓝色呼吸');
 
-    await main.evaluate(`document.querySelector('#hud-e2e-script-running').remove()`);
-    await main.evaluate(`document.querySelector('#hud-e2e-cancel-btn').remove()`);
+    // 移除 Cancel 按钮后即使工具 shimmer 与 .codicon-loading 仍存在，小圆点也必须立即回到灰色静止
+    await main.evaluate(`(() => {
+      document.querySelector('#hud-e2e-cancel-btn').remove();
+      const wrap = document.querySelector('#hud-e2e-msg-wrap');
+      const codicon = document.createElement('span');
+      codicon.id = 'hud-e2e-stale-codicon';
+      codicon.className = 'codicon-loading';
+      wrap.appendChild(codicon);
+    })()`);
     await until(async () => await main.evaluate(`(() => {
       const sr = document.querySelector('#__gravitybox_hud_host__').shadowRoot;
       return !sr.querySelector('.capsule-session').classList.contains('is-streaming') &&
         getComputedStyle(sr.querySelector('.capsule-session .hud-status-dot')).animationName === 'none' &&
         getComputedStyle(sr.querySelector('.capsule-session .hud-status-dot')).backgroundColor === 'rgb(113, 113, 122)';
     })()`));
+    await main.evaluate(`(() => {
+      document.querySelector('#hud-e2e-script-running')?.remove();
+      document.querySelector('#hud-e2e-stale-codicon')?.remove();
+    })()`);
 
     // 3b. 验证外部控件 stopPropagation() 的 pointerdown 仍能经捕获阶段自动关闭已固定 Popover
     const dismissedByStopPropOutside = await main.evaluate(`(() => {
@@ -1032,6 +1070,62 @@ ${engine}`,auth.executionContextId);assert.equal(await cdp.evaluate('!!globalThi
     assert.equal(ultraCompactInfo.speedDisplay, 'none');
     assert.equal(ultraCompactInfo.cacheDisplay, 'none');
     assert.equal(ultraCompactInfo.sameRow, true);
+
+    // 5. 验证单色渐深蓝进度条与 1 轻蓝 / 2 实心琥珀 / 3+ 实心正红压缩徽章渲染
+    const pushTier = async (compactionCount, usedRatio) => {
+      await main.evaluate(`(() => {
+        const mgr = globalThis.__GRAVITYBOX_HUD_V1__?.manager;
+        const inst = mgr ? [...mgr.instances.values()][0] : null;
+        if (!inst || !inst.lastMetrics) return;
+        mgr.dispatchMetrics({
+          ...inst.lastMetrics,
+          conversationId: inst.getCurrentConvId(),
+          sessionRevision: inst.getSessionRevision(),
+          metricsSequence: (inst.lastMetricsSequence || 0) + 1,
+          updatedAt: Date.now(),
+          availability: 'ready',
+          session: { ...inst.lastMetrics.session, compactionCount: ${compactionCount} },
+          context: {
+            ...inst.lastMetrics.context,
+            hasUsageData: true,
+            usedTokens: Math.round(${usedRatio} * 1000000),
+            usedRatio: ${usedRatio},
+            isFallbackCapacity: false,
+          },
+        });
+      })()`, ctx.executionContextId);
+      return await main.evaluate(`(() => {
+        const sr = document.querySelector('#__gravitybox_hud_host__').shadowRoot;
+        const badge = sr.querySelector('#hud-compaction-badge');
+        const fill = sr.querySelector('#hud-meter-fill');
+        const bStyle = getComputedStyle(badge);
+        return {
+          hidden: badge.hasAttribute('hidden'),
+          tier: badge.getAttribute('data-compaction-tier'),
+          bgImage: bStyle.backgroundImage,
+          bgColor: bStyle.backgroundColor,
+          fgColor: bStyle.color,
+          meterFill: fill.getAttribute('fill'),
+        };
+      })()`);
+    };
+
+    const tier1 = await pushTier(1, 0.15);
+    const tier2 = await pushTier(2, 0.55);
+    const tier3 = await pushTier(3, 0.92);
+    assert.equal(tier1.hidden, false);
+    assert.equal(tier1.tier, 'low');
+    assert.equal(tier1.bgImage, 'none', '1 次压缩应使用轻蓝半透明胶囊而非实心高饱和渐变');
+    assert.equal(tier2.tier, 'warn');
+    assert.ok(tier2.bgImage.includes('linear-gradient'), '2 次压缩应使用实心琥珀渐变');
+    assert.equal(tier3.tier, 'danger');
+    assert.ok(tier3.bgImage.includes('linear-gradient'), '3+ 次压缩应使用实心正红渐变');
+    assert.notEqual(tier2.bgImage, tier3.bgImage, '2 次琥珀与 3+ 次正红渐变样式必须清晰区分');
+    assert.notEqual(tier1.meterFill, tier3.meterFill, '进度条颜色应随占比加深');
+    assert.match(tier3.meterFill, /^rgb\(/, '92% 仍保持单色渐深蓝 rgb() 而非跳变红/黄');
+    const [rLow] = tier1.meterFill.match(/\d+/g).map(Number);
+    const [rHigh, , bHigh] = tier3.meterFill.match(/\d+/g).map(Number);
+    assert.ok(rLow > rHigh && bHigh > rHigh, '92% 时蓝色分量占优且比 15% 更深沉');
 
     await main.evaluate('document.querySelector("#hud-e2e-fixture").remove()');
     await main.evaluate('globalThis.__GRAVITYBOX_HUD_V1__?.reconcileMounts()', ctx.executionContextId);

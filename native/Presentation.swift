@@ -99,6 +99,10 @@ enum InterfaceText {
         return (value as String).replacingOccurrences(of: "(天|小时|分钟|秒)(?=[0-9])", with: "$1 ", options: .regularExpression)
     }
 
+    static func isMultiAccountSummary(_ raw: String) -> Bool {
+        raw.contains("详情见账号卡片") || raw.contains("部分刷新") || raw.contains("个账号")
+    }
+
     static func quotaMessage(_ raw: String) -> String {
         if raw.contains("3501") { return "许可校验失败 · 3501" }
         if raw.range(of: "HTTP\\s*403", options: .regularExpression) != nil { return "配额查询受限 · 403" }
@@ -106,6 +110,7 @@ enum InterfaceText {
         if raw.contains("凭据") { return "登录凭据待更新" }
         if raw.contains("超时") || raw.contains("timeout") { return "配额查询超时" }
         if raw.contains("未返回") || raw.contains("未取得") || raw.contains("沿用") { return "配额未更新" }
+        if isMultiAccountSummary(raw) { return "部分账号配额未更新" }
         return raw.isEmpty ? "" : "配额刷新失败"
     }
 

@@ -16,6 +16,7 @@ export const SUPPORTED_BUNDLES = new Map([
   ['2.30.0', '35e0da21894a7f6560075eae2501c88fede5204eb6067fac2653e2c7a63dc403'],
   ['2.31.0', '00c7aa77bcd1f0bce710f98a97be1e10c0b0fe91770d79216c94b47f2e591308'],
   ['2.31.2', '00c7aa77bcd1f0bce710f98a97be1e10c0b0fe91770d79216c94b47f2e591308'],
+  ['2.32.1', '4c0a1ff5659e7dd92e6ad249a386c0dbce2c8e94b88522a2f366ff20b397081e'],
 ]);
 export const VERIFIED_VERSIONS = new Set(SUPPORTED_BUNDLES.keys());
 
@@ -206,6 +207,10 @@ export function looksLikeNoise(text: string): boolean {
   if (/^(?:Command|Cmd|Ctrl|Control|Option|Alt|Shift)(?:\s+(?:Command|Cmd|Ctrl|Control|Option|Alt|Shift))*\s+[A-Z0-9]$/.test(text)) return true;
   if (/^(?:(?:height|width|min-height|max-height|opacity|transform|filter|all|color|background(?:-color)?|visibility)\s+\d*\.?\d+m?s(?:\s+(?:ease(?:-(?:in|out|in-out))?|linear))?(?:\s+\d*\.?\d+m?s)?(?:\s*,\s*|$))+$/.test(text)) return true;
   if (/^(?:Flash|Gemini|Claude|GPT|Gemma)(?:\s+(?:Lite|Pro|Flash|Max|Ultra|Mini|Nano|Thinking|High|Medium|Low|Argon)){0,3}$/.test(text)) return true;
+  /* 6. 代码示例字面量、过滤语法示例与键值调试前缀：非界面文案 */
+  if (/^`[^`]*`$/.test(text.trim())) return true;
+  if (/^[a-z_][a-z0-9_]*\s+in\s+\[[^\]]*\]$/.test(text.trim())) return true;
+  if (/^,\s*[a-zA-Z_][\w]*=$/.test(text.trim())) return true;
   return false;
 }
 

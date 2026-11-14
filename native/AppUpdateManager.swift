@@ -145,6 +145,35 @@ final class AppUpdateManager {
         onStateChanged?()
     }
 
+    func simulateDownloading(_ release: AppReleaseInfo) {
+        availableRelease = release
+        downloadedDMGURL = nil
+        state = .downloading(release)
+        app.syncUpdatePromptControls()
+        onStateChanged?()
+    }
+
+    func simulateReadyToInstall(_ release: AppReleaseInfo, dmgURL: URL) {
+        availableRelease = release
+        downloadedDMGURL = dmgURL
+        state = .readyToInstall(release, dmgURL)
+        app.syncUpdatePromptControls()
+        onStateChanged?()
+    }
+
+    func simulateInstalling(_ release: AppReleaseInfo) {
+        availableRelease = release
+        state = .installing(release)
+        app.syncUpdatePromptControls()
+        onStateChanged?()
+    }
+
+    func simulateFailed(_ message: String) {
+        state = .failed(message)
+        app.syncUpdatePromptControls()
+        onStateChanged?()
+    }
+
     func checkForUpdates(silent: Bool = false) {
         guard Thread.isMainThread else { DispatchQueue.main.async { [weak self] in self?.checkForUpdates(silent: silent) }; return }
         guard !checkInFlight, !downloadInFlight, !installationInFlight else { return }
