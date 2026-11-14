@@ -777,6 +777,9 @@ ${engine}`,auth.executionContextId);assert.equal(await cdp.evaluate('!!globalThi
     } finally { cdp?.close();await browserCommand('Target.closeTarget',{targetId:target.targetId}).catch(error => { chromeErrors += '\nTarget cleanup: ' + error.message; }); }
   });
   await check('HUD 独立挂载不覆盖输入区、窄屏单行、向上弹出及输入框零焦点争夺', async () => {
+    await main.send('Page.bringToFront');
+    await main.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] });
+    try {
     const tree = await main.send('Page.getFrameTree');
     const ctx = await main.send('Page.createIsolatedWorld', { frameId: tree.frameTree.frame.id, worldName: 'GRAVITYBOX-localization-v1' });
     await main.evaluate(`(() => {
@@ -1029,11 +1032,27 @@ ${engine}`,auth.executionContextId);assert.equal(await cdp.evaluate('!!globalThi
       scriptIndicator.textContent = 'Running npm test';
       wrap.appendChild(scriptIndicator);
     })()`);
-    await until(async () => await main.evaluate(`(() => {
-      const sr = document.querySelector('#__gravitybox_hud_host__').shadowRoot;
-      return sr.querySelector('.capsule-session').classList.contains('is-executing') &&
-        getComputedStyle(sr.querySelector('.capsule-session .hud-status-dot')).animationName === 'hud-breathe-dot';
-    })()`));
+    try {
+      await until(async () => await main.evaluate(`(() => {
+        const sr = document.querySelector('#__gravitybox_hud_host__').shadowRoot;
+        return sr.querySelector('.capsule-session').classList.contains('is-executing') &&
+          getComputedStyle(sr.querySelector('.capsule-session .hud-status-dot')).animationName === 'hud-breathe-dot';
+      })()`));
+    } catch (error) {
+      const diag = await main.evaluate(`(() => {
+        const sr = document.querySelector('#__gravitybox_hud_host__')?.shadowRoot;
+        const cap = sr?.querySelector('.capsule-session');
+        const dot = cap?.querySelector('.hud-status-dot');
+        return {
+          className: cap?.className || null,
+          dotAnim: dot ? getComputedStyle(dot).animationName : null,
+          dotBg: dot ? getComputedStyle(dot).backgroundColor : null,
+          reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches,
+          hidden: document.hidden,
+        };
+      })()`).catch(() => null);
+      throw new Error(`${error.message} [diag=${JSON.stringify(diag)}]`);
+    }
     const executingDotState = await main.evaluate(`(() => {
       const sr = document.querySelector('#__gravitybox_hud_host__').shadowRoot;
       const capStyle = getComputedStyle(sr.querySelector('.capsule-session .hud-status-dot'));
@@ -1153,6 +1172,9 @@ ${engine}`,auth.executionContextId);assert.equal(await cdp.evaluate('!!globalThi
 
     await main.evaluate('document.querySelector("#hud-e2e-fixture").remove()');
     await main.evaluate('globalThis.__GRAVITYBOX_HUD_V1__?.reconcileMounts()', ctx.executionContextId);
+    } finally {
+      await main.send('Emulation.setEmulatedMedia', { features: [] }).catch(() => {});
+    }
   });
   await check('真实 HUD binding→Worker SQLite→分栏投递；同会话双栏、A→B→A 与英文独立运行', async () => {
     const ids = ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222'];
