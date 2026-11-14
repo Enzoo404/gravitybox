@@ -44,9 +44,24 @@ export class AntigravityHudManager {
         this.reconcileMounts();
       }
       if (typeof MutationObserver !== 'function') return;
-      this.mutationObserver = new MutationObserver(() => {
+      this.mutationObserver = new MutationObserver((mutations) => {
         if (!this.active || !this.enabled) return;
         if (this.reconcileTimer !== null) return;
+        if (
+          Array.isArray(mutations) &&
+          mutations.length > 0 &&
+          mutations.every((m) => {
+            const t = m?.target;
+            return Boolean(
+              t &&
+                (t.classList?.contains?.('__gravitybox_hud_host__') ||
+                  t.closest?.('.__gravitybox_hud_host__'))
+            );
+          })
+        ) {
+          return;
+        }
+
         this.reconcileTimer = setTimeout(() => {
           this.reconcileTimer = null;
           this.checkRoute();
@@ -223,8 +238,9 @@ export class AntigravityHudManager {
       const isSubpane = Boolean(subConvNode || view.getAttribute?.('data-media-drop-scope') === 'subpane');
       const convId = this.resolveConversationId(view, rawCascadeId, views.length);
       const modelId = this.resolveActiveModel(view, views.length);
-      const subagentState = this.resolveSubagentState(view, { isSubpane });
-      const activityPhase = this.resolveActivityPhase(view, subagentState, { isSubpane });
+      const sharedButtons = typeof view.querySelectorAll === 'function' ? view.querySelectorAll('button, [role="button"]') : null;
+      const subagentState = this.resolveSubagentState(view, { isSubpane, buttons: sharedButtons });
+      const activityPhase = this.resolveActivityPhase(view, subagentState, { isSubpane, buttons: sharedButtons });
       const isStreaming = activityPhase !== 'idle';
       let instance = this.instances.get(slotId);
       if (!instance) {
@@ -416,8 +432,7 @@ export class AntigravityHudManager {
   }
 
   /**
-   * 检测当前分栏是否存在后台正在工作的子智能体 (Issue 2 核心修复)：
-   * 对应 Antigravity 2.30.0 `Gjc` / `Fjc` / `zdc` / `Zcc` 组件：
+   * 检测当前分栏是否存在后台正在工作的子智能体，综合多源正向活跃探针：
    * 1. `[data-testid="idle-status-text"]` 文本（如 `"1 subagent running"`, `"2 subagents running"`, `"Working"`, `"1 个子智能体正在运行"`）
    * 2. `[data-testid="running-subagent-steps-toggle"]`, `[data-testid="running-subagent-browser-steps"]`, `[data-testid="browser-subagent-thinking"]`
    * 3. `[aria-label^="Open Subagent:"]` / `[data-testid="browser-subagent-row"]` 中不含 `agent-status-done` / `agent-status-killed` / `agent-status-canceled` 的活跃卡片
@@ -519,7 +534,7 @@ export class AntigravityHudManager {
       }
     }
 
-    const buttons = view.querySelectorAll('button, [role="button"]');
+    const buttons = options?.buttons ?? view.querySelectorAll('button, [role="button"]');
     if (buttons && typeof buttons.forEach === 'function') {
       buttons.forEach((btn) => {
         const label = (
@@ -635,7 +650,7 @@ export class AntigravityHudManager {
         });
       }
       if (!hasForegroundTurn && isSubpane) {
-        const viewButtons = view.querySelectorAll('button, [role="button"]');
+        const viewButtons = options?.buttons ?? view.querySelectorAll('button, [role="button"]');
         if (viewButtons && typeof viewButtons.forEach === 'function') {
           viewButtons.forEach((btn) => {
             const label = (

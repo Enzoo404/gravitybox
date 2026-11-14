@@ -1,6 +1,6 @@
 import Cocoa
 
-/// Shared presentation layer for the backend quota contract (task-39).
+/// Shared presentation layer for the backend quota contract.
 ///
 /// The backend passes `familyWindows` / `argonStatus` / `carbonStatus` / `standaloneModels` /
 /// `quotaWarnings` / `refreshState` at the top level of account cards and dashboard accounts.
@@ -8,6 +8,10 @@ import Cocoa
 /// fallback for older fixtures, but a legacy weekly value is never relabelled as a 5-hour value.
 enum QuotaPresentation {
     static let staleResetText = "数据已过期"
+    private static let extraStandaloneGeminiRegex = try? NSRegularExpression(
+        pattern: "^gemini-[4-9](?:\\.[0-9]+)?-([a-z][a-z0-9]*?)(?:-(?:trial|preview|exp|disabled))?$",
+        options: [.caseInsensitive]
+    )
 
     struct Window {
         var percentage: Int?
@@ -365,8 +369,7 @@ enum QuotaPresentation {
                 let rawId = (m["model_id"] as? String ?? (m["name"] as? String ?? "")).lowercased()
                 let family = (m["family"] as? String ?? "").lowercased()
                 let isExtraGemini4: Bool = {
-                    guard let regex = try? NSRegularExpression(pattern: "^gemini-[4-9](?:\\.[0-9]+)?-([a-z][a-z0-9]*?)(?:-(?:trial|preview|exp|disabled))?$", options: [.caseInsensitive]),
-                          let match = regex.firstMatch(in: rawId, range: NSRange(location: 0, length: (rawId as NSString).length)) else { return false }
+                    guard let match = extraStandaloneGeminiRegex?.firstMatch(in: rawId, range: NSRange(location: 0, length: (rawId as NSString).length)) else { return false }
                     let code = (rawId as NSString).substring(with: match.range(at: 1)).lowercased()
                     return !["argon", "carbon", "pro", "flash", "ultra", "nano", "lite", "default"].contains(code)
                 }()

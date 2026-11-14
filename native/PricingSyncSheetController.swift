@@ -2,7 +2,7 @@ import Cocoa
 
 final class PricingSyncSheetController: NSObject, NSWindowDelegate {
     private unowned let app: Assistant
-    let sheet = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 580, height: 492), styleMask: [.titled], backing: .buffered, defer: false)
+    let sheet = SheetWindow(contentRect: NSRect(x: 0, y: 0, width: 580, height: 492), styleMask: [.titled], backing: .buffered, defer: false)
     private let statusIconBox = NSBox()
     private let statusIconView = NSImageView()
     private let titleLabel = text("价格基准", size: 16, weight: .semibold, color: .labelColor)
@@ -39,6 +39,7 @@ final class PricingSyncSheetController: NSObject, NSWindowDelegate {
         sheet.backgroundColor = .clear
         sheet.isOpaque = false
         sheet.delegate = self
+        sheet.onCancelOperation = { [weak self] in self?.closeSheet() }
 
         let surface = SheetVisualEffectView()
         sheet.contentView = surface

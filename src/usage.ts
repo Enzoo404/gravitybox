@@ -1146,7 +1146,8 @@ export class UsageStatsManager {
       if (previous) result.generated_at = previous.summary.generated_at;
       this.snapshots.set(id, { summary: result, ledger: previous?.ledger ?? aggregated.ledger_snapshot, events: [], prices: {}, rawPricing,
         expires: Date.now() + 600000, pins: previous?.pins ?? 0 });
-      this.lastAggregationKeysByAccount.set(accKey, JSON.stringify([await this.ledger.version(), this.calendarKey(), rawPricing, accountId ?? 'all', this.knownAccounts]));
+      const ledgerVersion = JSON.stringify([aggregated.ledger_snapshot.revision, aggregated.ledger_snapshot.rateRevision]);
+      this.lastAggregationKeysByAccount.set(accKey, JSON.stringify([ledgerVersion, this.calendarKey(), rawPricing, accountId ?? 'all', this.knownAccounts]));
       this.cachedSummariesByAccount.set(accKey, { data: result, expiresAt: Date.now() + (failedDatabasesCount > 0 ? 2000 : 30000) });
       this.periodKey = this.calendarKey();
       this.usageLedgerEvents.clear();
@@ -1278,6 +1279,12 @@ export class UsageStatsManager {
     }
 
     // 3. 单遍统计各账号与全部账号的 token / request / 未归属量与凭据键集合
+    const emailToAccountKey = new Map<string, string>();
+    for (const [k, opt] of accountMap.entries()) {
+      if (k !== 'all' && opt.email) {
+        emailToAccountKey.set(opt.email.toLowerCase(), k);
+      }
+    }
     let unattributedRequests = 0;
     let unattributedTokens = 0;
     const knownReceiptKeys = new Set<string>();
@@ -1298,12 +1305,7 @@ export class UsageStatsManager {
       if (ev.account_id && accountMap.has(ev.account_id)) {
         targetKey = ev.account_id;
       } else if (ev.account_email) {
-        for (const [k, opt] of accountMap.entries()) {
-          if (k !== 'all' && opt.email && opt.email.toLowerCase() === ev.account_email.toLowerCase()) {
-            targetKey = k;
-            break;
-          }
-        }
+        targetKey = emailToAccountKey.get(ev.account_email.toLowerCase()) ?? null;
       }
 
       if (!targetKey) {
@@ -1318,6 +1320,9 @@ export class UsageStatsManager {
           total_tokens: 0,
           request_count: 0,
         });
+        if (ev.account_email) {
+          emailToAccountKey.set(ev.account_email.toLowerCase(), newKey);
+        }
         targetKey = newKey;
       }
 
@@ -1325,6 +1330,8 @@ export class UsageStatsManager {
       item.total_tokens = (item.total_tokens ?? 0) + ev.total_tokens;
       item.request_count = (item.request_count ?? 0) + 1;
     }
+
+    allEvents.sort((a, b) => a.timestamp_seconds - b.timestamp_seconds || (a.event_key ?? '').localeCompare(b.event_key ?? ''));
 
     // 账号下钻过滤
     let effectiveEvents = allEvents;

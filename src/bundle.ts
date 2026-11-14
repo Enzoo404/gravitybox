@@ -321,6 +321,12 @@ export function findMissingStrings(extracted: { text: string; kinds?: string[] }
   const foldedMap = new Set<string>();
   for (const k of Object.keys(entries)) {
     foldedMap.add(k.toLowerCase());
+    if (k.startsWith('@ui:')) {
+      const parts = k.slice(4).split('|');
+      if (parts.length >= 3) {
+        foldedMap.add(parts.slice(2).join('|').toLowerCase());
+      }
+    }
   }
   for (const item of extracted) {
     if (item.kinds?.includes('template') || item.kinds?.includes('fragment')) continue;

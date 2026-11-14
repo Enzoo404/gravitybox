@@ -33,7 +33,9 @@ export function getGoogleClientId(): string {
 export function getGoogleClientSecret(): string {
   return process.env.GRAVITYBOX_GOOGLE_CLIENT_SECRET || process.env.GOOGLE_CLIENT_SECRET || '';
 }
+/** @deprecated 静态导入早于 .env 加载时可能为空，运行时逻辑请统一调用 getGoogleClientId() */
 export const GOOGLE_CLIENT_ID = getGoogleClientId();
+/** @deprecated 静态导入早于 .env 加载时可能为空，运行时逻辑请统一调用 getGoogleClientSecret() */
 export const GOOGLE_CLIENT_SECRET = getGoogleClientSecret();
 
 export const CLOUD_CODE_LOAD_PROJECT_ENDPOINTS = [

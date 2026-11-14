@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync } from 'node:fs';
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync, chmodSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { aggregateLedger, type AggregateOptions } from './usage-aggregate.js';
@@ -21,6 +21,30 @@ export function revalueLedger(db: DatabaseSync, path: string, options: Aggregate
     const reviews = join(dirname(path), 'ledger-reviews');
     if (options.action === 'preview') {
         mkdirSync(reviews, { recursive: true, mode: 0o700 });
+        try {
+            const previewReceipts = readdirSync(reviews)
+                .filter(name => /^[0-9a-f-]{36}\.json$/i.test(name))
+                .map(name => {
+                    const receiptFile = join(reviews, name);
+                    try {
+                        const parsed = JSON.parse(readFileSync(receiptFile, 'utf8'));
+                        if (parsed?.phase && parsed.phase !== 'preview') return null;
+                        const mtime = lstatSync(receiptFile).mtimeMs;
+                        return { id: name.slice(0, -5), mtime };
+                    } catch {
+                        return null;
+                    }
+                })
+                .filter((item): item is { id: string; mtime: number } => item !== null)
+                .sort((a, b) => a.mtime - b.mtime);
+            if (previewReceipts.length >= 5) {
+                for (const stale of previewReceipts.slice(0, previewReceipts.length - 4)) {
+                    for (const suffix of ['.json', '-before.sqlite', '-candidate.sqlite', '-rates-before.json']) {
+                        try { unlinkSync(join(reviews, stale.id + suffix)); } catch {}
+                    }
+                }
+            }
+        } catch {}
         const id = randomUUID(), backup = join(reviews, id + '-before.sqlite'), candidate = join(reviews, id + '-candidate.sqlite');
         const sourceRevision = revision(db), sourceFeesDigest = feesDigest(db);
         db.exec(`VACUUM INTO '${backup.replace(/'/g, "''")}'`);

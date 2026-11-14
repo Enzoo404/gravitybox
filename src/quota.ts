@@ -148,6 +148,10 @@ export function classifyWindow(rawWindow: unknown, bucketId?: unknown, displayNa
   return 'unspecified';
 }
 
+const SHARED_GEMINI_CODENAMES = new Set([
+  'pro', 'flash', 'ultra', 'nano', 'lite', 'default', 'exp', 'preview', 'trial', 'hydrogen',
+]);
+
 export function classifyFamily(input: {
   groupName?: unknown;
   description?: unknown;
@@ -170,7 +174,7 @@ export function classifyFamily(input: {
   const standaloneGeminiMatch = text.match(/\bgemini[\s_-]*[4-9](?:\.\d+)?[\s_-]+([a-z][a-z0-9]*)\b/i);
   if (standaloneGeminiMatch) {
     const codename = standaloneGeminiMatch[1]!.toLowerCase();
-    if (!['pro', 'flash', 'ultra', 'nano', 'lite', 'default', 'exp', 'preview', 'trial', 'hydrogen'].includes(codename)) {
+    if (!SHARED_GEMINI_CODENAMES.has(codename)) {
       return 'other';
     }
   }
@@ -186,9 +190,14 @@ function modelDisabled(record: any, id: string): boolean | null {
   return /(?:^|[-_])disabled(?:$|[-_])/i.test(id) ? true : null;
 }
 
-export function formatCountdown(resetTime: string | number | null | undefined, nowMs: number = Date.now()): string {
+export function formatCountdown(
+  resetTime: string | number | null | undefined,
+  nowMs: number = Date.now(),
+  options?: { preserveUnparsed?: boolean }
+): string {
+  if (!resetTime) return '';
   const normalized = normalizeResetTime(resetTime);
-  if (!normalized) return '';
+  if (!normalized) return options?.preserveUnparsed ? String(resetTime) : '';
   const tsMs = Date.parse(normalized);
   const diffMs = tsMs - nowMs;
   if (diffMs <= 0) return '重置时间已过';
@@ -937,12 +946,12 @@ export function mergeWindowStatuses(...statuses: (WindowStatus | null)[]): Windo
 
 /** Independent quota endpoint buckets are metering evidence, not model-list defaults. */
 export function normalizeIndependentArgonQuota(payload: any, observedAt: number): NormalizedModel[] {
-  const rows = (Array.isArray(payload?.buckets) ? payload.buckets : []).filter(
-    (b: any) =>
-      typeof b?.modelId === 'string' &&
-      /argon|carbon|^gemini-[4-9](?:\.\d+)?-(?!(?:pro|flash|ultra|nano|lite|default)(?:-|$))/i.test(b.modelId) &&
-      normalizeFraction(b.remainingFraction) !== null
-  );
+  const rows = (Array.isArray(payload?.buckets) ? payload.buckets : []).filter((b: any) => {
+    if (typeof b?.modelId !== 'string' || normalizeFraction(b.remainingFraction) === null) return false;
+    if (/argon|carbon/i.test(b.modelId)) return true;
+    const m = b.modelId.match(/^gemini-[4-9](?:\.\d+)?-([a-z][a-z0-9]*)(?:-|$)/i);
+    return Boolean(m && !SHARED_GEMINI_CODENAMES.has(m[1]!.toLowerCase()));
+  });
   return normalizeCloudModels(
     {
       models: Object.fromEntries(

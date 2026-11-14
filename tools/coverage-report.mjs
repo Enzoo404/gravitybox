@@ -202,20 +202,35 @@ export function properNounViolations(entries) {
  */
 export function reconcile(uiStrings, entries, bundleSource) {
   const covered = [], missing = [], caseOnly = [], templates = [], fragments = [];
+  const foldedEntries = new Map();
+  const scopedExact = new Set();
+  for (const candidate of entries.keys()) {
+    const lc = candidate.toLowerCase();
+    if (!foldedEntries.has(lc)) foldedEntries.set(lc, candidate);
+    if (candidate.startsWith('@ui:')) {
+      const parts = candidate.slice(4).split('|');
+      if (parts.length >= 3) {
+        const rawKey = parts.slice(2).join('|');
+        scopedExact.add(rawKey);
+        const rawLc = rawKey.toLowerCase();
+        if (!foldedEntries.has(rawLc)) foldedEntries.set(rawLc, candidate);
+      }
+    }
+  }
   for (const item of uiStrings.strings ?? []) {
     const key = normalized(item.text);
     if (item.kinds?.includes('template')) { templates.push({ text: item.text, count: item.count }); continue; }
     /* 拼接片段（"for " / " including "）：脱离上下文无法翻译，单列而不混进待补译，
        否则待译清单里永远躺着几条翻不了的半句话，门禁也就永远过不去。 */
     if (item.kinds?.includes('fragment')) { fragments.push({ text: item.text, count: item.count }); continue; }
-    if (entries.has(key)) { covered.push(key); continue; }
+    if (entries.has(key) || scopedExact.has(key)) { covered.push(key); continue; }
     // 大小写/结尾标点不同：引擎现在大小写不敏感，能命中，但键本身不规范
-    const folded = key.toLowerCase();
-    let matched = false;
-    for (const candidate of entries.keys()) {
-      if (candidate.toLowerCase() === folded) { caseOnly.push({ text: item.text, dictKey: candidate }); matched = true; break; }
+    const foldedHit = foldedEntries.get(key.toLowerCase());
+    if (foldedHit !== undefined) {
+      caseOnly.push({ text: item.text, dictKey: foldedHit });
+    } else {
+      missing.push({ text: item.text, kinds: item.kinds ?? [], count: item.count ?? 1 });
     }
-    if (!matched) missing.push({ text: item.text, kinds: item.kinds ?? [], count: item.count ?? 1 });
   }
   const uiSet = new Set((uiStrings.strings ?? []).map(s => normalized(s.text)));
   const uiFolded = new Set([...uiSet].map(s => s.toLowerCase()));

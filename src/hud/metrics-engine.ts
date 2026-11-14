@@ -1,4 +1,5 @@
-import { compactNumber, durationText } from '../metric-format.js';
+import { compactNumber, durationText, formatTurnDurationCompact } from '../metric-format.js';
+export { formatTurnDurationCompact };
 import { lstat, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -700,23 +701,7 @@ export function formatTurnDurationCard(seconds: number, lang: 'zh' | 'en' = 'zh'
   return durationText(seconds, lang);
 }
 
-/**
- * 格式化本轮用时常驻栏紧凑展示 (单位统一 s/m/h，省略零分；<60s 显示秒，>=60s 只显示分钟/小时，不显示秒)
- */
-export function formatTurnDurationCompact(seconds: number, lang: 'zh' | 'en' = 'zh'): string {
-  if (!Number.isFinite(seconds) || seconds < 0) return lang === 'en' ? 'Turn 0s' : '本轮 0s';
-  const rounded = Math.max(0, Math.round(seconds));
-  const prefix = lang === 'en' ? 'Turn ' : '本轮 ';
-  if (rounded < 60) {
-    return `${prefix}${rounded}s`;
-  }
-  const hours = Math.floor(rounded / 3600);
-  const minutes = Math.floor((rounded % 3600) / 60);
-  if (hours > 0) {
-    return `${prefix}${hours}h${minutes > 0 ? `${minutes}m` : ''}`;
-  }
-  return `${prefix}${minutes}m`;
-}
+
 
 export interface ComputeHudMetricsInput {
   conversationId?: string;
@@ -808,7 +793,7 @@ export function buildConversationHudMetrics(input: ComputeHudMetricsInput): Conv
     const first = step.t_first_token ?? step.firstTokenSeconds;
     const end = step.t_end ?? step.endTimeSeconds;
     const rawStatus = step.status ?? 3;
-    // F-02: 纳管 status=3 (DONE) 以及上下文压缩归档为 status=5 (CLEARED) 且具备完成证据的历史模型步
+    // 纳管 status=3 (DONE) 以及上下文压缩归档为 status=5 (CLEARED) 且具备完成证据的历史模型步
     const complete =
       rawStatus === 3 ||
       (rawStatus === 5 &&
@@ -1271,8 +1256,12 @@ interface CachedConversationState {
   walSize: number;
   lastStepIdx: number;
   lastGenIdx: number;
-  headerChecksum: string;
-  genChecksum: string;
+  parentMetaDigest: string;
+  stepPrefixCutoffIdx: number;
+  stepPrefixDigest: string;
+  genDigest: string;
+  genPrefixCutoffIdx: number;
+  genPrefixDigest: string;
   observedAt: number;
   lastSuccessAt: number;
   fromErrorFallback?: boolean;
@@ -1381,6 +1370,15 @@ export class ConversationMetricsEngine {
       return existing;
     }
 
+    const canReuseIncremental = Boolean(existing && !existing.fromErrorFallback);
+    const prevStepPrefixCutoffIdx =
+      canReuseIncremental && existing!.stepPrefixCutoffIdx >= 0
+        ? existing!.stepPrefixCutoffIdx
+        : undefined;
+    const prevGenPrefixCutoffIdx =
+      canReuseIncremental && existing!.genPrefixCutoffIdx >= 0
+        ? existing!.genPrefixCutoffIdx
+        : undefined;
     const scanParams = {
       dbPath,
       inlineBlobLimitBytes: INLINE_BLOB_LIMIT_BYTES,
@@ -1396,6 +1394,17 @@ export class ConversationMetricsEngine {
             }
           : undefined,
       cachedTrajectoryId: existing?.trajectoryId,
+      prevParentMetaDigest:
+        canReuseIncremental && !existing!.parentMetaReadError && existing!.parentMetaDigest
+          ? existing!.parentMetaDigest
+          : undefined,
+      prevStepPrefixCutoffIdx,
+      prevStepPrefixDigest:
+        prevStepPrefixCutoffIdx !== undefined ? existing!.stepPrefixDigest : undefined,
+      prevGenDigest: canReuseIncremental ? existing!.genDigest : undefined,
+      prevGenPrefixCutoffIdx,
+      prevGenPrefixDigest:
+        prevGenPrefixCutoffIdx !== undefined ? existing!.genPrefixDigest : undefined,
     };
 
     try {
@@ -1418,20 +1427,29 @@ export class ConversationMetricsEngine {
         hasTrajectoryMeta,
         hasParentMetadataBlob,
         parentMetaReadError,
+        parentMetaUnchanged,
+        parentMetaDigest,
         trajectoryId,
         metaBlobProjectedSlices,
         maxIdx,
-        headerChecksum,
-        lastGenIdx,
-        genChecksum,
+        stepsMode,
+        stepPrefixCutoffIdx,
+        stepPrefixDigest,
         appendedSteps,
+        genMode,
+        lastGenIdx,
+        genDigest,
+        genPrefixCutoffIdx,
+        genPrefixDigest,
         genBlobs,
       } = workerRes;
 
       const referencedUuidsInMetaBlob = new Set<string>(
-        parentMetaReadError ? existing?.referencedUuidsInMetaBlob ?? [] : []
+        parentMetaReadError || (parentMetaUnchanged && existing)
+          ? existing?.referencedUuidsInMetaBlob ?? []
+          : []
       );
-      if (!parentMetaReadError) {
+      if (!parentMetaReadError && !parentMetaUnchanged) {
         for (const slice of metaBlobProjectedSlices) {
           for (const u of parentReferences(slice)) {
             referencedUuidsInMetaBlob.add(u);
@@ -1439,8 +1457,6 @@ export class ConversationMetricsEngine {
         }
       }
 
-      let baseSteps: ParsedConversationStep[] = [];
-      let lastIdx = -1;
       const childConversationIds = new Set<string>();
       const selfLower = selfConversationId.toLowerCase();
       const selfTrajLower = trajectoryId?.toLowerCase() ?? '';
@@ -1464,21 +1480,36 @@ export class ConversationMetricsEngine {
         return parsed;
       };
 
+      const baseSteps: ParsedConversationStep[] =
+        stepsMode === 'append' && existing && prevStepPrefixCutoffIdx !== undefined
+          ? existing.steps
+              .filter(s => s.idx < prevStepPrefixCutoffIdx)
+              .map(s => ({ ...s, generation: undefined }))
+          : [];
       for (const row of appendedSteps) {
-        const parsed = parseStepRow(row);
-        baseSteps.push(parsed);
-        if (parsed.idx > lastIdx) {
-          lastIdx = parsed.idx;
-        }
+        baseSteps.push(parseStepRow(row));
       }
+      let lastIdx = baseSteps.length > 0 ? baseSteps[baseSteps.length - 1]!.idx : -1;
       if (maxIdx > lastIdx) {
         lastIdx = maxIdx;
       }
 
-      const generations = new Map<number, ParsedGenMetadata>();
-      for (const item of genBlobs) {
-        const parsed = parseLatestGenMetadataBlob(item.data);
-        generations.set(item.idx, parsed);
+      let generations: Map<number, ParsedGenMetadata>;
+      if (genMode === 'unchanged' && existing) {
+        generations = existing.generations;
+      } else if (genMode === 'append' && existing && prevGenPrefixCutoffIdx !== undefined) {
+        generations = new Map<number, ParsedGenMetadata>();
+        for (const [k, v] of existing.generations) {
+          if (k < prevGenPrefixCutoffIdx) generations.set(k, v);
+        }
+        for (const item of genBlobs) {
+          generations.set(item.idx, parseLatestGenMetadataBlob(item.data));
+        }
+      } else {
+        generations = new Map<number, ParsedGenMetadata>();
+        for (const item of genBlobs) {
+          generations.set(item.idx, parseLatestGenMetadataBlob(item.data));
+        }
       }
 
       const stepByIndex = new Map(baseSteps.map(step => [step.idx, step]));
@@ -1520,8 +1551,12 @@ export class ConversationMetricsEngine {
         walSize,
         lastStepIdx: lastIdx,
         lastGenIdx,
-        headerChecksum,
-        genChecksum,
+        parentMetaDigest: parentMetaReadError ? existing?.parentMetaDigest ?? '' : parentMetaDigest,
+        stepPrefixCutoffIdx,
+        stepPrefixDigest,
+        genDigest,
+        genPrefixCutoffIdx,
+        genPrefixDigest,
         observedAt,
         lastSuccessAt: nowMs,
         fromErrorFallback: false,

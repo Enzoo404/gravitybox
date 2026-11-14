@@ -42,7 +42,7 @@ export const GLOSSARY_RULES: { en: RegExp; zh: string; forbid: string[]; note: s
   { en: /\bchats?\b/i, zh: '对话', forbid: ['聊天'], note: 'chat → 对话' },
   { en: /\btokens?\b/i, zh: 'Token', forbid: ['令牌', '标记'], note: 'token → Token' },
   { en: /\ballow ?lists?\b/i, zh: '允许列表', forbid: ['白名单'], note: 'allowlist → 允许列表' },
-  { en: /\bdeny ?lists?\b/i, zh: '拒绝列表', forbid: ['黑名单'], note: 'denylist → 允许列表' },
+  { en: /\bdeny ?lists?\b/i, zh: '拒绝列表', forbid: ['黑名单'], note: 'denylist → 拒绝列表' },
   { en: /\bcustomizations?\b/i, zh: '自定义', forbid: ['个性化', '定制'], note: 'customization → 自定义' },
   { en: /\bplugins?\b/i, zh: '插件', forbid: [], note: 'plugin → 插件' },
   { en: /\bextensions?\b/i, zh: '扩展', forbid: [], note: 'extension → 扩展' },
@@ -175,7 +175,7 @@ const isCssUtilityList = (text: string) => {
 };
 
 /**
- * 覆盖率诊断噪声（I07）：**先 trim/规范化再匹配**。
+ * 覆盖率诊断噪声：**先 trim/规范化再匹配**。
  * 覆盖前导换行/空白、堆栈、日志前缀、压缩 JS 片段、纯标识符/路径/键名；不误伤正常界面文案与模板串。
  */
 export function isCoverageNoise(raw: string): boolean {
@@ -207,7 +207,7 @@ export function shouldHideCoverageRow(entry: { key: string; status?: string; obs
 export function extractCoverageStrings(source: string) {
   const found = new Map<string, { key: string; confidence: 'ui' | 'literal'; kind?: string; template: boolean }>();
   const blocked = (key: string) => !key || key.length > 400 || /[\u3400-\u9fff]/.test(key) || /(?:https?:\/\/|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}|\b(?:sk-|AIza)[\w-]{12,})/.test(key);
-  /** I07：所有候选（结构化抽取 + literal 兜底）都先 trim/规范化并过噪声判定，堆栈/日志/压缩 JS/纯标识符不进覆盖率清单。 */
+  /** 所有候选（结构化抽取 + literal 兜底）都先 trim/规范化并过噪声判定，堆栈/日志/压缩 JS/纯标识符不进覆盖率清单。 */
   const add = (raw: string, confidence: 'ui' | 'literal', kind?: string, template = false) => {
     const key = normalize(raw);
     if (blocked(key) || !isEnglishSource(template ? key.replace(/\$\{[^}]+\}/g, 'variable') : key) || isCoverageNoise(key)) return;

@@ -18,12 +18,6 @@ export interface ModelCapacitySpec {
  */
 export const DEFAULT_CONTEXT_CAPACITY_TOKENS = 200_000;
 
-/**
- * 保留纯数学辅助函数默认参数导出以兼容历史单元测试调用，但生产渲染层严禁展示虚构基线
- */
-export const DEFAULT_SYSTEM_PROMPT_BASELINE_TOKENS = 0;
-export const DEFAULT_TOOL_DEFINITIONS_BASELINE_TOKENS = 0;
-
 interface ModelFamilyRule {
   pattern: RegExp;
   capacityTokens: number;
@@ -169,13 +163,6 @@ export function resolveModelCapacity(rawModelInput?: string | null): ModelCapaci
     .replace(/^-+|-+$/g, '');
 
   normalizedId = normalizeModelId(normalizedId)
-    .replace(/^claude-3\.([57])-/, 'claude-3-$1-')
-    .replace(/^claude-(opus|sonnet)-3\.([57])\b/, 'claude-3-$2-$1')
-    .replace(/^claude-4\.6-opus/, 'claude-opus-4-6')
-    .replace(/^claude-4\.6-sonnet/, 'claude-sonnet-4-6')
-    .replace(/^claude-5\.5-opus/, 'claude-opus-5-5')
-    .replace(/^claude-5\.5-sonnet/, 'claude-sonnet-5-5')
-    .replace(/^claude-(opus|sonnet)-(\d+)\.(\d+)/, 'claude-$1-$2-$3')
     .replace(/(?:-(?:high|medium|low|extra-low|thinking|latest))+$/, '');
 
   const displayName =

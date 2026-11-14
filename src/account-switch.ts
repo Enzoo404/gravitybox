@@ -1,10 +1,11 @@
 import { type ApplicationChannel, type ApplicationTarget, applicationTarget } from './application-target.js';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { readFile, mkdir, lstat, open, unlink, readdir } from 'node:fs/promises';
+import { readFile, mkdir, lstat, unlink, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { atomicJson, atomicText } from './files.js';
+import { withProcessLease } from './process-lock.js';
 import { AccountsManager, SystemKeychainAdapter, syncAccountToKeychain, type KeychainAdapter, type Account } from './accounts.js';
 import { ProtobufWriter as Writer } from './protobuf.js';
 import { replaceTopicRow } from './account-state.js';
@@ -230,6 +231,7 @@ export class AccountSwitchService {
       await tx?.finish(false);
       await atomicJson(this.journalPath, committed ? this.completedRollback(original) : original);
       await unlink(this.rollbackPath);
+      this.manager.invalidateRuntimeCaches?.();
       return committed ? 'rolled-back' : 'restored';
     } finally { await tx?.close(); }
   }
@@ -290,18 +292,11 @@ export class AccountSwitchService {
   private async locked<T>(operation: () => Promise<T>): Promise<T> {
     await mkdir(this.options.stateDir, { recursive: true, mode: 0o700 });
     const path = join(this.options.stateDir, 'account-switch.lock');
-    let handle;
-    try { handle = await open(path, 'wx', 0o600); }
-    catch {
-      await this.regular(path);
-      const owner = Number(await readFile(path, 'utf8'));
-      if (!Number.isSafeInteger(owner) || owner <= 0) throw new Error('切换锁无法识别，请检查数据目录');
-      try { process.kill(owner, 0); throw new Error('已有账号切换或恢复操作，请等待完成'); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
-      await unlink(path); handle = await open(path, 'wx', 0o600);
-    }
-    await handle.writeFile(String(process.pid));
-    try { return await this.manager.runExclusive(operation); } finally { await handle.close(); await unlink(path); }
+    return withProcessLease(
+      path,
+      () => this.manager.runExclusive(operation),
+      { timeoutMs: 0, busyMessage: '已有账号切换或恢复操作，请等待完成' }
+    );
   }
   private async restoreFiles(files: SavedFile[], keychainBefore: string | null, keychainAfter: string, keychainAfterDigest?: string) {
     for (const file of files) {
@@ -368,6 +363,7 @@ export class AccountSwitchService {
         await this.guardStopped();
         if (transaction) await transaction.finish(true);
         committed = true;
+        this.manager.invalidateRuntimeCaches?.();
         await this.manager.recordAutoSwitchChoice(acc.id).catch(() => {});
         await atomicJson(this.journalPath, {
           ...journal,
@@ -454,6 +450,7 @@ export class AccountSwitchService {
         if (transaction) await transaction.replace(journal.before);
         await this.guardStopped();
         if (transaction) await transaction.finish(true);
+        this.manager.invalidateRuntimeCaches?.();
         record.phase = 'committed'; await atomicJson(this.rollbackPath, record);
         await atomicJson(this.journalPath, this.completedRollback(journal));
         await unlink(this.rollbackPath);

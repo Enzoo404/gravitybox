@@ -4,7 +4,8 @@ import { promisify } from 'node:util';
 import * as https from 'node:https';
 import * as http from 'node:http';
 import { applicationTarget, matchingTargetForLanguageServerCommand, type ApplicationTarget } from './application-target.js';
-import { verifyLanguageServerIdentity } from './discovery.js';
+import { resolveVerifiedLanguageServerPorts } from './discovery.js';
+import { SqliteReadSnapshot } from './sqlite-read.js';
 import {
   applyFamilyWindows,
   familyWindowsFromGroups,
@@ -115,20 +116,22 @@ export async function localRpcFetch(
 
 export async function readAntigravityStateDb(vscdbPath: string, keys: readonly string[]): Promise<Map<string, string>> {
   const out = new Map<string, string>();
-  if (!existsSync(vscdbPath)) return out;
-  let db: import('node:sqlite').DatabaseSync | undefined;
+  if (!existsSync(vscdbPath) || keys.length === 0) return out;
+  const reader = new SqliteReadSnapshot(vscdbPath);
   try {
-    const { DatabaseSync } = await import('node:sqlite');
-    db = new DatabaseSync(vscdbPath, { readOnly: true });
-    const placeholders = keys.map(() => '?').join(', ');
-    const rows = db.prepare(`SELECT key, value FROM ItemTable WHERE key IN (${placeholders});`).all(...keys) as Array<{ key?: string; value?: string }>;
-    for (const r of rows) {
-      if (typeof r.key === 'string' && typeof r.value === 'string') {
-        out.set(r.key, r.value);
+    const quotedKeys = keys.map(k => `'${String(k).replaceAll("'", "''")}'`).join(', ');
+    const res = await reader.query(`SELECT key, value FROM ItemTable WHERE key IN (${quotedKeys});`);
+    if (res.ok && Array.isArray(res.rows)) {
+      for (const r of res.rows) {
+        if (typeof r?.key === 'string' && typeof r?.value === 'string') {
+          out.set(r.key, r.value);
+        }
       }
     }
   } catch {}
-  finally { try { db?.close(); } catch {} }
+  finally {
+    await reader.close().catch(() => {});
+  }
   return out;
 }
 
@@ -142,6 +145,28 @@ export function extractTopicDataString(rawValue: string | undefined): string {
   }
 }
 
+let cachedLiveEndpoint: {
+  targetAppPath: string;
+  pid: number;
+  port: number;
+  protocol: 'https' | 'http';
+  csrfToken: string;
+} | null = null;
+
+export function clearLiveEndpointCache(): void {
+  cachedLiveEndpoint = null;
+}
+
+function isPidAlive(pid: number): boolean {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function probeLiveLanguageServerOnce(
   target: ApplicationTarget,
   fetchImpl: typeof fetch,
@@ -151,8 +176,160 @@ export async function probeLiveLanguageServerOnce(
     groupToQuotaGroup: (group: ReturnType<typeof mergeGroupSets>[number]) => QuotaGroup;
   }
 ): Promise<LiveLanguageServerStatus | null> {
+  const tryPortList = async (
+    targetPid: number,
+    csrfToken: string,
+    ports: number[],
+    preferredProtocol?: 'https' | 'http'
+  ): Promise<LiveLanguageServerStatus | null> => {
+    for (const port of ports) {
+      try {
+        let userStatusData: any = null;
+        let quotaSummaryData: any = null;
+        let activeProtocol: 'https' | 'http' = preferredProtocol ?? 'https';
+
+        if (fetchImpl !== globalThis.fetch) {
+          const resp = await fetchImpl(`http://127.0.0.1:${port}/exa.language_server_pb.LanguageServerService/GetUserStatus`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-codeium-csrf-token': csrfToken },
+            body: '{}',
+          });
+          if (resp.ok) userStatusData = await resp.json();
+        } else {
+          const firstProto: 'https' | 'http' = preferredProtocol ?? 'https';
+          const secondProto: 'https' | 'http' = firstProto === 'https' ? 'http' : 'https';
+          try {
+            userStatusData = await localRpcFetch(firstProto, port, '/exa.language_server_pb.LanguageServerService/GetUserStatus', csrfToken);
+            activeProtocol = firstProto;
+          } catch {
+            try {
+              userStatusData = await localRpcFetch(secondProto, port, '/exa.language_server_pb.LanguageServerService/GetUserStatus', csrfToken);
+              activeProtocol = secondProto;
+            } catch {}
+          }
+        }
+
+        const userStatus = userStatusData?.userStatus;
+        if (!userStatus?.email) continue;
+
+        if (fetchImpl === globalThis.fetch) {
+          cachedLiveEndpoint = {
+            targetAppPath: target.appPath,
+            pid: targetPid,
+            port,
+            protocol: activeProtocol,
+            csrfToken,
+          };
+        }
+
+        if (fetchImpl !== globalThis.fetch) {
+          try {
+            const respQ = await fetchImpl(`http://127.0.0.1:${port}/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'x-codeium-csrf-token': csrfToken },
+              body: '{}',
+            });
+            if (respQ.ok) {
+              const qRes = await respQ.json() as any;
+              quotaSummaryData = qRes.response || qRes;
+            }
+          } catch {}
+        } else {
+          const fallbackProtocol: 'https' | 'http' = activeProtocol === 'https' ? 'http' : 'https';
+          const reqBody = JSON.stringify({ forceRefresh: options.forceRefresh === true });
+          const summaryTimeoutMs = 6000;
+          try {
+            const qRes = await localRpcFetch(activeProtocol, port, '/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary', csrfToken, reqBody, summaryTimeoutMs);
+            quotaSummaryData = qRes?.response || qRes;
+          } catch {
+            try {
+              const qRes = await localRpcFetch(fallbackProtocol, port, '/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary', csrfToken, reqBody, summaryTimeoutMs);
+              quotaSummaryData = qRes?.response || qRes;
+            } catch {}
+          }
+        }
+
+        const email = String(userStatus.email);
+        const name = userStatus.name ? String(userStatus.name) : null;
+        const userTierId = typeof userStatus.userTier?.id === 'string' ? userStatus.userTier.id : null;
+        const userTierName = typeof userStatus.userTier?.name === 'string' ? userStatus.userTier.name : null;
+        const isEnterpriseVertex = Boolean(
+          userTierId === 'agy-business-paygo-tier' ||
+          userStatus.userTier?.usesGcpTos === true ||
+          userStatus.userTier?.userDefinedCloudaicompanionProject === true ||
+          /agent platform|business|enterprise/i.test(userTierName || '')
+        );
+        const accountType: 'consumer' | 'enterprise_vertex' = isEnterpriseVertex ? 'enterprise_vertex' : 'consumer';
+        const tierRaw = isEnterpriseVertex
+          ? (userStatus.planStatus?.planInfo?.planName || userStatus.planStatus?.planInfo?.teamsTier || userStatus.paidTier?.name || '')
+          : (userStatus.userTier?.name || userStatus.userTier?.id || userStatus.planStatus?.planInfo?.planName || userStatus.paidTier?.name || '');
+        let tier = isEnterpriseVertex ? '' : 'FREE';
+        if (/ultra/i.test(tierRaw)) tier = 'ULTRA';
+        else if (/pro/i.test(tierRaw)) tier = 'PRO';
+        else if (!isEnterpriseVertex && tierRaw) tier = 'FREE';
+
+        const observedAt = Math.floor(Date.now() / 1000);
+        const clientConfigs = userStatus.cascadeModelConfigData?.clientModelConfigs || [];
+        const models = mergeModelCatalogues([normalizeLiveModels(clientConfigs, observedAt)]);
+        const groups = mergeGroupSets([normalizeLiveGroups(quotaSummaryData, observedAt)]);
+        const windows = familyWindowsFromGroups(groups, Date.now());
+        const applied = applyFamilyWindows(models, windows);
+        const missingFamilies = (['gemini', 'claude', 'argon', 'carbon'] as const).filter(family =>
+          models.some(model => model.family === family && model.disabled !== true)
+          && !groups.some(group => group.family === family && group.buckets.some(bucket => bucket.remaining_fraction_known))
+          && !((family === 'argon' || family === 'carbon') && models.some(m => m.family === family && m.own_percentage_known && !m.own_stale)));
+        const quotaData: QuotaData = {
+          models: applied.map(mappers.modelQuotaFromNormalized),
+          quota_groups: groups.map(mappers.groupToQuotaGroup),
+          is_forbidden: false,
+          subscription_tier: tier,
+          last_updated: observedAt,
+          model_forwarding_rules: {},
+          source: 'live',
+          refresh_state: {
+            complete: models.length > 0 && groups.length > 0 && missingFamilies.length === 0,
+            endpointsAttempted: ['live:GetUserStatus', 'live:RetrieveUserQuotaSummary'],
+            endpointsSucceeded: ['live:GetUserStatus', ...(quotaSummaryData ? ['live:RetrieveUserQuotaSummary'] : [])],
+            missingFamilies,
+            missingWindows: [],
+            carriedGroups: 0,
+            refreshedAt: observedAt,
+          },
+          quota_warnings: models.length === 0 ? ['NO_MODEL_RECORDS: live 未返回模型列表'] : undefined,
+        };
+
+        return {
+          email,
+          name,
+          tier,
+          accountType,
+          userTierId,
+          userTierName,
+          quota: quotaData,
+        };
+      } catch {}
+    }
+    return null;
+  };
+
   try {
-    const { stdout: psOut } = await execFileAsync('/bin/ps', ['-ax', '-ww', '-o', 'pid=,args=']);
+    if (
+      fetchImpl === globalThis.fetch &&
+      cachedLiveEndpoint &&
+      cachedLiveEndpoint.targetAppPath === target.appPath &&
+      isPidAlive(cachedLiveEndpoint.pid)
+    ) {
+      const fastRes = await tryPortList(
+        cachedLiveEndpoint.pid,
+        cachedLiveEndpoint.csrfToken,
+        [cachedLiveEndpoint.port],
+        cachedLiveEndpoint.protocol
+      );
+      if (fastRes) return fastRes;
+      cachedLiveEndpoint = null;
+    }
+
+    const { stdout: psOut } = await execFileAsync('/bin/ps', ['-ax', '-ww', '-o', 'pid=,args='], { timeout: 3000 });
     const lines = psOut.split('\n');
     let targetPid = 0;
     let csrfToken = '';
@@ -180,14 +357,24 @@ export async function probeLiveLanguageServerOnce(
     }
 
     if (!targetPid || !csrfToken) return null;
-    if (fetchImpl === globalThis.fetch && !await verifyLanguageServerIdentity(targetPid, matchedAppPath)) return null;
 
-    const { stdout: lsofOut } = await execFileAsync('/usr/sbin/lsof', [
-      '-nP', '-a', '-p', String(targetPid), '-iTCP', '-sTCP:LISTEN', '-Fn'
-    ]);
-    const portMatches = Array.from(lsofOut.matchAll(/n127\.0\.0\.1:(\d+)/g)).map(m => parseInt(m[1]!, 10));
-    const ports = Array.from(new Set(portMatches));
-    if (ports.length === 0) return null;
+    let ports: number[] = [];
+    if (fetchImpl === globalThis.fetch) {
+      const verifiedPorts = await resolveVerifiedLanguageServerPorts(targetPid, matchedAppPath);
+      if (!verifiedPorts || verifiedPorts.length === 0) return null;
+      ports = verifiedPorts;
+    } else {
+      const { stdout: lsofOut } = await execFileAsync(
+        '/usr/sbin/lsof',
+        ['-nP', '-a', '-p', String(targetPid), '-iTCP', '-sTCP:LISTEN', '-Fn'],
+        { timeout: 3000 }
+      );
+      const portMatches = Array.from(lsofOut.matchAll(/n127\.0\.0\.1:(\d+)/g)).map(m => parseInt(m[1]!, 10));
+      ports = Array.from(new Set(portMatches));
+      if (ports.length === 0) return null;
+    }
+
+    return await tryPortList(targetPid, csrfToken, ports);
 
     for (const port of ports) {
       try {

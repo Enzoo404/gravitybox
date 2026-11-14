@@ -31,25 +31,67 @@ function regular(path: string) {
     if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== process.getuid?.())
         throw Error('用量总账文件身份不匹配，已停止写入');
 }
-function run(): unknown {
-    const { path, legacyPath, operation, events, options } = workerData;
+interface LegacyBaselineCache {
+    path: string;
+    dev: number;
+    ino: number;
+    size: number;
+    mtimeMs: number;
+    events: LedgerEvent[];
+}
+let cachedLegacyBaseline: LegacyBaselineCache | null = null;
+
+function readValidatedLegacyEvents(legacyPath: string): LedgerEvent[] {
+    if (!existsSync(legacyPath)) {
+        if (cachedLegacyBaseline?.path === legacyPath) cachedLegacyBaseline = null;
+        return [];
+    }
+    const stat = lstatSync(legacyPath);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== process.getuid?.())
+        throw Error('用量总账文件身份不匹配，已停止写入');
+    if (stat.size > 64 * 1024 * 1024)
+        throw Error('旧JSON总账超过自动读取预算，原文件保留，请先预览迁移');
+    if (
+        cachedLegacyBaseline &&
+        cachedLegacyBaseline.path === legacyPath &&
+        cachedLegacyBaseline.dev === stat.dev &&
+        cachedLegacyBaseline.ino === stat.ino &&
+        cachedLegacyBaseline.size === stat.size &&
+        cachedLegacyBaseline.mtimeMs === stat.mtimeMs
+    ) {
+        return cachedLegacyBaseline.events;
+    }
+    const legacy = JSON.parse(readFileSync(legacyPath, 'utf8'));
+    if (![1, 2].includes(legacy?.version) || !Array.isArray(legacy.events) || !legacy.events.every(validLedgerEvent)) {
+        throw Error('旧用量总账损坏或版本不支持；原文件已保留，停止写回');
+    }
+    cachedLegacyBaseline = {
+        path: legacyPath,
+        dev: stat.dev,
+        ino: stat.ino,
+        size: stat.size,
+        mtimeMs: stat.mtimeMs,
+        events: legacy.events,
+    };
+    return legacy.events;
+}
+
+function runRequest(payload: {
+    path: string;
+    legacyPath: string;
+    operation: string;
+    events?: LedgerEvent[];
+    options?: any;
+}): unknown {
+    const { path, legacyPath, operation, events, options } = payload;
     const result = new Map<string, LedgerEvent>();
-    let legacyEvents: LedgerEvent[] = [];
     // Validate before opening a writable database. Never overwrite or "repair" a damaged baseline.
-    if (existsSync(legacyPath)) {
-        regular(legacyPath);
-        if (lstatSync(legacyPath).size > 64 * 1024 * 1024)
-            throw Error('旧JSON总账超过自动读取预算，原文件保留，请先预览迁移');
-        const legacy = JSON.parse(readFileSync(legacyPath, 'utf8'));
-        if (![1, 2].includes(legacy?.version) || !Array.isArray(legacy.events) || !legacy.events.every(validLedgerEvent)) {
-            throw Error('旧用量总账损坏或版本不支持；原文件已保留，停止写回');
-        }
-        legacyEvents = legacy.events;
-        if (operation === 'load')
-            for (const event of legacy.events)
-                result.set(event.event_key, {
-                    ...event, account_id: undefined, account_email: undefined, account_confidence: 'legacy',
-                });
+    const legacyEvents = readValidatedLegacyEvents(legacyPath);
+    if (operation === 'load') {
+        for (const event of legacyEvents)
+            result.set(event.event_key!, {
+                ...event, account_id: undefined, account_email: undefined, account_confidence: 'legacy',
+            });
     }
     if (operation === 'review') {
         const suspicious = legacyEvents.filter(event => isSyntheticRecoveredDb(event.db_file) || !event.source_id);
@@ -279,9 +321,22 @@ function run(): unknown {
         db.close();
     }
 }
-try {
-    parentPort?.postMessage({ ok: true, value: run() });
+if (workerData && typeof workerData === 'object' && typeof workerData.operation === 'string') {
+    try {
+        parentPort?.postMessage({ ok: true, value: runRequest(workerData) });
+    }
+    catch (error) {
+        parentPort?.postMessage({ ok: false, error: (error as Error).message });
+    }
 }
-catch (error) {
-    parentPort?.postMessage({ ok: false, error: (error as Error).message });
+else {
+    parentPort?.on('message', (req: any) => {
+        const id = req?.id;
+        try {
+            parentPort?.postMessage({ id, ok: true, value: runRequest(req) });
+        }
+        catch (error) {
+            parentPort?.postMessage({ id, ok: false, error: (error as Error).message });
+        }
+    });
 }

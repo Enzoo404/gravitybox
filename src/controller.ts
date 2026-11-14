@@ -1,13 +1,13 @@
 import { BundleCache } from './bundle-cache.js';
 import { CdpHudBridge, HUD_BRIDGE_BINDING_NAME } from './hud.js';
-import { safeRoute, scopedKey, describeContext, uniqueCandidates, UI_KINDS, type PendingItem } from './candidates.js';
+import { scopedKey, describeContext, type PendingItem } from './candidates.js';
 import { readFile, mkdir } from 'node:fs/promises';
 import { watch, type FSWatcher } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { atomicJson, atomicText } from './files.js';
-import { rendererSources, nativeSources, createCoverage, recordCoverageVisit, coverageMarkdown, classifyCoverage, recountCoverage, coverageScopes, coverageTranslationLookup, resolveCoverageTranslation, isCoverageNoise, type CoverageReport } from './coverage.js';
-import { readPluginCatalog, appendPluginViews } from './plugin-catalog.js';
-import { DEEP_STEPS, traverseDeep, sanitizeNativeMenus, deepMarkdown, type DeepReport } from './deep-scan.js';
+import { nativeSources, createCoverage, classifyCoverage, recountCoverage, coverageScopes, coverageTranslationLookup, resolveCoverageTranslation, type CoverageReport } from './coverage.js';
+import { readPluginCatalog } from './plugin-catalog.js';
+import { sanitizeNativeMenus, deepMarkdown, type DeepReport } from './deep-scan.js';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { CDP, assertLoopback } from './cdp.js';
@@ -70,7 +70,6 @@ export class Controller {
   private inspectingBundle = false;
   private unverifiedWindowRetries = 0;
   private trustedCandidates: PendingItem[] = [];
-  private runtimeCandidates: PendingItem[] = [];
   private bundleCache = new BundleCache();
   private hudBridge: CdpHudBridge;
   private initialBundle?: string;
@@ -174,7 +173,7 @@ export class Controller {
         const target = targets.find(t => allowedTarget(t));
         if (!target || !await verifyPageService(target.url, activeApp)) { this.publish('waiting-window', '等待已确认身份的应用窗口'); this.retry(); return; }
         const bundle=await this.bundleCache.read(activeApp,this.endpoint.pid,this.endpoint.appVersion,new URL(target.url).origin);
-        if(this.status.bundleSha256!==bundle.hash){this.runtimeCandidates=[];this.trustedCandidates=[];}this.status.bundleSha256=bundle.hash;this.status.bundleCacheHit=bundle.cacheHit;this.initialBundle=bundle.source;
+        if(this.status.bundleSha256!==bundle.hash){this.trustedCandidates=[];}this.status.bundleSha256=bundle.hash;this.status.bundleCacheHit=bundle.cacheHit;this.initialBundle=bundle.source;
       }
       this.status.unverifiedVersion=!this.verifiedBundle();
       const browser = this.browser = new CDP(this.endpoint.browserURL);
@@ -434,7 +433,7 @@ export class Controller {
             strings: extracted,
           }).catch(() => {});
         }
-        if (missing.length > 0) {
+        if (this.trustedCandidates.length > 0) {
           const pendingPath = join(reportsDir, `pending-${appVersion}.json`);
           const pendingPayload = createPendingList(appVersion, sha, this.trustedCandidates.map(e=>e.key));
           await atomicJson(pendingPath, pendingPayload);
@@ -444,13 +443,14 @@ export class Controller {
 
       if (this.stopped || this.paused) return;
       const isVerified = this.verifiedBundle();
+      const candidateCount = this.trustedCandidates.length;
       if (!isVerified) {
-        const msg = missing.length > 0
-          ? `已连接（兼容模式：版本 ${appVersion} 发现 ${missing.length} 条待译新词，已生成清单）`
+        const msg = candidateCount > 0
+          ? `已连接（兼容模式：版本 ${appVersion} 发现 ${candidateCount} 条待译新词，已生成清单）`
           : `已连接（兼容模式：版本 ${appVersion} 词典匹配良好）`;
         this.publish('adaptive', msg);
-      } else if (missing.length > 0) {
-        this.publish('connected', `已连接；发现 ${missing.length} 条新词，已生成待译清单`);
+      } else if (candidateCount > 0) {
+        this.publish('connected', `已连接；发现 ${candidateCount} 条新词，已生成待译清单`);
       }
     } catch {
       // 后台探测异常不影响前台窗口注入与翻译
@@ -681,118 +681,6 @@ export class Controller {
     const report=await this.coverageReport()??createCoverage([],this.options.dictionary,this.status.appVersion??'unknown',this.status.bundleSha256??'',[]);
     const deep:DeepReport={schema:1,scope:'metadata',startedAt:new Date().toISOString(),finishedAt:new Date().toISOString(),state:'partial',steps:[],plugins:await readPluginCatalog(join(homedir(),'.gemini/config/plugins'),signal),nativeMenus:sanitizeNativeMenus(nativeInput,new Set(prepared.nativeKeys)),notes:['本轮仅采集插件展示说明与原生菜单，未自动切换页面。','插件说明仅本机记录；当前版本不提供在线补译，原生菜单不发送到模型。']};
     deep.state=deep.nativeMenus.state==='read'&&!deep.plugins.limited?'complete':'partial';report.deep=deep;signal.throwIfAborted();onCommit?.();const directory=join(this.options.stateDir!,'reports');await atomicJson(join(directory,'coverage.json'),report,signal);await atomicJson(join(directory,'deep-scan.json'),deep,signal);await atomicText(join(directory,'界面深度扫描报告.md'),deepMarkdown(deep),signal);this.coverage=report;this.publish();return{ok:deep.state==='complete',partial:true,message:`已读取 ${deep.plugins.entries.length} 条插件说明；${deep.nativeMenus.message}。未切换应用页面。`};
-  }
-  async deepScan(signal:AbortSignal, progress:(done:number,total:number)=>void, nativeInput?:unknown,onCommit?:()=>void) {
-    if(!this.pages.size)throw new Error('请先连接可识别的应用窗口');
-    if(this.pages.size!==1)throw new Error('深度扫描需要一个已连接的窗口；多窗口请分别巡检。');
-    // Preflight precedes scanning or navigation; no draft text leaves the page.
-    const initial=[...this.pages.values()][0]!;
-    if(initial.contextId===undefined)throw new Error('页面尚未就绪');
-    const ready=await initial.cdp.evaluate('({available:!!globalThis.__GRAVITYBOX_ENGINE_V1__?.deepScan})',initial.contextId);
-    if(!ready?.available)throw new Error('当前引擎尚未支持深度扫描，请重新连接新版助手');
-    progress(0,DEEP_STEPS.length+2);await this.scanCoverage(signal,()=>{},false);signal.throwIfAborted();
-    const report=this.coverage!;const allowed=new Set((await this.prepareDeepScan().catch(()=>({nativeKeys:[]}))).nativeKeys);
-    const deep:DeepReport={schema:1,scope:'navigation',startedAt:new Date().toISOString(),state:'running',steps:[],plugins:await readPluginCatalog(this.options.fixture?join(this.options.stateDir!,'fixture-plugins'):join(homedir(),'.gemini/config/plugins'),signal),nativeMenus:sanitizeNativeMenus(nativeInput,allowed),notes:['仅遍历已适配的常规入口，不执行插件、安装、账号、删除或发送操作。','用户接管时停止自动操作；恢复未确认会明确记录。','插件说明与实时菜单只存本机，不自动进入在线补译。','资源扫描和界面采样不等于所有账号条件与所有插件界面已覆盖。']};
-    report.deep=deep;progress(1,DEEP_STEPS.length+2);let failure:unknown;
-    const page={invoke:async(method:string,...args:unknown[])=>{
-      if(!['begin','step','sample','scroll','finish'].includes(method))throw new Error('不支持的巡检操作');
-      const value=await initial.cdp.evaluate(`globalThis.__GRAVITYBOX_ENGINE_V1__?.deepScan?.[${JSON.stringify(method)}](...${JSON.stringify(method==='begin'?[report.entries.filter(e=>e.status!=='native').map(e=>e.key)]:args)})`,initial.contextId);
-      if(value===undefined)throw new Error("页面上下文已失联，无法继续自动遍历");return value;
-    }};
-    try {
-      const outcome=await traverseDeep(page,signal,async view=>{this.absorbRuntimeCandidates(view?.candidates,report);if(view?.audit)recordCoverageVisit(report,view.route??'/other',view.audit);appendPluginViews(deep.plugins,view?.plugins);},(step,index)=>{deep.steps.push(step);progress(index+1,DEEP_STEPS.length+2);},restored=>{deep.restoration=restored;});
-      deep.steps=outcome.steps;deep.restoration=outcome.restoration;
-      deep.state=deep.nativeMenus.state==='read'&&deep.steps.every(s=>s.state==='visited')&&deep.restoration?.routeRestored&&deep.restoration?.editorsMatch?'complete':'partial';
-    }catch(error){failure=error;const takeover=/用户已接管/.test((error as Error).message);if(takeover)(failure as Error).name='UserIntervention';deep.state=signal.aborted||takeover?'cancelled':'failed';}
-    finally {
-      deep.finishedAt=new Date().toISOString();
-      await initial.cdp.evaluate('globalThis.__GRAVITYBOX_ENGINE_V1__?.stopAudit()',initial.contextId).catch(()=>{});report.auditExpiresAt=undefined;
-      if(!signal.aborted)onCommit?.();
-      const directory=join(this.options.stateDir!,'reports');
-      await atomicJson(join(directory,'coverage.json'),report);await atomicText(join(directory,'界面覆盖清单.md'),coverageMarkdown(report));
-      await atomicJson(join(directory,'deep-scan.json'),deep);await atomicText(join(directory,'界面深度扫描报告.md'),deepMarkdown(deep));this.publish();
-    }
-    if(failure)throw failure;
-    progress(DEEP_STEPS.length+2,DEEP_STEPS.length+2);
-    return{ok:deep.state==='complete',partial:true,message:`深度扫描已记录：插件说明 ${deep.plugins.entries.length} 条，界面 ${deep.steps.filter(s=>s.state==='visited').length} 项；${deep.nativeMenus.message}。${deep.restoration?.message??'恢复待确认'}`};
-  }
-  async scanCoverage(signal: AbortSignal, progress: (done:number,total:number)=>void, captureOnly = false, onCommit?:()=>void, stopAfter = false) {
-    if (this.paused || !this.pages.size || !this.endpoint || (!this.status.bundleSha256&&!this.options.fixture)) throw new Error('请先连接已适配的 Antigravity 并开启界面汉化');
-    let report = captureOnly ? await this.coverageReport() : undefined;
-    if (captureOnly && !report) throw new Error('请先扫描应用资源');
-    if (!captureOnly) {
-      const page = [...this.pages.values()][0]!; const origin = new URL(page.url).origin;
-      if (!this.options.fixture) {
-        const endpoint = await discover(this.options.appPath,this.options.profile);
-        if (!endpoint || endpoint.pid!==this.endpoint.pid || endpoint.appVersion!==this.status.appVersion || !await verifyPageService(page.url,endpoint.appPath ?? this.activeAppPath())) throw new Error('应用或页面身份已变化，请重新连接');
-      }
-      const source = await fetchBundleFromOrigin(origin,8000); signal.throwIfAborted(); const hash = computeBundleSha256(source);
-      if(this.options.fixture)this.status.bundleSha256=hash;
-      if (!this.options.fixture && this.status.bundleSha256!==hash) throw new Error('界面包在扫描期间变化，请重新连接');
-      const resources=await rendererSources(origin,source,signal,progress);signal.throwIfAborted();
-      if (!this.options.fixture) resources.resources.push(...await nativeSources(this.activeAppPath()));
-      signal.throwIfAborted();report=createCoverage(resources.resources,this.options.dictionary,this.status.appVersion!,hash,resources.skipped);
-      this.trustedCandidates=uniqueCandidates(report.entries.filter(e=>e.status!=='native'&&e.sources.some(s=>!s.startsWith('可见界面'))&&e.confidence==='ui'&&['missing','unchanged'].includes(e.status)&&!isCoverageNoise(e.key)&&isSafeCandidate(e.key)).map(e=>({key:e.key,kind:e.kind&&UI_KINDS.has(e.kind)?e.kind:undefined,source:'static' as const})));
-      this.status.newStringsCount=this.trustedCandidates.length+this.runtimeCandidates.length;
-    }
-    if(report!.dictionaryVersion!==this.options.dictionary.version) for(const entry of report!.entries){delete entry.observed;delete entry.observations;}
-    const lookup = coverageTranslationLookup(this.options.dictionary);
-    for (const entry of report!.entries) { const resolved=resolveCoverageTranslation(entry.key,lookup,coverageScopes(entry)); entry.translation=resolved.translation; entry.scoped=resolved.scoped; if(entry.status!=='native') { entry.status=resolved.ambiguous?'review':classifyCoverage(entry.key,entry.translation,entry.status==='dynamic');if(entry.confidence==='literal'&&entry.status==='missing')entry.status='review'; } }
-    report!.dictionaryVersion=this.options.dictionary.version;
-    const knownEntryKeys = new Set(report!.entries.map(e => e.key));
-    const first=[...this.pages.values()][0];
-    if(first?.contextId!==undefined){
-      const rules=await first.cdp.evaluate('globalThis.__GRAVITYBOX_ENGINE_V1__?.ruleCatalog?.()??[]',first.contextId);
-      for(const key of Array.isArray(rules)?rules:[])if(typeof key==='string'&&key.length<=400&&!knownEntryKeys.has(key)){knownEntryKeys.add(key);report!.entries.push({key,status:'dynamic',sources:['内置动态规则'],confidence:'ui'});}
-    }
-    const pluginCatalog = await readPluginCatalog(this.options.fixture ? join(this.options.stateDir ?? '', 'fixture-plugins') : join(homedir(), '.gemini/config/plugins'), signal);
-    for (const session of this.pages.values()) if (session.contextId !== undefined) {
-      signal.throwIfAborted(); appendPluginViews(pluginCatalog, await session.cdp.evaluate('globalThis.__GRAVITYBOX_ENGINE_V1__?.pluginCatalog?.()??[]', session.contextId));
-    }
-    if (captureOnly && report!.deep) appendPluginViews(pluginCatalog, report!.deep.plugins.entries);
-    if (report!.deep) report!.deep.plugins = pluginCatalog;
-    else report!.deep = {schema:1,scope:'metadata',startedAt:new Date().toISOString(),finishedAt:new Date().toISOString(),state:'partial',steps:[],plugins:pluginCatalog,nativeMenus:{state:'unavailable',labels:[],unmatched:0,message:'本次资源扫描未读取原生菜单'},notes:['只扫描资源及插件展示说明，未自动遍历页面。']};
-    const keys=report!.entries.filter(e=>e.status!=='native').map(e=>e.key);
-    for(const session of this.pages.values()) {
-      signal.throwIfAborted();if(session.contextId===undefined)continue;
-      const dynamic=await session.cdp.evaluate('globalThis.__GRAVITYBOX_ENGINE_V1__?.collectUntranslated()??[]',session.contextId);
-      this.absorbRuntimeCandidates(dynamic,report!,keys,undefined,knownEntryKeys);
-      const collectionState=await session.cdp.evaluate('globalThis.__GRAVITYBOX_ENGINE_V1__?.state()',session.contextId);
-      const timeLimit='可见文案采集达到时间上限；本次候选不代表该页全部文字。';
-      if(collectionState?.lastCollectionTruncated&&!report!.limits.includes(timeLimit))report!.limits.push(timeLimit);
-      if(!captureOnly){const started=await session.cdp.evaluate(`globalThis.__GRAVITYBOX_ENGINE_V1__?.startAudit(${JSON.stringify(keys)})`,session.contextId);report!.auditExpiresAt=started?.expiresAt;}
-      const audit=await session.cdp.evaluate(`globalThis.__GRAVITYBOX_ENGINE_V1__?.auditUi(${JSON.stringify(keys)})`,session.contextId);
-      if(!audit)throw new Error('当前引擎不支持页面采样，请更新并重新连接助手');
-      const recent=new Map<string,any[]>();
-      for(const row of Array.isArray(audit.recent)?audit.recent:[]) {if(typeof row?.route!=='string')continue;const rows=recent.get(row.route)??[];rows.push(row);recent.set(row.route,rows);}
-      for(const [route,observations]of recent)recordCoverageVisit(report!,route,{observations});
-      recordCoverageVisit(report!,new URL(session.url).pathname,audit);
-      if(stopAfter)await session.cdp.evaluate('globalThis.__GRAVITYBOX_ENGINE_V1__?.stopAudit()',session.contextId);
-    }
-    if(stopAfter)report!.auditExpiresAt=undefined;
-    this.trustedCandidates=uniqueCandidates(report!.entries.filter(e=>e.status!=='native'&&e.sources.some(s=>!s.startsWith('可见界面'))&&e.confidence==='ui'&&['missing','unchanged'].includes(e.status)&&!isCoverageNoise(e.key)&&isSafeCandidate(e.key)).map(e=>({key:e.key,kind:e.kind&&UI_KINDS.has(e.kind)?e.kind:undefined,source:'static' as const})));
-    this.status.newStringsCount=this.trustedCandidates.length+this.runtimeCandidates.length;
-    signal.throwIfAborted();
-    if(!this.options.stateDir)throw new Error('缺少报告目录');
-    const directory=join(this.options.stateDir,'reports');await mkdir(directory,{recursive:true,mode:0o700});
-    signal.throwIfAborted();onCommit?.();
-    await atomicJson(join(directory,'coverage.json'),report!,signal);await atomicText(join(directory,'界面覆盖清单.md'),coverageMarkdown(report!),signal);
-    this.coverage=report;this.publish();
-    return {ok:true,message:`${captureOnly?'已记录当前界面':'扫描完成'}：${report!.resources.length} 个资源，${report!.entries.length} 条候选；实机已验证 ${report!.counts.verified??0} 条。其他页面仍待检查。`};
-  }
-  private absorbRuntimeCandidates(rows:unknown,report:CoverageReport,keys?:string[],lookup=coverageTranslationLookup(this.options.dictionary),knownEntryKeys=new Set(report.entries.map(e=>e.key))){
-    for(const item of Array.isArray(rows)?rows:[]){
-      if(!isSafeCandidate(item?.key)||!UI_KINDS.has(item?.kind)||item.source!=='runtime-ui')continue;
-      const route=safeRoute(item.route),kind=item.kind;
-      /* 已有普通键或 @ui:<route>|<kind>| 场景译文的串，不再判 missing、也不进补译候选。 */
-      const resolved=resolveCoverageTranslation(item.key,lookup,[{route,kind}]);
-      const asText=(value:string)=>value.replace(/\s+/g,' ').trim().toLowerCase();
-      const translated=!!resolved.translation&&asText(resolved.translation)!==asText(item.key);
-      if(!knownEntryKeys.has(item.key)){knownEntryKeys.add(item.key);report.entries.push({key:item.key,status:resolved.ambiguous?'review':classifyCoverage(item.key,resolved.translation),confidence:'ui',sources:[`可见界面 ${route} ${kind}`],...(resolved.scoped?{scoped:true}:{})});if(!translated&&!resolved.ambiguous)keys?.push(item.key);}
-      if(translated||resolved.ambiguous)continue;
-      this.runtimeCandidates.push({key:item.key,kind,route,source:'runtime-ui',translationKey:scopedKey(item.key,kind,route)});
-    }
-    this.runtimeCandidates=uniqueCandidates(this.runtimeCandidates).slice(-1000);this.status.newStringsCount=this.trustedCandidates.length+this.runtimeCandidates.length;
   }
   async stop() {
     this.stopped = true; this.closeProfileWatchers(); clearTimeout(this.reconnection); clearTimeout(this.targetTimer);

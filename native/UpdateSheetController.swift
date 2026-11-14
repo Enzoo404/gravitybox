@@ -2,7 +2,7 @@ import Cocoa
 
 final class UpdateSheetController: NSObject, NSWindowDelegate {
     unowned let app: Assistant
-    let sheet = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 292), styleMask: [.titled], backing: .buffered, defer: false)
+    let sheet = SheetWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 292), styleMask: [.titled], backing: .buffered, defer: false)
     let titleLabel = text("GravityBox", size: 16, weight: .bold, color: .labelColor)
     let verPill: PillBadge
     let githubBtn: NSButton
@@ -32,6 +32,10 @@ final class UpdateSheetController: NSObject, NSWindowDelegate {
         sheet.delegate = self
         sheet.title = "软件更新"
         sheet.isReleasedWhenClosed = false
+        sheet.onCancelOperation = { [weak self] in
+            guard let self, self.closeBtn.isEnabled else { return }
+            self.closeSheet()
+        }
         sheet.isOpaque = false
         sheet.backgroundColor = .clear
 

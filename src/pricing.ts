@@ -129,16 +129,8 @@ export function matchPricingKeys(modelName: string): string {
     return '';
   }
   if (Object.hasOwn(MODEL_PRICE_ALIASES, modelName)) return MODEL_PRICE_ALIASES[modelName]!;
-  let lower = normalizeModelId(modelName);
-  lower = lower.replace(/[^a-z0-9.]+/g, '-').replace(/^-+|-+$/g, '');
-
   // Only audited aliases may inherit a public base price. Custom/experimental suffixes stay unknown.
-  lower = lower
-    .replace(/^claude-3\.([57])-/, 'claude-3-$1-')
-    .replace(/^claude-4\.6-opus/, 'claude-opus-4-6')
-    .replace(/^claude-4\.6-sonnet/, 'claude-sonnet-4-6')
-    .replace(/^claude-5\.5-opus/, 'claude-opus-5-5')
-    .replace(/^claude-5\.5-sonnet/, 'claude-sonnet-5-5');
+  const lower = normalizeModelId(modelName);
   for (const key of SORTED_DEFAULT_PRICE_KEYS) {
     if (lower === key) return key;
     if (lower.startsWith(key + '-') && /^(?:xhigh|extra-high|extra-low|high|medium|low|thinking|latest|preview|trial|\d{8}|\d{4}-\d{2}-\d{2}|\d{3})(?:-thinking)?(?:-\d{2}-\d{2})?$/.test(lower.slice(key.length + 1))) return key;

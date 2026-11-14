@@ -371,11 +371,18 @@ test('Main IPC 集成测试: 0.9.0 账号管理、额度策略、Token 用量与
     assert.equal(getCfgRes.ok, true);
     assert.equal(getCfgRes.config.reserve_percentage, 15);
 
-    // 3.1 测试 auto_switch_best
+    // 3.1 测试 auto_switch_best（含局部 config 安全合并与非法门槛拒绝）
     const bestRes = await rpc(directory, { command: 'auto_switch_best' });
     assert.equal(bestRes.ok, true);
     assert.ok('account' in bestRes);
     assert.ok('message' in bestRes);
+    const partialBestRes = await rpc(directory, { command: 'auto_switch_best', config: { enabled: true } });
+    assert.equal(partialBestRes.ok, true);
+    const invalidBestRes = await rpc(directory, {
+      command: 'auto_switch_best',
+      config: { reserve_percentage: 80, candidate_min_percentage: 30 },
+    });
+    assert.equal(invalidBestRes.ok, false);
 
     // 4. 测试 usage_summary 与 api_pricing_get
     const usageRes = await rpc(directory, { command: 'usage_summary', period: 'today' });
@@ -390,6 +397,14 @@ test('Main IPC 集成测试: 0.9.0 账号管理、额度策略、Token 用量与
     const pricingRes = await rpc(directory, { command: 'api_pricing_get' });
     assert.equal(pricingRes.ok, true);
     assert.ok(pricingRes.prices['gemini-3.8-flash']);
+    const offlineSyncCheck = await rpc(directory, {
+      command: 'pricing_sync_check',
+      feedUrl: 'http://127.0.0.1:1/unreachable-pricing-feed.json',
+    });
+    assert.equal(offlineSyncCheck.ok, true, '远端价格不可达时 IPC 仍须返回 ok:true 以呈现内置价格基准降级态');
+    assert.equal(offlineSyncCheck.synced, false);
+    assert.ok(offlineSyncCheck.prices['gemini-3.8-flash']);
+    assert.ok(offlineSyncCheck.status);
 
     // 5. 验证 dashboard_summary 返回 5 桶配额与 13 模型明细，且不含 sync 字段
     const dashRes = await rpc(directory, { command: 'dashboard_summary' });

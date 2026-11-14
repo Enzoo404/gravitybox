@@ -5,7 +5,8 @@ import { join } from 'node:path';
 import { openAsarArchive } from './asar.js';
 import { assertLoopback } from './cdp.js';
 import { targetForApp } from './application-target.js';
-const execute = promisify(execFile);
+const execFileRaw = promisify(execFile);
+const execute = (file: string, args: string[], timeout = 3000) => execFileRaw(file, args, { timeout });
 export type Endpoint = { port: number; pid: number; browserURL: string; appVersion: string; legacyPatch: boolean; appPath?: string; profile?: string };
 
 export function parseListeners(stdout: string, port: number): { pid: number; names: string[] }[] {
@@ -148,14 +149,25 @@ export async function verifyPageService(url: string, appPath: string): Promise<b
   }
 }
 
-/** Verify the real executable and official bundle before trusting a language-server listener. */
-export async function verifyLanguageServerIdentity(pid: number, appPath = '/Applications/Antigravity.app'): Promise<boolean> {
-  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+/** Verify the real executable and official bundle before trusting a language-server listener, returning verified loopback IPv4 ports. */
+export async function resolveVerifiedLanguageServerPorts(pid: number, appPath = '/Applications/Antigravity.app'): Promise<number[] | null> {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return null;
   try {
     await inspectBundle(appPath);
-    const executable = (await execute('/usr/sbin/lsof', ['-nP','-a','-p',String(pid),'-d','txt','-Fn'])).stdout;
-    if (!executable.split('\n').includes('n'+join(appPath,'Contents/Resources/bin/language_server'))) return false;
-    const listeners = (await execute('/usr/sbin/lsof',['-nP','-a','-p',String(pid),'-iTCP','-sTCP:LISTEN','-Fn'])).stdout.split('\n').filter(line=>line.startsWith('n'));
-    return listeners.length > 0 && listeners.every(line=>/^n(?:127\.0\.0\.1|\[::1\]):\d+$/.test(line));
-  } catch { return false; }
+    const executable = (await execute('/usr/sbin/lsof', ['-nP', '-a', '-p', String(pid), '-d', 'txt', '-Fn'])).stdout;
+    if (!executable.split('\n').includes('n' + join(appPath, 'Contents/Resources/bin/language_server'))) return null;
+    const listenerOut = (await execute('/usr/sbin/lsof', ['-nP', '-a', '-p', String(pid), '-iTCP', '-sTCP:LISTEN', '-Fn'])).stdout;
+    const listeners = listenerOut.split('\n').filter(line => line.startsWith('n'));
+    if (listeners.length === 0 || !listeners.every(line => /^n(?:127\.0\.0\.1|\[::1\]):\d+$/.test(line))) return null;
+    const portMatches = Array.from(listenerOut.matchAll(/n127\.0\.0\.1:(\d+)/g)).map(m => parseInt(m[1]!, 10));
+    return Array.from(new Set(portMatches));
+  } catch {
+    return null;
+  }
+}
+
+/** Verify the real executable and official bundle before trusting a language-server listener. */
+export async function verifyLanguageServerIdentity(pid: number, appPath = '/Applications/Antigravity.app'): Promise<boolean> {
+  const ports = await resolveVerifiedLanguageServerPorts(pid, appPath);
+  return ports !== null;
 }

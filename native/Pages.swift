@@ -10,7 +10,7 @@ final class DashboardPage: NSObject {
     // never be overwritten by the raw email (and so the badge always matches the visible copy).
     let accountStatusLabel = text("", size: 11, color: Design.secondary, wrap: true)
     let activeEmailLabel = text("", size: 11, color: .secondaryLabelColor, wrap: true)
-    let tierBadge = pillBadge("待确认", color: .systemBlue)
+    let tierBadge = pillBadge("待确认", color: Design.blue)
     let currentAccountPill = pillBadge("当前账号", color: Design.blue)
     // F04: percentage = remaining quota, so the title carries the "剩余" semantics explicitly.
     let gemini5hBar = quotaBar(title: "Gemini · 5 小时", percentage: nil, resetText: "", icon: "bolt.fill")
@@ -244,9 +244,16 @@ final class DashboardPage: NSObject {
     }
 
     func updateReadinessMatrix() {
-        let report = app.cachedUsageReportsByPeriod["today"] ?? [:]
+        let dashUsage = (lastSuccessfulSummary?["usage"] as? [String: Any]) ?? [:]
+        let report = app.cachedUsageReportsByPeriod["today:(app.selectedUsageAccountId)"]
+            ?? app.cachedUsageReportsByPeriod["today:all"]
+            ?? app.cachedUsageReportsByPeriod["today"]
+            ?? [:]
         let summary = report["summary"] as? [String: Any] ?? [:]
-        let hourly = (report["todayHourly"] as? [[String: Any]]) ?? (summary["today_hourly"] as? [[String: Any]]) ?? []
+        let hourly = (dashUsage["todayHourly"] as? [[String: Any]])
+            ?? (report["todayHourly"] as? [[String: Any]])
+            ?? (summary["today_hourly"] as? [[String: Any]])
+            ?? []
         let pts = UsageTrendChartView.todayPoints(hourly)
         todayTrendChart.points = pts
         if let maxPt = pts.max(by: { $0.tokens < $1.tokens }), maxPt.tokens > 0 {
@@ -258,7 +265,10 @@ final class DashboardPage: NSObject {
             todayPeakBadge.tint = Design.inactivePill
         }
 
-        let rawModels = (report["byModel"] as? [[String: Any]]) ?? (report["models"] as? [[String: Any]]) ?? []
+        let rawModels = (dashUsage["todayByModel"] as? [[String: Any]])
+            ?? (report["byModel"] as? [[String: Any]])
+            ?? (report["models"] as? [[String: Any]])
+            ?? []
         let models = rawModels.filter {
             let t = intVal($0, "totalTokens", fallback: intVal($0, "total_tokens"))
             let r = intVal($0, "requestCount", fallback: intVal($0, "request_count"))
@@ -398,8 +408,11 @@ final class DashboardPage: NSObject {
             accountStatusLabel.isHidden = false; accountStatusLabel.textColor = accessibleWarningColor()
             return
         }
-        app.fetchUsageSummary(period: "today", force: force) { [weak self] _ in
-            self?.updateReadinessMatrix()
+        let hasDashboardBentoData = (lastSuccessfulSummary?["usage"] as? [String: Any])?["todayByModel"] != nil
+        if !hasDashboardBentoData {
+            app.fetchUsageSummary(period: "today", force: force) { [weak self] _ in
+                self?.updateReadinessMatrix()
+            }
         }
         guard !metricsLoading else { return }
 
@@ -426,6 +439,11 @@ final class DashboardPage: NSObject {
                 self.lastMetricsFetchTime = Date()
                 self.metricsKey = currentKey
                 self.lastSuccessfulSummary = result
+                if (result["usage"] as? [String: Any])?["todayByModel"] == nil {
+                    self.app.fetchUsageSummary(period: "today", force: force) { [weak self] _ in
+                        self?.updateReadinessMatrix()
+                    }
+                }
                 self.renderSummary(result, isStaleFallback: false)
             }
         }

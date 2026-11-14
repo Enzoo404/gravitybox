@@ -248,7 +248,7 @@ final class AccountsPage: NSObject {
         recommendationLabel.lineBreakMode = .byTruncatingTail
         recommendationLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         switchRecommendedBtn.controlSize = .small
-        switchRecommendedBtn.bezelColor = .controlAccentColor
+        switchRecommendedBtn.bezelColor = Design.blue
         switchRecommendedBtn.action = #selector(switchRecommendedAccount)
         switchRecommendedBtn.setContentCompressionResistancePriority(.required, for: .horizontal)
         let recIcon = symbol("gauge.with.needle", size: 13.5, color: Design.blue)
@@ -1157,38 +1157,26 @@ final class AccountsPage: NSObject {
     @objc func refreshSingleAccountById(_ sender: NSButton) {
         let id = sender.identifier?.rawValue ?? ""
         guard !id.isEmpty, app.reachable, !app.refreshingAccountIds.contains(id) else { return }
-        // A05: busy/error 存在页面数据源，重建卡片后仍能落到当前按钮。
-        // 强引用 app：即使页面在请求期间被切走销毁，也要把 app.refreshingAccountIds 清干净。
-        let app = self.app
         accountRefreshErrors[id] = nil
         accountRefreshErrorStamps[id] = nil
-        app.singleAccountRefreshErrors[id] = nil
-        app.refreshingAccountIds.insert(id)
         let targetAccount = accounts.first(where: { ($0["id"] as? String) == id })
         let email = targetAccount?["email"] as? String ?? "账号"
-        app.updateQuotaRefreshControls()
-        applyCardRefreshState()
-        app.bridge.send(["command": "quota_refresh", "id": id]) { [weak self] response in
-            app.refreshingAccountIds.remove(id)
+        app.refreshSingleAccountQuota(id: id) { [weak self] response in
             guard let self else { return }
             switch response {
             case .failure(let error):
                 self.accountRefreshErrors[id] = error.localizedDescription
                 self.accountRefreshErrorStamps[id] = self.quotaStamp(for: id)
-                self.app.singleAccountRefreshErrors[id] = error.localizedDescription
                 self.app.showMessage("刷新 \(email) 配额失败：\(error.localizedDescription)", error: true)
             case .success(let value):
                 self.accountRefreshErrors[id] = nil
                 self.accountRefreshErrorStamps[id] = nil
-                self.app.singleAccountRefreshErrors[id] = nil
                 self.app.showMessage(value["message"] as? String ?? "已读取 \(email) 的配额，未返回的数据会单独标明。")
-                self.fetch()
                 self.app.refresh()
             }
-            // 立即把状态贴到当前挂载的按钮（不依赖点击时捕获的旧按钮）。
-            self.app.updateQuotaRefreshControls()
             self.applyCardRefreshState()
         }
+        applyCardRefreshState()
     }
 
     var policySheet: AccountPolicySheet?
@@ -1339,7 +1327,7 @@ final class AccountsPage: NSObject {
         let handler = RenameSheetHandler(sheet: sheet, parent: window, field: field, oldName: oldName)
         let cancelBtn = button("取消", target: handler, action: #selector(RenameSheetHandler.cancelPressed))
         let saveBtn = button("保存", target: handler, action: #selector(RenameSheetHandler.savePressed))
-        saveBtn.bezelColor = .controlAccentColor
+        saveBtn.bezelColor = Design.blue
         saveBtn.keyEquivalent = "\r"
         cancelBtn.keyEquivalent = "\u{1b}"
         saveBtn.isEnabled = false

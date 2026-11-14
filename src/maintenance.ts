@@ -597,12 +597,15 @@ export class CacheMaintenance {
       const moved: Array<{ entryName: string; from: string; to: string }> = [];
       const operations: JournalMove[] = [];
       let sequence = 0;
+      const needPostArchiveRecheck = usageDbsToArchive.length > 0;
       for (const row of current) {
         if (!row.exists || !row.subTargets.length) continue;
-        const recheck = row.isSingleLegacyRoot
-          ? await this.inspectSingleProfileItem(row.name)
-          : await this.inspectMultiTargetItem(row.name, row.subTargets);
-        if (recheck.fingerprint !== row.fingerprint) throw Error('缓存正在变化，停止清理');
+        if (needPostArchiveRecheck) {
+          const recheck = row.isSingleLegacyRoot
+            ? await this.inspectSingleProfileItem(row.name)
+            : await this.inspectMultiTargetItem(row.name, row.subTargets);
+          if (recheck.fingerprint !== row.fingerprint) throw Error('缓存正在变化，停止清理');
+        }
         for (const sub of row.subTargets) {
           if (!this.isAllowedTargetPath(sub.path)) throw Error('清理路径超出安全边界');
           const resolvedSub = resolve(sub.path);

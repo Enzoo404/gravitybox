@@ -1,7 +1,7 @@
 import { ALLOWED_DATA_DIRECTORY_NAMES, applicationChannel, savedApplicationChannel, applicationTarget, detectInstalledChannels, type ApplicationChannel, type ApplicationTarget } from './application-target.js';
 import { GoogleAccountLogin } from './account-oauth.js';
 import { AccountSwitchService } from './account-switch.js';
-import { AccountsManager, computeAccountRevision, projectAccountForIpc } from './accounts.js';
+import { AccountsManager, computeAccountRevision, projectAccountForIpc, type QuotaData } from './accounts.js';
 import { UsageStatsManager } from './usage.js';
 import { priceStatus } from './pricing.js';
 import {
@@ -56,17 +56,20 @@ function formatResetTime(resetTime: number | null | undefined): string {
 }
 
 /** 合并本机实时语言服务配额与已保存账号配额：当实时探测未返回分组/已知配额（如企业 Vertex AI）或套餐回退 FREE 时，保留已存分组、模型配额与真实高级套餐。 */
-function mergeLiveQuotaWithSaved(savedQuota: any, liveQuota: any): any {
+function mergeLiveQuotaWithSaved(
+  savedQuota: QuotaData | null | undefined,
+  liveQuota: QuotaData | null | undefined
+): QuotaData | null | undefined {
   if (!liveQuota) return savedQuota;
   if (!savedQuota) return liveQuota;
   const hasLiveGroups = Array.isArray(liveQuota.quota_groups) && liveQuota.quota_groups.length > 0;
-  const hasKnownLiveModels = Array.isArray(liveQuota.models) && liveQuota.models.some((m: any) => m?.percentage_known || m?.own_percentage_known);
+  const hasKnownLiveModels = Array.isArray(liveQuota.models) && liveQuota.models.some(m => m?.percentage_known || m?.own_percentage_known);
   const hasSavedModels = Array.isArray(savedQuota.models) && savedQuota.models.length > 0;
   const liveComplete = liveQuota.refresh_state?.complete === true;
   const mergedStaleGroups = liveQuota.stale_groups?.length
     ? liveQuota.stale_groups
     : (hasLiveGroups && liveComplete ? undefined : savedQuota.stale_groups);
-  const merged: any = {
+  const merged: QuotaData = {
     ...savedQuota,
     ...liveQuota,
     quota_groups: hasLiveGroups ? liveQuota.quota_groups : (savedQuota.quota_groups ?? []),
@@ -206,6 +209,10 @@ export async function buildDashboardAggregate(deps: DashboardAggregateDeps): Pro
           deps.getUsageSummary(),
           deps.getPricingTable(),
         ]);
+        const todayProjected =
+          Array.isArray(summary?.today?.by_model) && Array.isArray(summary?.today_hourly)
+            ? projectUsagePeriodSummary(summary, 'today')
+            : undefined;
         usage = {
           todayTokens: summary.today.totals.total_tokens,
           totalTokens: summary.all_time.totals.total_tokens,
@@ -228,6 +235,10 @@ export async function buildDashboardAggregate(deps: DashboardAggregateDeps): Pro
           unknownTimeRecords: (summary as any).unknown_time_records ?? 0,
           unknownTimeTokens: (summary as any).unknown_time_tokens ?? 0,
           databaseDiagnostics: (summary as any).database_diagnostics ?? [],
+          ...(todayProjected ? {
+            todayHourly: todayProjected.todayHourly,
+            todayByModel: todayProjected.byModel,
+          } : {}),
         };
       } catch (error) { usageError = sanitizeErrorMessage(error); }
     })(),
@@ -305,17 +316,8 @@ async function run() {
   const geminiDir = option('--gemini-dir', process.env.GRAVITYBOX_GEMINI_DIR || process.env.GEMINI_DIR || join(homedir(), '.gemini'))!;
   const cacheMaintenance = new CacheMaintenance(profile, join(homedir(), '.Trash'), undefined, { stateDir: channelStateDir, geminiDir, appPath });
   const accountsManager = new AccountsManager(stateDir, { target });
-  let liveProbeInFlight: Promise<any> | null = null;
-  let liveProbeCachedAt = 0;
-  let liveProbeCachedValue: any = null;
   function probeLiveCached() {
-    const now = Date.now();
-    if (now - liveProbeCachedAt < 4500) return Promise.resolve(liveProbeCachedValue);
-    if (liveProbeInFlight) return liveProbeInFlight;
-    liveProbeInFlight = accountsManager.probeLiveLanguageServer()
-      .then(val => { liveProbeCachedValue = val; liveProbeCachedAt = Date.now(); return val; })
-      .finally(() => { liveProbeInFlight = null; });
-    return liveProbeInFlight;
+    return accountsManager.probeLiveLanguageServer();
   }
   const accountLogin = new GoogleAccountLogin((token, signal) => accountsManager.addAccountFromOAuth(token, signal));
   const homeDir = option('--home-dir', process.env.GRAVITYBOX_HOME_DIR || homedir())!;
@@ -855,11 +857,11 @@ async function run() {
         })().catch(error => reply({ ok: false, state: 'unknown', error: sanitizeErrorMessage(error) }));
         return;
       }
-      // P-01 / B-01: 只读 IPC 命令直接并发响应，不阻塞在写锁 commandChain 队列后
+      // 只读 IPC 命令直接并发响应，不阻塞在写锁 commandChain 队列后
       const isReadOnlyAutoSwitch = command === 'auto_switch_best' && parsed.execute !== true;
-      if (['maintenance_scan', 'maintenance_history', 'account_recovery_info', 'auto_switch_get', 'usage_snapshot_release', 'usage_events', 'usage_summary', 'usage_ledger_review', 'api_pricing_revalue_preview', 'api_pricing_get'].includes(command) || isReadOnlyAutoSwitch) {
+      if (['maintenance_scan', 'maintenance_history', 'account_recovery_info', 'auto_switch_get', 'usage_snapshot_release', 'usage_events', 'usage_summary', 'usage_ledger_review', 'api_pricing_get', 'pricing_sync_status'].includes(command) || isReadOnlyAutoSwitch) {
         (async () => {
-          if (command === 'api_pricing_revalue_preview') { reply({ ok: true, preview: await usageManager.previewRevalueHistory(parsed.mode === 'unpriced_only' ? 'unpriced_only' : 'force_all') }); return; }
+          if (command === 'pricing_sync_status') { await syncActiveOfficialModelsToUsageManager(); reply({ ok: true, status: await usageManager.getPricingSyncStatus() }); return; }
           if (command === 'usage_ledger_review') { reply({ ok: true, review: await usageManager.ledgerReview() }); return; }
           if (command === 'maintenance_scan') { reply(await cacheMaintenance.scan({ retentionDays: parsed.retentionDays })); return; }
           if (command === 'maintenance_history') { reply({ ok: true, snapshots: await cacheMaintenance.history() }); return; }
@@ -905,16 +907,16 @@ async function run() {
       commandChain = commandChain.catch(() => {}).then(async () => {
         try {
           if(command==='shortcut_set'){if(!fixture)throw new Error('中英对照已移除');await controller.configureShortcut(parsed.enabled===true);reply({ok:true});return;}
+          if(command==='api_pricing_revalue_preview'){reply({ok:true,preview:await usageManager.previewRevalueHistory(parsed.mode === 'unpriced_only' ? 'unpriced_only' : 'force_all')});return;}
           if(command==='api_pricing_revalue'){const mode = parsed.mode === 'unpriced_only' ? 'unpriced_only' : 'force_all';reply({ok:true,...await usageManager.revalueHistory(parsed.confirm===true, { mode, previewId: typeof parsed.previewId === 'string' ? parsed.previewId : undefined })});return;}
           if(command==='api_pricing_revalue_rollback'){reply({ok:true,...await usageManager.restoreRevalueHistory(String(parsed.previewId ?? ''),parsed.confirm===true)});return;}
           if(command==='pricing_sync_set'){await atomicJson(join(stateDir, 'pricing-preferences.json'), {enabled:parsed.enabled===true});usageManager.setAutoRemotePricingSync(parsed.enabled===true);reply({ok:true});return;}
-          if(command==='pricing_sync_status'){await syncActiveOfficialModelsToUsageManager();reply({ok:true,status:await usageManager.getPricingSyncStatus()});return;}
           if(command==='pricing_sync_check'){
             await syncActiveOfficialModelsToUsageManager();
             const res=await usageManager.syncRemotePricing(parsed.feedUrl,true);
             const prices=await usageManager.getActivePricingTable();
             const pricingStatus=Object.fromEntries(Object.entries(prices).map(([k,v])=>[k,priceStatus(v)]));
-            reply({ok:res.synced,...res,prices,pricingStatus,status:await usageManager.getPricingSyncStatus()});
+            reply({ok:true,...res,prices,pricingStatus,status:await usageManager.getPricingSyncStatus()});
             return;
           }
           if(command==='hud_set'){const nextHud=parsed.enabled!==false;await saveRuntimePreferences({hudEnabled:nextHud});await controller.configureHud(nextHud);await writeChain;reply({ok:true,status:controller.snapshot()});return;}
@@ -970,7 +972,10 @@ async function run() {
           }
           if(command==='account_recovery_clear'){if(parsed.confirm!==true)throw new Error('请先确认清除恢复凭据');reply({ok:true,...await switchService.clearRecovery(String(parsed.digest))});return;}
           if (command === 'account_switch_rollback') {
-            reply({ ok: true, ...await switchService.rollback() }); return;
+            const result = await switchService.rollback();
+            await syncActiveAccountToUsageManager(true).catch(() => {});
+            usageManager.invalidateCache();
+            reply({ ok: true, ...result }); return;
           }
           if (command === 'account_oauth_begin') { reply({ ok: true, ...await accountLogin.begin() }); return; }
           if (command === 'account_oauth_status') { reply({ ok: true, ...accountLogin.status(String(parsed.id || '')) }); return; }
@@ -1000,7 +1005,7 @@ async function run() {
             });
             reply({ ok: true, taskId }); return;
           }
-          // ---- Phase 1 自动轮换与配额 IPC ----
+          // ---- 备用账号推荐与配额 IPC ----
           if (command === 'auto_switch_set') {
             reply({ ok: true, config: await accountsManager.setAutoSwitchConfig(parsed.config ?? {}) });
             return;

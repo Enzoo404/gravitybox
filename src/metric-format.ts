@@ -14,3 +14,14 @@ export function durationText(value: number, language: 'zh' | 'en' = 'zh'): strin
   if (language === 'en') return `${hours ? `${hours}h` : ''}${minutes ? `${minutes}m` : ''}${rest ? `${rest}s` : ''}`;
   return `${hours ? `${hours}小时` : ''}${minutes ? `${minutes}分` : ''}${rest ? `${rest}秒` : ''}`;
 }
+
+export function formatTurnDurationCompact(seconds: number, language: 'zh' | 'en' = 'zh'): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return language === 'en' ? 'Turn 0s' : '本轮 0s';
+  const rounded = Math.max(0, Math.round(seconds));
+  const prefix = language === 'en' ? 'Turn ' : '本轮 ';
+  if (rounded < 60) return `${prefix}${rounded}s`;
+  const hours = Math.floor(rounded / 3600);
+  const minutes = Math.floor((rounded % 3600) / 60);
+  if (hours > 0) return `${prefix}${hours}h${minutes > 0 ? `${minutes}m` : ''}`;
+  return `${prefix}${minutes}m`;
+}

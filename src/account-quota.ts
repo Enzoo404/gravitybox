@@ -1,4 +1,4 @@
-import { randomUUID, createHash } from 'node:crypto';
+import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import {
   applyFamilyWindows,
   buildArgonStatus,
@@ -14,6 +14,7 @@ import {
   normalizeCloudGroups,
   normalizeCloudModels,
   normalizeResetTime,
+  formatCountdown,
   normalizeStoredGroups,
   normalizeFraction,
   type ArgonStatus,
@@ -69,32 +70,7 @@ export function familyLabel(family: Family): string {
  * nowMs 允许同一份载荷使用同一参考时刻，避免同屏倒计时出现多个值。
  */
 export function formatResetCountdown(resetTime: string | number | null | undefined, nowMs: number = Date.now()): string {
-  if (!resetTime) return '';
-  const tsMs = typeof resetTime === 'number'
-    ? (resetTime < 1e11 ? resetTime * 1000 : resetTime)
-    : Date.parse(resetTime);
-  if (isNaN(tsMs)) return String(resetTime);
-
-  const diffMs = tsMs - nowMs;
-  if (diffMs <= 0) {
-    return '重置时间已过';
-  }
-  if (diffMs <= 60000) {
-    return '即将重置';
-  }
-
-  const totalMin = Math.floor(diffMs / 60000);
-  const days = Math.floor(totalMin / (24 * 60));
-  const hours = Math.floor((totalMin % (24 * 60)) / 60);
-  const mins = totalMin % 60;
-
-  if (days > 0) {
-    return `${days}天 ${hours}小时后重置`;
-  }
-  if (hours > 0) {
-    return `${hours}小时 ${mins}分后重置`;
-  }
-  return `${mins}分钟后重置`;
+  return formatCountdown(resetTime, nowMs, { preserveUnparsed: true });
 }
 
 /** 供应商英文描述中的倒计时（如 "it will fully refresh in 4 hours, 29 minutes."）统一按 reset_time 现算。 */
@@ -429,11 +405,7 @@ export interface AutoSwitchConfig {
 }
 
 export function generateDeviceProfile(): DeviceProfile {
-  const hex = (len: number) => {
-    let s = '';
-    while (s.length < len) s += Math.random().toString(16).slice(2);
-    return s.slice(0, len);
-  };
+  const hex = (len: number) => randomBytes(Math.ceil(len / 2)).toString('hex').slice(0, len);
   return {
     machine_id: hex(64),
     mac_machine_id: hex(64),
@@ -767,8 +739,8 @@ export function computeAccountRemaining(account: Account, monitoredModel = 'all'
 export function subscriptionTierRank(account: Account | AccountSummary | null | undefined): number {
   if (!account) return 0;
   const raw = String(account.quota?.subscription_tier ?? '').toUpperCase();
-  if (raw.includes('ULTRA')) return 3;
-  if (raw.includes('PRO')) return 2;
+  if (raw.includes('ULTRA')) return 4;
+  if (raw.includes('PRO')) return 3;
   if (raw.includes('FREE') || raw.includes('STARTER')) return 1;
   return 2;
 }

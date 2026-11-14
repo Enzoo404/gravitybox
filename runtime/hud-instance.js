@@ -1,4 +1,4 @@
-import { compactNumber, durationText } from '../dist/metric-format.js';
+import { compactNumber, durationText, formatTurnDurationCompact } from '../dist/metric-format.js';
 import { HUD_STYLES_CSS } from './hud-styles.js';
 import { computeUpwardPopoverPosition, applyPopoverGeometry } from './hud-popover.js';
 
@@ -20,10 +20,6 @@ const POPOVER_WIDTHS = {
 
 function isRawNumber(value) {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0;
-}
-
-function formatInteger(value) {
-  return String(Math.max(0, Math.floor(Number(value) || 0)));
 }
 
 const trimZeros = (text) => text.replace(/(\.\d*?[1-9])0+$|\.0+$/, '$1');
@@ -1079,13 +1075,7 @@ export class HudInstance {
   }
 
   formatCompactTurnDuration(sec, isEn) {
-    const r = Math.max(0, Math.round(sec));
-    const p = isEn ? 'Turn ' : '本轮 ';
-    if (r < 60) return `${p}${r}s`;
-    const h = Math.floor(r / 3600);
-    const m = Math.floor((r % 3600) / 60);
-    if (h > 0) return `${p}${h}h${m > 0 ? `${m}m` : ''}`;
-    return `${p}${m}m`;
+    return formatTurnDurationCompact(sec, isEn ? 'en' : 'zh');
   }
 
   stopTurnClock() {

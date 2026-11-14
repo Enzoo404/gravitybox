@@ -118,6 +118,17 @@ class DesignCardBox: NSBox {
     }
 }
 
+final class SheetWindow: NSWindow {
+    var onCancelOperation: (() -> Void)?
+    override func cancelOperation(_ sender: Any?) {
+        if let onCancelOperation {
+            onCancelOperation()
+        } else {
+            super.cancelOperation(sender)
+        }
+    }
+}
+
 final class SheetVisualEffectView: NSVisualEffectView {
     override init(frame frameRect: NSRect = .zero) {
         super.init(frame: frameRect)

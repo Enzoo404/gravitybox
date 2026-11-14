@@ -11,7 +11,7 @@ const active = new Map<string, string>();
 export type ProcessLease = { release(): Promise<void>; releaseSync(): void };
 
 /** Same-user exclusive lease. Only a provably dead owner may be reclaimed. */
-export async function acquireProcessLease(path: string, timeoutMs = 15000): Promise<ProcessLease> {
+export async function acquireProcessLease(path: string, timeoutMs = 15000, busyMessage = '已有后台或账号写入操作正在进行，请稍后重试'): Promise<ProcessLease> {
   const deadline = Date.now() + timeoutMs, nonce = randomUUID();
   while (true) {
     try {
@@ -30,7 +30,10 @@ export async function acquireProcessLease(path: string, timeoutMs = 15000): Prom
       if (!info.isFile() || info.isSymbolicLink() || info.uid !== process.getuid?.()) throw new Error('写入锁身份不匹配');
       const text = await readFile(path, 'utf8').catch(() => '');
       let pid = 0;
-      try { pid = JSON.parse(text).pid; } catch { /* The owner may still be creating the lease. */ }
+      try { pid = JSON.parse(text).pid; } catch {
+        const legacyPid = Number(text.trim());
+        if (Number.isSafeInteger(legacyPid) && legacyPid > 0) pid = legacyPid;
+      }
       if ((!Number.isSafeInteger(pid)||pid<=0) && Date.now()-info.mtimeMs>15000) {
         // Legacy half-created locks cannot have an owner after their descriptor is closed.
         let closed=false;
@@ -59,16 +62,20 @@ export async function acquireProcessLease(path: string, timeoutMs = 15000): Prom
           }
         }
       }
-      if (Date.now() >= deadline) throw new Error('已有后台或账号写入操作正在进行，请稍后重试');
+      if (Date.now() >= deadline) throw new Error(busyMessage);
       await delay(30);
     }
   }
 }
 
-export async function withProcessLease<T>(path: string, action: () => Promise<T>): Promise<T> {
+export async function withProcessLease<T>(
+  path: string,
+  action: () => Promise<T>,
+  options?: { timeoutMs?: number; busyMessage?: string }
+): Promise<T> {
   const inherited = context.getStore()?.get(path);
   if (inherited && active.get(path) === inherited) return action();
-  const lease = await acquireProcessLease(path), id = randomUUID();
+  const lease = await acquireProcessLease(path, options?.timeoutMs, options?.busyMessage), id = randomUUID();
   active.set(path, id);
   const next = new Map(context.getStore()); next.set(path, id);
   try { return await context.run(next, action); }

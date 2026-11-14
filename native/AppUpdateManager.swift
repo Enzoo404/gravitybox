@@ -735,7 +735,7 @@ final class AppUpdateManager {
 
     static func shellQuote(_ value: String) -> String { "'" + value.replacingOccurrences(of: "'", with: "'\"'\"'") + "'" }
 
-    static func buildDetachedUpdaterScript(myPid: Int32, stagedAppPath: String, targetAppPath: String, workDirPath: String, dmgFilePath: String = "") -> String {
+    static func buildDetachedUpdaterScript(myPid: Int32, stagedAppPath _: String = "", targetAppPath _: String = "", workDirPath: String, dmgFilePath _: String = "") -> String {
         let helper = URL(fileURLWithPath: workDirPath).appendingPathComponent("installer").path
         let receipt = URL(fileURLWithPath: workDirPath).appendingPathComponent(UpdateInstaller.receiptName).path
         let body = """

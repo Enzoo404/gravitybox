@@ -233,7 +233,7 @@
      (the controller calls it after navigatedWithinDocument) and by a light poll. Outside the list
      the engine suspends, restores every translation it owns to English and drops its queue; when
      the route comes back the document is rescanned and Chinese is re-applied. */
-  const ALLOWED_ROUTE = /^(?:\/|\/(?:history|sidecars|customizations|automations|settings|settings-standalone|terminal-standalone|new-project|onboarding|multi|artifact|s|chatski-connect)(?:\/.*)?|\/c(?:\/|\/(?:[0-9a-f-]{36}|_new)(?:\/.*)?)?|\/(?:forked|view|battle)\/.*)$/i;
+  const ALLOWED_ROUTE = /^(?:\/|\/(?:history|sidecars|customizations|automations|settings|settings-standalone|terminal-standalone|new-project|multi|artifact|s|chatski-connect)(?:\/.*)?|\/c(?:\/|\/(?:[0-9a-f-]{36}|_new)(?:\/.*)?)?|\/(?:forked|view|battle)\/.*)$/i;
   const RESTRICTED_ROUTE = /^\/(?:onboarding|oauth|auth|login|sign-in)(?:\/|$)/i;
   let routeExcluded = false;
   let routeTimer = null;
@@ -1421,6 +1421,76 @@
       key: "Cancel Questionnaire and Stop the Agent ({shortcut})",
       pattern: /^Cancel\s+Questionnaire\s+and\s+Stop\s+the\s+Agent\s+\(([^)]+)\)$/i,
       replace: (_, s) => `取消问卷并停止智能体 (${s})`
+    },
+    {
+      key: "{additions} lines added, {deletions} lines removed",
+      pattern: /^(\d+)\s+lines?\s+added,\s*(\d+)\s+lines?\s+removed$/i,
+      replace: (_, a, d) => `新增 ${a} 行，删除 ${d} 行`
+    },
+    {
+      key: "{name} (Remote)",
+      pattern: /^(.+?)\s+\(Remote\)$/i,
+      replace: (_, name) => `${name}（远程）`
+    },
+    {
+      key: "Account this MCP server uses: {name}",
+      pattern: /^Account\s+this\s+MCP\s+server\s+uses:\s*(.+)$/i,
+      replace: (_, name) => `此 MCP 服务器使用的账号：${name}`
+    },
+    {
+      key: "Detached at {commit}",
+      pattern: /^Detached\s+at\s+([0-9a-f]{7,40})$/i,
+      replace: (_, commit) => `游离于 ${commit}`
+    },
+    {
+      key: "Unfold lines {start}-{end}",
+      pattern: /^Unfold\s+lines\s+(\d+)-(\d+)$/i,
+      replace: (_, s, e) => `展开第 ${s}-${e} 行`
+    },
+    {
+      key: "View Diff for {file}",
+      pattern: /^View\s+Diff\s+for\s+(.+)$/i,
+      replace: (_, f) => `查看 ${f} 的差异`
+    },
+    {
+      key: "Version {version}",
+      pattern: /^Version\s+(v?\d+\.\d+(?:\.\d+)*(?:-[\w.]+)?)$/i,
+      replace: (_, v) => `版本 ${v}`
+    },
+    {
+      key: "Preview unavailable — {reason}",
+      pattern: /^Preview\s+unavailable\s+[—-]\s+(.+)$/i,
+      replace: (_, r) => `预览不可用 — ${r}`
+    },
+    {
+      key: "Open URL in system browser: {url}",
+      pattern: /^Open\s+URL\s+in\s+system\s+browser:\s*(https?:\/\/.+)$/i,
+      replace: (_, u) => `在系统浏览器中打开 URL：${u}`
+    },
+    {
+      key: "Opens external link: {url}",
+      pattern: /^Opens\s+external\s+link:\s*(https?:\/\/.+)$/i,
+      replace: (_, u) => `打开外部链接：${u}`
+    },
+    {
+      key: 'Created automation "{name}".',
+      pattern: /^Created\s+automation\s+"(.+)"\.$/i,
+      replace: (_, n) => `已创建自动化“${n}”。`
+    },
+    {
+      key: "The folder “{name}” does not exist. Would you like to create it?",
+      pattern: /^The\s+folder\s+[“"](.+?)[”"]\s+does\s+not\s+exist\.\s+Would\s+you\s+like\s+to\s+create\s+it\?$/i,
+      replace: (_, n) => `文件夹“${n}”不存在，是否创建？`
+    },
+    {
+      key: "This window's agents, files, and terminals are on {host}.",
+      pattern: /^This\s+window's\s+agents,\s+files,\s+and\s+terminals\s+are\s+on\s+(.+?)\.$/i,
+      replace: (_, h) => `此窗口的智能体、文件与终端运行于 ${h}。`
+    },
+    {
+      key: "Stop {count} selected",
+      pattern: /^Stop\s+(\d+)\s+selected$/i,
+      replace: (_, n) => `停止已选中的 ${n} 项`
     }
   ];
 

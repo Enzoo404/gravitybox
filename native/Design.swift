@@ -909,7 +909,7 @@ final class MetricCardBox: NSBox {
     override var focusRingMaskBounds: NSRect { bounds }
 }
 
-// MARK: - A01: KPI detail line
+// MARK: - KPI detail line
 // A real-data detail string ("累计 Token 用量 1.1B（统计 30/331 库）· 部分库异常") must not
 // contribute to the window's minimum width. This label therefore has no intrinsic width:
 // it fills the card, truncates with an ellipsis, and keeps the full copy in its tooltip

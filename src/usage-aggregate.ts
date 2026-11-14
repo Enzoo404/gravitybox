@@ -57,20 +57,25 @@ export function aggregateLedger(db: DatabaseSync, options: AggregateOptions): To
     const priceEntries = new Map<string, ApiPricingEntry | undefined>();
     const selectLock = db.prepare('SELECT unit_price,usd FROM rate_locks WHERE event_key=?');
     const saveLock = db.prepare('INSERT INTO rate_locks(event_key,unit_price,usd) VALUES(?,?,?) ON CONFLICT(event_key) DO UPDATE SET usd=excluded.usd,unit_price=excluded.unit_price');
+    const liveFileSet = options.liveFiles ? new Set(options.liveFiles) : null;
+    const knownById = new Map(options.accounts.map(acc => [acc.id, acc]));
+    const knownByEmail = new Map(options.accounts.map(acc => [acc.email.toLowerCase(), acc]));
+    let minPositiveTs = Infinity;
     let changedRateMinSeq = Number.POSITIVE_INFINITY;
     const firstSequence = db.prepare('SELECT MIN(seq) AS seq FROM event_revisions WHERE event_key=?');
     db.exec('BEGIN IMMEDIATE');
     try {
         for (const row of db.prepare('SELECT e.payload,l.unit_price,l.usd FROM events e LEFT JOIN rate_locks l ON l.event_key=e.event_key LEFT JOIN event_aliases a ON a.legacy_key=e.event_key WHERE a.legacy_key IS NULL').iterate()) {
             const event = JSON.parse(String(row.payload)) as LedgerEvent;
-            if (event.db_file === 'recovered_session.db' || event.db_file === 'recovered_enterprise_session.db' || !event.source_id && event.db_file && options.liveFiles?.includes(event.db_file))
+            if (event.db_file === 'recovered_session.db' || event.db_file === 'recovered_enterprise_session.db' || (!event.source_id && event.db_file && liveFileSet?.has(event.db_file)))
                 continue;
             if (!event.account_id && !event.account_email) { unattributedRequests++; unattributedTokens += event.total_tokens; }
             const all = accounts.get('all')!;
             all.total_tokens! += event.total_tokens;
             all.request_count!++;
             if (event.account_id || event.account_email) {
-                const owner = options.accounts.find(account => account.id === event.account_id || account.email.toLowerCase() === event.account_email?.toLowerCase());
+                const owner = (event.account_id ? knownById.get(event.account_id) : undefined)
+                    ?? (event.account_email ? knownByEmail.get(event.account_email.toLowerCase()) : undefined);
                 const id = owner?.id ?? event.account_id ?? event.account_email!;
                 const account = accounts.get(id) ?? { id, label: event.account_email ?? id, email: event.account_email, type: 'account' as const, total_tokens: 0, request_count: 0 };
                 account.total_tokens! += event.total_tokens;
@@ -123,6 +128,7 @@ export function aggregateLedger(db: DatabaseSync, options: AggregateOptions): To
                 unknownTokens += event.total_tokens;
                 continue;
             }
+            if (event.timestamp_seconds < minPositiveTs) minPositiveTs = event.timestamp_seconds;
             const date = new Date(event.timestamp_seconds * 1000), day = formatLocalDate(date);
             const addTrend = (map: Map<string, any>, key: string, attribute: string) => {
                 const value = map.get(key) ?? { [attribute]: key, input_tokens: 0, output_tokens: 0, cached_tokens: 0, cache_write_tokens: 0, total_tokens: 0, request_count: 0 };
@@ -146,17 +152,36 @@ export function aggregateLedger(db: DatabaseSync, options: AggregateOptions): To
     for (let index = 0; index < 4; index++) {
         const result = periods[index]!;
         result.by_model = [...models[index]!.values()].map(model => {
+            const isPriced = model.unpriced_tokens === 0;
+            const isPartial = model.unpriced_tokens > 0 && model.unpriced_tokens < model.total_tokens;
             const entry = options.prices[model.model] ?? options.prices[matchPricingKeys(model.model)];
             const price = resolvePricingForTimestamp(entry, now, model.model);
-            return { ...model, estimated_usd: Math.round(model.estimated_usd * 1e8) / 1e8, priced: model.unpriced_tokens === 0,
-                partiallyPriced: model.unpriced_tokens > 0 && model.unpriced_tokens < model.total_tokens,
-                pricingKey: matchPricingKeys(model.model), pricingStatus: price ? priceStatus(price) : 'historical', pricingProvenance: price?.provenance ?? null };
+            return {
+                ...model,
+                estimated_usd: Math.round(model.estimated_usd * 1e8) / 1e8,
+                priced: isPriced,
+                ...(isPartial ? { partiallyPriced: true } : {}),
+                ...(isPriced || isPartial ? {
+                    pricingKey: matchPricingKeys(model.model),
+                    pricingStatus: price ? priceStatus(price, now * 1000) : 'historical',
+                    pricingProvenance: price?.provenance ?? null,
+                } : {}),
+            };
         }).sort((a, b) => b.total_tokens - a.total_tokens);
         result.priced_models = result.by_model.filter(model => model.priced).length;
         result.unpriced_models = result.by_model.length - result.priced_models;
         result.estimated_usd = Math.round(result.estimated_usd * 1e8) / 1e8;
     }
-    for (const date = new Date(thirty); date <= today; date.setDate(date.getDate() + 1)) {
+    let earliestStartDate = new Date(thirty);
+    if (Number.isFinite(minPositiveTs)) {
+        const minDate = new Date(minPositiveTs * 1000);
+        minDate.setHours(0, 0, 0, 0);
+        const maxHistoryCap = new Date(today);
+        maxHistoryCap.setDate(maxHistoryCap.getDate() - 365);
+        const boundedMin = minDate < maxHistoryCap ? maxHistoryCap : minDate;
+        if (boundedMin < earliestStartDate) earliestStartDate = boundedMin;
+    }
+    for (const date = new Date(earliestStartDate); date <= today; date.setDate(date.getDate() + 1)) {
         const key = formatLocalDate(date);
         if (!daily.has(key))
             daily.set(key, { date: key, input_tokens: 0, output_tokens: 0, cached_tokens: 0, cache_write_tokens: 0, total_tokens: 0, request_count: 0 });

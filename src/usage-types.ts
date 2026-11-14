@@ -1,4 +1,5 @@
 import type { ApiPricing } from './pricing.js';
+import { stripModelProviderPrefix } from './model-identity.js';
 import type { LedgerEvent } from './usage-ledger.js';
 
 export interface TokenUsageTotals {
@@ -126,12 +127,7 @@ export function resolveDatabaseModelFullName(
 ): string {
   const cleanId = typeof modelId === 'string' ? modelId.trim() : '';
   if (cleanId) {
-    const stripped = cleanId
-      .replace(/^(?:projects\/[^/]+\/locations\/[^/]+\/)?(?:publishers\/[^/]+\/)?models\//i, '')
-      .replace(/^publishers\/[^/]+\/models\//i, '')
-      .replace(/^(?:vertex_ai|google|anthropic|openai)\//i, '')
-      .replace(/^models\//i, '')
-      .replace(/:(?:predict|generateContent|streamGenerateContent)$/i, '');
+    const stripped = stripModelProviderPrefix(cleanId);
     if (stripped) return stripped;
     return cleanId;
   }

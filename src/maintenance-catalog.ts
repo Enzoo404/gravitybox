@@ -106,7 +106,6 @@ export const BROWSER_PROFILE_SAFE_SUBDIRS = [
 ] as const;
 
 export const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-export const ALLOWED_RETENTION_DAYS = [0, 7, 30] as const;
 
 export function normalizeRetentionDays(raw: unknown): number {
   if (typeof raw === 'number' && Number.isFinite(raw)) {
@@ -337,13 +336,36 @@ export const CACHE_METADATA: Record<string, CacheItemMetadata> = {
 };
 
 const execFileAsync = promisify(execFile);
+const PROCESS_SNAPSHOT_TTL_MS = 250;
+let cachedProcessCommands: { at: number; commands: string[] | null } | null = null;
+let inFlightProcessCommands: Promise<string[] | null> | null = null;
 
 export async function readProcessCommands(): Promise<string[] | null> {
+  const now = Date.now();
+  if (cachedProcessCommands && now - cachedProcessCommands.at < PROCESS_SNAPSHOT_TTL_MS) {
+    return cachedProcessCommands.commands;
+  }
+  if (inFlightProcessCommands) {
+    return inFlightProcessCommands;
+  }
+  const task = (async (): Promise<string[] | null> => {
+    try {
+      const { stdout } = await execFileAsync('/bin/ps', ['-axo', 'command='], { timeout: 3000 });
+      const commands = stdout.split('\n').map(line => line.trim()).filter(Boolean);
+      cachedProcessCommands = { at: Date.now(), commands };
+      return commands;
+    } catch {
+      cachedProcessCommands = null;
+      return null;
+    }
+  })();
+  inFlightProcessCommands = task;
   try {
-    const { stdout } = await execFileAsync('/bin/ps', ['-axo', 'command='], { timeout: 3000 });
-    return stdout.split('\n').map(line => line.trim()).filter(Boolean);
-  } catch {
-    return null;
+    return await task;
+  } finally {
+    if (inFlightProcessCommands === task) {
+      inFlightProcessCommands = null;
+    }
   }
 }
 

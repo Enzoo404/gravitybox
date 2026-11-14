@@ -1405,10 +1405,10 @@ final class CachePage: NSObject {
     }
 }
 
-// MARK: - Maintenance Sheet Window Controller (方案 A: 设置面板内嵌弹窗)
+// MARK: - Maintenance Sheet Window Controller
 final class MaintenanceSheetController: NSObject, NSWindowDelegate {
     unowned let app: Assistant
-    let sheet = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 740, height: 724), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+    let sheet = SheetWindow(contentRect: NSRect(x: 0, y: 0, width: 740, height: 724), styleMask: [.titled, .closable], backing: .buffered, defer: false)
     var cachePage: CachePage
     var onDismiss: (() -> Void)?
 
@@ -1421,6 +1421,7 @@ final class MaintenanceSheetController: NSObject, NSWindowDelegate {
         sheet.delegate = self
         sheet.title = "存储与维护 · Antigravity"
         sheet.isReleasedWhenClosed = false
+        sheet.onCancelOperation = { [weak self] in self?.closeSheet() }
 
         page.sheetDoneButton.target = self
         page.sheetDoneButton.action = #selector(closeSheet)
@@ -1458,6 +1459,8 @@ final class MaintenanceSheetController: NSObject, NSWindowDelegate {
 
     func show(in parent: NSWindow, onDismiss: (() -> Void)? = nil) {
         guard sheet.sheetParent == nil else { return }
+        let clampedHeight = min(724, max(500, parent.frame.height - 36))
+        sheet.setContentSize(NSSize(width: 740, height: clampedHeight))
         self.onDismiss = onDismiss
         cachePage.update(force: true)
         parent.beginSheet(sheet) { [weak self] _ in

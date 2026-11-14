@@ -74,7 +74,9 @@ export function buildUsageSummaryReport(input: BuildUsageReportInput): TokenUsag
     pricingWarnings,
   } = input;
 
-  effectiveEvents.sort((a, b) => a.timestamp_seconds - b.timestamp_seconds);
+  const orderedEvents = [...effectiveEvents].sort(
+    (a, b) => a.timestamp_seconds - b.timestamp_seconds || (a.event_key ?? '').localeCompare(b.event_key ?? '')
+  );
   const todayDate = new Date();
   todayDate.setHours(0, 0, 0, 0);
   const todayStart = Math.floor(todayDate.getTime() / 1000);
@@ -161,7 +163,7 @@ export function buildUsageSummaryReport(input: BuildUsageReportInput): TokenUsag
   let unknownTimeTokens = 0;
 
   // 单遍分桶聚合：同时产出全部周期、每日趋势、今日分时与未知时间统计，且每条事件只查一次价/锁费率
-  for (const ev of effectiveEvents) {
+  for (const ev of orderedEvents) {
     const ts = ev.timestamp_seconds;
     const evCost = ts > 0
       ? lockedCost(ev, resolvePricing(rawPricing, ev.model, ts))

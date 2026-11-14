@@ -3,7 +3,7 @@ export interface ValidatedPolicyPatch {
     strategy?: 'priority' | 'round_robin';
     monitored_model?: string;
     candidate_account_ids?: string[];
-    last_switched_id?: string;
+    last_switched_id?: string | null;
     reserve_percentage?: number;
     reservePercentage?: number;
     candidate_min_percentage?: number;
@@ -22,7 +22,7 @@ export function validateAccountPolicy(value: unknown): asserts value is Validate
         throw Error('监控模型名称无效');
     if (data.candidate_account_ids !== undefined && (!Array.isArray(data.candidate_account_ids) || data.candidate_account_ids.length > 200 || data.candidate_account_ids.some(id => typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,120}$/.test(id)) || new Set(data.candidate_account_ids).size !== data.candidate_account_ids.length))
         throw Error('候选账号必须是有效且不重复的账号ID列表（最多200个）');
-    if (data.last_switched_id !== undefined && (typeof data.last_switched_id !== 'string' || !/^[a-zA-Z0-9_-]{1,120}$/.test(data.last_switched_id)))
+    if (data.last_switched_id !== undefined && data.last_switched_id !== null && (typeof data.last_switched_id !== 'string' || !/^[a-zA-Z0-9_-]{1,120}$/.test(data.last_switched_id)))
         throw Error('推荐游标无效');
     for (const key of ['reserve_percentage', 'reservePercentage', 'candidate_min_percentage', 'candidateMinPercentage']) {
         if (data[key] !== undefined && (typeof data[key] !== 'number' || !Number.isFinite(data[key])))

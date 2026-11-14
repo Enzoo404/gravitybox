@@ -20,6 +20,7 @@ import {
 } from './account-keychain.js';
 import {
   CloudQuotaAuthorityError,
+  clearLiveEndpointCache,
   cloudOriginFromCommand,
   cloudProviderContextFromCommand,
   extractTopicDataString,
@@ -171,13 +172,20 @@ export class AccountsManager {
     this.tombstonesPath = join(stateDir, 'accounts-deleted.json');
   }
 
+  public invalidateRuntimeCaches(): void {
+    this.liveProbeCache = null;
+    clearLiveEndpointCache();
+    this.desktopEmailCache = null;
+    this.indexCache = null;
+    this.accountCache.clear();
+    this.providerContextCache = null;
+  }
+
   public setTarget(target: ApplicationTarget): void {
     if (this.target.channel !== target.channel || this.target.appPath !== target.appPath) {
-      this.liveProbeCache = null;
+      this.invalidateRuntimeCaches();
       this.inFlightProbe = null;
-      this.providerContextCache = null;
       this.inFlightProviderContext = null;
-      this.desktopEmailCache = null;
     }
     this.target = target;
   }
@@ -699,9 +707,27 @@ export class AccountsManager {
       index.accounts = index.accounts.filter(a => a.id !== id);
       if (index.current_account_id === id) index.current_account_id = null;
       const original = await readFile(accountPath, 'utf8').catch(error => { if (error.code !== 'ENOENT') throw error; return null; });
-      if (original !== null) await atomicJson(join(this.stateDir, 'accounts-removed', `${id}-${Date.now()}.json`), {
-        schema: 1, removedAt: new Date().toISOString(), account: JSON.parse(original),
-      });
+      if (original !== null) {
+        const removedDir = join(this.stateDir, 'accounts-removed');
+        await mkdir(removedDir, { recursive: true, mode: 0o700 });
+        await atomicJson(join(removedDir, `${id}-${Date.now()}.json`), {
+          schema: 1, removedAt: new Date().toISOString(), account: JSON.parse(original),
+        });
+        try {
+          const entries = (await readdir(removedDir)).filter(f => f.endsWith('.json'));
+          if (entries.length > 10) {
+            const withTime = await Promise.all(entries.map(async name => {
+              const p = join(removedDir, name);
+              const st = await lstat(p).catch(() => null);
+              return { p, mtime: st?.mtimeMs ?? 0 };
+            }));
+            withTime.sort((a, b) => a.mtime - b.mtime);
+            for (const stale of withTime.slice(0, withTime.length - 10)) {
+              await unlink(stale.p).catch(() => {});
+            }
+          }
+        } catch {}
+      }
       await commitFileSet(join(this.stateDir, 'account-delete-commit.json'), [
         { path: this.tombstonesPath, after: JSON.stringify(tombstones.slice(-500), null, 2)+'\n' },
         { path: accountPath, after: null },
@@ -772,6 +798,8 @@ export class AccountsManager {
 
       latest.current_target_ide = target ?? 'app';
       await this.saveIndex(latest);
+      this.desktopEmailCache = null;
+      this.liveProbeCache = null;
     });
   }
 
@@ -817,11 +845,11 @@ export class AccountsManager {
     }
   }
 
-  async setAutoSwitchConfig(config: Partial<AutoSwitchConfig> & Record<string, any>): Promise<AutoSwitchConfig> {
+  private resolveValidatedPolicyConfig(
+    config: Partial<AutoSwitchConfig> & Record<string, any>,
+    current: AutoSwitchConfig
+  ): AutoSwitchConfig {
     validateAccountPolicy(config);
-    await this.init();
-    return this.withWriteLock(async () => {
-    const current = await this.getAutoSwitchConfig();
     const reserveRaw = config.reserve_percentage ?? config.reservePercentage;
     if (reserveRaw !== undefined) {
       const num = Number(reserveRaw);
@@ -841,7 +869,7 @@ export class AccountsManager {
     if (reserve >= candidateMin) {
       throw new Error('候选账号配额门槛必须大于当前账号配额门槛');
     }
-    const updated: AutoSwitchConfig = {
+    return {
       enabled: config.enabled !== undefined ? Boolean(config.enabled) : current.enabled,
       strategy: config.strategy !== undefined ? (config.strategy === 'round_robin' ? 'round_robin' : 'priority') : current.strategy,
       reserve_percentage: reserve,
@@ -849,11 +877,19 @@ export class AccountsManager {
       candidate_min_percentage: candidateMin,
       candidateMinPercentage: candidateMin,
       monitored_model: config.monitored_model !== undefined ? config.monitored_model : current.monitored_model,
-      candidate_account_ids: config.candidate_account_ids !== undefined ? config.candidate_account_ids : current.candidate_account_ids,
-      last_switched_id: config.last_switched_id !== undefined ? config.last_switched_id : current.last_switched_id,
+      candidate_account_ids: Array.isArray(config.candidate_account_ids) ? config.candidate_account_ids : current.candidate_account_ids,
+      last_switched_id: config.last_switched_id !== undefined ? (config.last_switched_id ?? undefined) : current.last_switched_id,
     };
-    await atomicJson(this.autoSwitchPath, updated);
-    return updated;
+  }
+
+  async setAutoSwitchConfig(config: Partial<AutoSwitchConfig> & Record<string, any>): Promise<AutoSwitchConfig> {
+    validateAccountPolicy(config);
+    await this.init();
+    return this.withWriteLock(async () => {
+      const current = await this.getAutoSwitchConfig();
+      const updated = this.resolveValidatedPolicyConfig(config, current);
+      await atomicJson(this.autoSwitchPath, updated);
+      return updated;
     });
   }
 
@@ -875,13 +911,15 @@ export class AccountsManager {
   /**
    * 智能挑选最佳切号候选账号（高阶订阅 ULTRA > PRO > FREE 优先，杜绝把免费账号优先推荐于 PRO 账号之上）
    */
-  async selectBestAccount(config?: AutoSwitchConfig, options?: { currentId?:string; currentEmail?:string; currentQuota?:QuotaData }): Promise<{
+  async selectBestAccount(config?: Partial<AutoSwitchConfig> & Record<string, any>, options?: { currentId?:string; currentEmail?:string; currentQuota?:QuotaData }): Promise<{
     currentAccount: Account | null;
     bestCandidate: Account | null;
     shouldSwitch: boolean;
     reason: string;
   }> {
-    const cfg = config ?? await this.getAutoSwitchConfig();
+    if (config !== undefined) validateAccountPolicy(config);
+    const savedCfg = await this.getAutoSwitchConfig();
+    const cfg = config !== undefined ? this.resolveValidatedPolicyConfig(config, savedCfg) : savedCfg;
     const index = await this.loadIndex();
     const currentId = options?.currentId ?? index.current_account_id;
     const storedCurrent = currentId ? await this.getAccount(currentId) : null;
@@ -914,17 +952,16 @@ export class AccountsManager {
       if (acc) candidates.push(acc);
     }
 
-    // Filter valid: 剩余有效额度达标，且持有有效 refresh_token（不因 1h access_token 过期误杀备用账号）
-    const allValidCandidates = candidates.filter(acc => {
+    // Filter valid & precompute remaining/tierRank once per candidate (避免排序中重复构建配额视图)
+    const allValidScored: Array<{ acc: Account; rem: number; tierRank: number }> = [];
+    for (const acc of candidates) {
       const rem = this.getAccountRemaining(acc, cfg.monitored_model);
-      if (rem === null || rem < cfg.candidate_min_percentage || rem <= 0) {
-        return false;
-      }
-      if (accountCredentialReadiness(acc).state === 'needs_authorization') return false;
-      return true;
-    });
+      if (rem === null || rem < cfg.candidate_min_percentage || rem <= 0) continue;
+      if (accountCredentialReadiness(acc).state === 'needs_authorization') continue;
+      allValidScored.push({ acc, rem, tierRank: this.subscriptionTierRank(acc) });
+    }
 
-    if (allValidCandidates.length === 0) {
+    if (allValidScored.length === 0) {
       return {
         currentAccount,
         bestCandidate: null,
@@ -933,11 +970,11 @@ export class AccountsManager {
       };
     }
 
-    // 优先在付费高阶账号（ULTRA / PRO）中挑选；仅当没有任何达标付费账号时才回退考虑 FREE 账号
-    const paidCandidates = allValidCandidates.filter(acc => this.subscriptionTierRank(acc) >= 2);
-    const validCandidates = paidCandidates.length > 0 ? paidCandidates : allValidCandidates;
+    // 优先在付费高阶账号（ULTRA / PRO / 企业待确认）中挑选；仅当没有任何达标高阶账号时才回退考虑 FREE 账号
+    const paidScored = allValidScored.filter(item => item.tierRank >= 2);
+    const validScored = paidScored.length > 0 ? paidScored : allValidScored;
 
-    let best: Account;
+    let bestItem: { acc: Account; rem: number; tierRank: number };
     if (cfg.strategy === 'round_robin') {
       // 环形轮询：基于全局候选全集池 poolOrder 与游标选择下一个可用账号，杜绝双账号反复横跳振荡
       const poolOrder = cfg.candidate_account_ids.length > 0
@@ -948,33 +985,32 @@ export class AccountsManager {
         : currentId;
       const cursorIndex = cursorId ? poolOrder.indexOf(cursorId) : -1;
       if (cursorIndex !== -1) {
-        let chosen: Account | undefined;
+        let chosen: { acc: Account; rem: number; tierRank: number } | undefined;
         for (let i = 1; i < poolOrder.length; i++) {
           const nextId = poolOrder[(cursorIndex + i) % poolOrder.length]!;
           if (nextId === currentId) continue;
-          const candidate = validCandidates.find(a => a.id === nextId);
+          const candidate = validScored.find(item => item.acc.id === nextId);
           if (candidate) {
             chosen = candidate;
             break;
           }
         }
-        best = chosen ?? validCandidates[0]!;
+        bestItem = chosen ?? validScored[0]!;
       } else {
-        best = validCandidates[0]!;
+        bestItem = validScored[0]!;
       }
     } else {
-      // Priority: 先按套餐等级（ULTRA > PRO > FREE）降序，同等级按剩余额度从高到低排序
-      validCandidates.sort((a, b) => {
-        const tierDiff = this.subscriptionTierRank(b) - this.subscriptionTierRank(a);
+      // Priority: 先按套餐等级（ULTRA > PRO > 待确认 > FREE）降序，同等级按剩余额度从高到低排序
+      validScored.sort((a, b) => {
+        const tierDiff = b.tierRank - a.tierRank;
         if (tierDiff !== 0) return tierDiff;
-        const remA = this.getAccountRemaining(a, cfg.monitored_model) ?? 0;
-        const remB = this.getAccountRemaining(b, cfg.monitored_model) ?? 0;
-        return remB - remA;
+        return b.rem - a.rem;
       });
-      best = validCandidates[0]!;
+      bestItem = validScored[0]!;
     }
 
-    const bestRem = this.getAccountRemaining(best, cfg.monitored_model) ?? 0;
+    const best = bestItem.acc;
+    const bestRem = bestItem.rem;
     const bestDisplay = best.name ? `${best.name} (${best.email})` : best.email;
     // 当前为 PRO/ULTRA 而唯一候选为 FREE 时，除非当前账号已彻底耗尽（0%），否则不主动触发向免费账号的降级推荐
     const isDowngradeToFree = this.subscriptionTierRank(currentAccount) >= 2 && this.subscriptionTierRank(best) < 2;
@@ -1200,6 +1236,7 @@ export class AccountsManager {
     }
 
     await this.setCurrentAccount(account.id);
+    this.invalidateRuntimeCaches();
     return (await this.getAccount(account.id)) ?? account;
   }
 

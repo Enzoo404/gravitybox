@@ -222,6 +222,18 @@ final class BackendBridge {
             try fm.createDirectory(at:archiveDir,withIntermediateDirectories:true,attributes:[.posixPermissions:0o700])
             let archive = archiveDir.appendingPathComponent("backend-\(Int(Date().timeIntervalSince1970))-\(UUID().uuidString.prefix(8)).log")
             try fm.moveItem(at: log, to: archive)
+            if let archived = try? fm.contentsOfDirectory(at: archiveDir, includingPropertiesForKeys: [.contentModificationDateKey], options: [.skipsHiddenFiles])
+                .filter({ $0.lastPathComponent.hasPrefix("backend-") && $0.pathExtension == "log" }),
+               archived.count > 10 {
+                let sorted = archived.sorted {
+                    let d0 = (try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                    let d1 = (try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                    return d0 < d1
+                }
+                for stale in sorted.prefix(archived.count - 10) {
+                    try? fm.removeItem(at: stale)
+                }
+            }
         }
         if !fm.fileExists(atPath: log.path) { fm.createFile(atPath: log.path, contents: nil, attributes: [.posixPermissions: 0o600]) }
         let handle = try FileHandle(forWritingTo: log)
@@ -251,10 +263,11 @@ final class BackendBridge {
             "status", "task_list", "task_cancel", "usage_cancel", "ping",
             "dashboard_summary", "account_list", "account_get", "account_switch_preflight",
             "maintenance_scan", "maintenance_history", "usage_summary", "usage_events",
-            "usage_snapshot_release", "usage_ledger_review", "api_pricing_revalue_preview", "auto_switch_get", "auto_switch_best",
-            "account_recovery_info", "api_pricing_get"
+            "usage_snapshot_release", "usage_ledger_review", "auto_switch_get",
+            "account_recovery_info", "api_pricing_get", "pricing_sync_status"
         ]
-        let useControlThrottle = readOnlyCommands.contains(command)
+        let isReadOnlyAutoSwitch = command == "auto_switch_best" && (payload["execute"] as? Bool != true)
+        let useControlThrottle = readOnlyCommands.contains(command) || isReadOnlyAutoSwitch
         let channel = useControlThrottle ? controlQueue : queue
         channel.async { [self] in
             if useControlThrottle { controlSemaphore.wait() }

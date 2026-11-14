@@ -87,16 +87,27 @@ export class ProtobufReader {
   }
 
   static readVarint(buf: Buffer, offset: number): [number, number] | null {
-    let result = 0;
-    let shift = 0;
+    let result = 0n;
+    let shift = 0n;
     let pos = offset;
 
     while (pos < buf.length) {
       const byte = buf[pos++]!;
-      result += (byte & 0x7f) * Math.pow(2, shift);
-      shift += 7;
+      if (shift <= 63n) {
+        result |= BigInt(byte & 0x7f) << shift;
+      } else {
+        return null;
+      }
+      shift += 7n;
       if ((byte & 0x80) === 0) {
-        return [Math.round(result), pos];
+        const asInt = BigInt.asIntN(64, result);
+        if (result <= BigInt(Number.MAX_SAFE_INTEGER)) {
+          return [Number(result), pos];
+        }
+        if (asInt >= BigInt(Number.MIN_SAFE_INTEGER) && asInt <= BigInt(Number.MAX_SAFE_INTEGER)) {
+          return [Number(asInt), pos];
+        }
+        return [Number(result), pos];
       }
     }
     return null;
@@ -214,37 +225,5 @@ export class ProtobufWriter {
 
   static encodeUint64(fieldNumber: number, value: number | bigint): Buffer {
     return this.encodeVarintField(fieldNumber, value);
-  }
-
-  static createGenerationMetadata(
-    modelId: string,
-    inputTokens: number,
-    outputTokens: number,
-    cachedTokens = 0
-  ): Buffer {
-    const fields: Buffer[] = [
-      this.encodeString(1, modelId),
-      this.encodeUint64(2, inputTokens),
-      this.encodeUint64(3, outputTokens),
-    ];
-    if (cachedTokens > 0) {
-      fields.push(this.encodeUint64(4, cachedTokens));
-    }
-    return Buffer.concat(fields);
-  }
-
-  static createOAuthTokenInfo(token: { access_token?: string; refresh_token?: string; expiry_timestamp?: number; is_gcp_tos?: boolean }, _email?: string): Buffer {
-    const fields: Buffer[] = [
-      this.encodeString(1, token.access_token || ''),
-      this.encodeString(3, token.refresh_token || ''),
-    ];
-    if (token.expiry_timestamp) {
-      const timePayload = this.encodeUint64(1, token.expiry_timestamp);
-      fields.push(this.encodeField(4, 2, timePayload));
-    }
-    if (token.is_gcp_tos) {
-      fields.push(this.encodeUint64(6, 1));
-    }
-    return Buffer.concat(fields);
   }
 }

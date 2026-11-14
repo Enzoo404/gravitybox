@@ -1,6 +1,10 @@
 import Foundation
 
 enum ModelDisplayName {
+    private static let standaloneGeminiRegex = try? NSRegularExpression(
+        pattern: "^gemini-([4-9](?:\\.[0-9]+)?)-([a-z][a-z0-9]*?)$",
+        options: [.caseInsensitive]
+    )
     private static let catalogNames: [String: String] = {
         var urls: [URL] = []
         if let resource = Bundle.main.resourceURL {
@@ -65,8 +69,7 @@ enum ModelDisplayName {
         }
 
         // Auto-format clean standalone Gemini 4+ codename models (e.g. gemini-4-carbon, gemini-4-neon)
-        if let regex = try? NSRegularExpression(pattern: "^gemini-([4-9](?:\\.[0-9]+)?)-([a-z][a-z0-9]*?)$", options: [.caseInsensitive]),
-           let match = regex.firstMatch(in: strippedValue, range: NSRange(location: 0, length: (strippedValue as NSString).length)) {
+        if let match = standaloneGeminiRegex?.firstMatch(in: strippedValue, range: NSRange(location: 0, length: (strippedValue as NSString).length)) {
             let ns = strippedValue as NSString
             let ver = ns.substring(with: match.range(at: 1))
             let code = ns.substring(with: match.range(at: 2)).capitalized
@@ -88,8 +91,10 @@ enum InterfaceText {
         return formatter
     }()
 
+    private static let countdownUnitRegex = try! NSRegularExpression(pattern: "([0-9]+)\\s*(天|小时|分钟|分|秒)")
+
     static func countdown(_ raw: String) -> String {
-        let pattern = try! NSRegularExpression(pattern: "([0-9]+)\\s*(天|小时|分钟|分|秒)")
+        let pattern = countdownUnitRegex
         let value = NSMutableString(string: raw)
         let source = raw as NSString
         for match in pattern.matches(in: raw, range: NSRange(location: 0, length: source.length)).reversed() {

@@ -42,7 +42,7 @@ final class MenuPanelController: NSViewController {
 
     // Tab 1: Quota Controls
     let quotaAccountNameLabel = text("正在读取账号…", size: 15, weight: .semibold, color: .labelColor)
-    let quotaTierBadge = pillBadge("", color: .systemBlue)
+    let quotaTierBadge = pillBadge("", color: Design.blue)
     let quotaStatusBadge = pillBadge("已选记录", color: Design.blue)
     let quotaEmailLabel = text("", size: 11, color: .secondaryLabelColor, wrap: true)
     let quotaGemini5h = MenuMeterRow(title: "5 小时")
