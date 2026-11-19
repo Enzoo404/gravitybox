@@ -1,7 +1,7 @@
 {
-  "version": "2026-11-19",
+  "version": "2026-11-19-r2",
   "schema": 1,
-  "updatedAt": "2026-11-19T00:00:00Z",
+  "updatedAt": "2026-11-19T09:58:17Z",
   "source": "https://raw.githubusercontent.com/Enzoo404/gravitybox/main/assets/pricing-feed.json",
   "aliases": {
     "gemini-pro-orchestrator-g1-pro": "gemini-4-argon",
@@ -108,6 +108,18 @@
     },
     "gemini-3.5-flash-lite": {
       "displayName": "Gemini 3.5 Flash Lite"
+    },
+    "gpt-6.2-astra": {
+      "displayName": "gpt-6.2-astra"
+    },
+    "gpt-6.2-sol": {
+      "displayName": "gpt-6.2-sol"
+    },
+    "gpt-6-astra": {
+      "displayName": "gpt-6-astra"
+    },
+    "gpt-6.1-sol": {
+      "displayName": "gpt-6.1-sol"
     }
   },
   "prices": {
@@ -625,6 +637,90 @@
           "validFrom": null,
           "validUntil": null,
           "verification": "historical"
+        }
+      }
+    ],
+    "gpt-6.2-astra": [
+      {
+        "model": "gpt-6.2-astra",
+        "validFrom": null,
+        "validUntil": null,
+        "input": 8,
+        "output": 40,
+        "cached": 0.4,
+        "provenance": {
+          "sourceUrl": "https://developers.openai.com/api/docs/pricing",
+          "platform": "OpenAI 标准 API",
+          "platformEn": "OpenAI Standard API",
+          "conditions": "标准全量定价（2026-11-19生效）",
+          "conditionsEn": "Standard list pricing (effective 2026-11-19)",
+          "checkedAt": "2026-11-19",
+          "validFrom": null,
+          "validUntil": null,
+          "verification": "confirmed"
+        }
+      }
+    ],
+    "gpt-6.2-sol": [
+      {
+        "model": "gpt-6.2-sol",
+        "validFrom": null,
+        "validUntil": null,
+        "input": 2,
+        "output": 10,
+        "cached": 0.1,
+        "provenance": {
+          "sourceUrl": "https://developers.openai.com/api/docs/pricing",
+          "platform": "OpenAI 标准 API",
+          "platformEn": "OpenAI Standard API",
+          "conditions": "标准全量定价（2026-11-19生效）",
+          "conditionsEn": "Standard list pricing (effective 2026-11-19)",
+          "checkedAt": "2026-11-19",
+          "validFrom": null,
+          "validUntil": null,
+          "verification": "confirmed"
+        }
+      }
+    ],
+    "gpt-6-astra": [
+      {
+        "model": "gpt-6-astra",
+        "validFrom": null,
+        "validUntil": null,
+        "input": 10,
+        "output": 50,
+        "cached": 1,
+        "provenance": {
+          "sourceUrl": "https://developers.openai.com/api/docs/pricing",
+          "platform": "OpenAI 标准 API",
+          "platformEn": "OpenAI Standard API",
+          "conditions": "标准全量定价（2026-11-19生效）",
+          "conditionsEn": "Standard list pricing (effective 2026-11-19)",
+          "checkedAt": "2026-11-19",
+          "validFrom": null,
+          "validUntil": null,
+          "verification": "confirmed"
+        }
+      }
+    ],
+    "gpt-6.1-sol": [
+      {
+        "model": "gpt-6.1-sol",
+        "validFrom": null,
+        "validUntil": null,
+        "input": 2,
+        "output": 10,
+        "cached": 0.1,
+        "provenance": {
+          "sourceUrl": "https://developers.openai.com/api/docs/pricing",
+          "platform": "OpenAI 标准 API",
+          "platformEn": "OpenAI Standard API",
+          "conditions": "标准全量定价（2026-11-19生效）",
+          "conditionsEn": "Standard list pricing (effective 2026-11-19)",
+          "checkedAt": "2026-11-19",
+          "validFrom": null,
+          "validUntil": null,
+          "verification": "confirmed"
         }
       }
     ]

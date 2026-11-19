@@ -30,13 +30,17 @@
     "claude-sonnet-4-6": "Claude Sonnet 4.6",
     "gpt-4o": "GPT-4o",
     "gpt-4o-mini": "GPT-4o mini",
-    "gpt-oss-120b": "GPT-OSS 120B"
+    "gpt-oss-120b": "GPT-OSS 120B",
+    "gpt-6.2-astra": "gpt-6.2-astra",
+    "gpt-6.2-sol": "gpt-6.2-sol",
+    "gpt-6-astra": "gpt-6-astra",
+    "gpt-6.1-sol": "gpt-6.1-sol"
   },
   "prices": {
     "gemini-4-carbon": {
       "model": "gemini-4-carbon",
-      "input": 2.0,
-      "output": 10.0,
+      "input": 2,
+      "output": 10,
       "cached": 0.1,
       "provenance": {
         "sourceUrl": "https://cloud.google.com/model-garden/pricing?hl=en",
@@ -83,8 +87,8 @@
     },
     "gemini-4-carbon-trial": {
       "model": "gemini-4-carbon-trial",
-      "input": 2.0,
-      "output": 10.0,
+      "input": 2,
+      "output": 10,
       "cached": 0.1,
       "provenance": {
         "sourceUrl": "https://cloud.google.com/model-garden/pricing?hl=en",
@@ -508,7 +512,7 @@
     "gemini-3.6-flash": {
       "model": "gemini-3.6-flash",
       "input": 0.5,
-      "output": 3.0,
+      "output": 3,
       "cached": 0.05,
       "provenance": {
         "sourceUrl": "https://cloud.google.com/model-garden/pricing?hl=en",
@@ -523,7 +527,7 @@
     "gemini-3.6-flash-tiered": {
       "model": "gemini-3.6-flash-tiered",
       "input": 0.5,
-      "output": 3.0,
+      "output": 3,
       "cached": 0.05,
       "provenance": {
         "sourceUrl": "https://cloud.google.com/model-garden/pricing?hl=en",
@@ -538,7 +542,7 @@
     "gemini-3.6-flash-exp-a": {
       "model": "gemini-3.6-flash-exp-a",
       "input": 0.5,
-      "output": 3.0,
+      "output": 3,
       "cached": 0.05,
       "provenance": {
         "sourceUrl": "https://cloud.google.com/model-garden/pricing?hl=en",
@@ -553,7 +557,7 @@
     "gemini-3.5-flash": {
       "model": "gemini-3.5-flash",
       "input": 1.5,
-      "output": 9.0,
+      "output": 9,
       "cached": 0.15,
       "provenance": {
         "sourceUrl": "https://cloud.google.com/model-garden/pricing?hl=en",
@@ -583,7 +587,7 @@
     "gemini-3-flash": {
       "model": "gemini-3-flash",
       "input": 0.5,
-      "output": 3.0,
+      "output": 3,
       "cached": 0.05,
       "provenance": {
         "sourceUrl": "https://cloud.google.com/model-garden/pricing?hl=en",
@@ -598,7 +602,7 @@
     "gemini-3-flash-a": {
       "model": "gemini-3-flash-a",
       "input": 0.5,
-      "output": 3.0,
+      "output": 3,
       "cached": 0.05,
       "provenance": {
         "sourceUrl": "https://cloud.google.com/model-garden/pricing?hl=en",
@@ -691,14 +695,14 @@
     },
     "gemini-3.1-pro": {
       "model": "gemini-3.1-pro",
-      "input": 2.0,
-      "output": 12.0,
+      "input": 2,
+      "output": 12,
       "cached": 0.2,
       "contextTiers": [
         {
           "thresholdTokens": 200000,
-          "input": 4.0,
-          "output": 18.0,
+          "input": 4,
+          "output": 18,
           "cached": 0.4
         }
       ],
@@ -714,8 +718,8 @@
     },
     "gemini-3.8-pro": {
       "model": "gemini-3.8-pro",
-      "input": 4.0,
-      "output": 18.0,
+      "input": 4,
+      "output": 18,
       "cached": 0.4,
       "provenance": {
         "sourceUrl": "https://cloud.google.com/model-garden/pricing?hl=en",
@@ -795,8 +799,8 @@
     },
     "gemini-4-neon": {
       "model": "gemini-4-neon",
-      "input": 3.0,
-      "output": 15.0,
+      "input": 3,
+      "output": 15,
       "cached": 0.15,
       "cacheWrite": 0,
       "provenance": {
@@ -813,8 +817,8 @@
           "model": "gemini-4-neon",
           "validFrom": null,
           "validUntil": "2027-01-11T23:59:59Z",
-          "input": 3.0,
-          "output": 15.0,
+          "input": 3,
+          "output": 15,
           "cached": 0.15,
           "cacheWrite": 0,
           "provenance": {
@@ -830,8 +834,8 @@
           "model": "gemini-4-neon",
           "validFrom": "2027-01-12T00:00:00Z",
           "validUntil": null,
-          "input": 3.0,
-          "output": 15.0,
+          "input": 3,
+          "output": 15,
           "cached": 0.15,
           "cacheWrite": 3.75,
           "provenance": {
@@ -846,8 +850,8 @@
     },
     "gemini-4-argon": {
       "model": "gemini-4-argon",
-      "input": 2.0,
-      "output": 10.0,
+      "input": 2,
+      "output": 10,
       "cached": 0.1,
       "provenance": {
         "sourceUrl": "https://cloud.google.com/model-garden/pricing?hl=en",
@@ -862,8 +866,8 @@
           "model": "gemini-4-argon",
           "validFrom": null,
           "validUntil": "2026-11-30T23:59:59Z",
-          "input": 2.0,
-          "output": 10.0,
+          "input": 2,
+          "output": 10,
           "cached": 0.1,
           "provenance": {
             "sourceUrl": "https://cloud.google.com/model-garden/pricing?hl=en",
@@ -878,8 +882,8 @@
           "model": "gemini-4-argon",
           "validFrom": "2026-12-01T00:00:00Z",
           "validUntil": null,
-          "input": 4.0,
-          "output": 20.0,
+          "input": 4,
+          "output": 20,
           "cached": 0.2,
           "provenance": {
             "sourceUrl": "https://cloud.google.com/model-garden/pricing?hl=en",
@@ -893,8 +897,8 @@
     },
     "gemini-4-argon-trial": {
       "model": "gemini-4-argon-trial",
-      "input": 2.0,
-      "output": 10.0,
+      "input": 2,
+      "output": 10,
       "cached": 0.1,
       "provenance": {
         "sourceUrl": "https://cloud.google.com/model-garden/pricing?hl=en",
@@ -909,8 +913,8 @@
           "model": "gemini-4-argon-trial",
           "validFrom": null,
           "validUntil": "2026-11-30T23:59:59Z",
-          "input": 2.0,
-          "output": 10.0,
+          "input": 2,
+          "output": 10,
           "cached": 0.1,
           "provenance": {
             "sourceUrl": "https://cloud.google.com/model-garden/pricing?hl=en",
@@ -925,8 +929,8 @@
           "model": "gemini-4-argon-trial",
           "validFrom": "2026-12-01T00:00:00Z",
           "validUntil": null,
-          "input": 4.0,
-          "output": 20.0,
+          "input": 4,
+          "output": 20,
           "cached": 0.2,
           "provenance": {
             "sourceUrl": "https://cloud.google.com/model-garden/pricing?hl=en",
@@ -972,8 +976,8 @@
     },
     "claude-3-5-haiku": {
       "model": "claude-3-5-haiku",
-      "input": 1.0,
-      "output": 5.0,
+      "input": 1,
+      "output": 5,
       "cached": 0.1,
       "cacheWrite": 1.25,
       "provenance": {
@@ -1004,8 +1008,8 @@
     },
     "claude-sonnet-5-5": {
       "model": "claude-sonnet-5-5",
-      "input": 2.0,
-      "output": 10.0,
+      "input": 2,
+      "output": 10,
       "cached": 0.1,
       "cacheWrite": 2.5,
       "provenance": {
@@ -1022,8 +1026,8 @@
           "model": "claude-sonnet-5-5",
           "validFrom": null,
           "validUntil": "2026-10-31T23:59:59Z",
-          "input": 3.0,
-          "output": 15.0,
+          "input": 3,
+          "output": 15,
           "cached": 0.3,
           "cacheWrite": 3.75,
           "provenance": {
@@ -1038,8 +1042,8 @@
           "model": "claude-sonnet-5-5",
           "validFrom": "2026-11-01T00:00:00Z",
           "validUntil": null,
-          "input": 2.0,
-          "output": 10.0,
+          "input": 2,
+          "output": 10,
           "cached": 0.1,
           "cacheWrite": 2.5,
           "provenance": {
@@ -1070,10 +1074,10 @@
     },
     "claude-opus-5-5": {
       "model": "claude-opus-5-5",
-      "input": 4.0,
-      "output": 20.0,
+      "input": 4,
+      "output": 20,
       "cached": 0.2,
-      "cacheWrite": 5.0,
+      "cacheWrite": 5,
       "provenance": {
         "sourceUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
         "platform": "Anthropic 标准 API",
@@ -1088,8 +1092,8 @@
           "model": "claude-opus-5-5",
           "validFrom": null,
           "validUntil": "2026-10-31T23:59:59Z",
-          "input": 5.0,
-          "output": 25.0,
+          "input": 5,
+          "output": 25,
           "cached": 0.5,
           "cacheWrite": 6.25,
           "provenance": {
@@ -1104,10 +1108,10 @@
           "model": "claude-opus-5-5",
           "validFrom": "2026-11-01T00:00:00Z",
           "validUntil": null,
-          "input": 4.0,
-          "output": 20.0,
+          "input": 4,
+          "output": 20,
           "cached": 0.2,
-          "cacheWrite": 5.0,
+          "cacheWrite": 5,
           "provenance": {
             "sourceUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
             "platform": "Anthropic 标准 API",
@@ -1161,6 +1165,74 @@
         "validFrom": null,
         "validUntil": null,
         "verification": "historical"
+      }
+    },
+    "gpt-6.2-astra": {
+      "model": "gpt-6.2-astra",
+      "input": 8,
+      "output": 40,
+      "cached": 0.4,
+      "provenance": {
+        "sourceUrl": "https://developers.openai.com/api/docs/pricing",
+        "platform": "OpenAI 标准 API",
+        "platformEn": "OpenAI Standard API",
+        "conditions": "标准全量定价（2026-11-19生效）",
+        "conditionsEn": "Standard list pricing (effective 2026-11-19)",
+        "checkedAt": "2026-11-19",
+        "validFrom": null,
+        "validUntil": null,
+        "verification": "confirmed"
+      }
+    },
+    "gpt-6.2-sol": {
+      "model": "gpt-6.2-sol",
+      "input": 2,
+      "output": 10,
+      "cached": 0.1,
+      "provenance": {
+        "sourceUrl": "https://developers.openai.com/api/docs/pricing",
+        "platform": "OpenAI 标准 API",
+        "platformEn": "OpenAI Standard API",
+        "conditions": "标准全量定价（2026-11-19生效）",
+        "conditionsEn": "Standard list pricing (effective 2026-11-19)",
+        "checkedAt": "2026-11-19",
+        "validFrom": null,
+        "validUntil": null,
+        "verification": "confirmed"
+      }
+    },
+    "gpt-6-astra": {
+      "model": "gpt-6-astra",
+      "input": 10,
+      "output": 50,
+      "cached": 1,
+      "provenance": {
+        "sourceUrl": "https://developers.openai.com/api/docs/pricing",
+        "platform": "OpenAI 标准 API",
+        "platformEn": "OpenAI Standard API",
+        "conditions": "标准全量定价（2026-11-19生效）",
+        "conditionsEn": "Standard list pricing (effective 2026-11-19)",
+        "checkedAt": "2026-11-19",
+        "validFrom": null,
+        "validUntil": null,
+        "verification": "confirmed"
+      }
+    },
+    "gpt-6.1-sol": {
+      "model": "gpt-6.1-sol",
+      "input": 2,
+      "output": 10,
+      "cached": 0.1,
+      "provenance": {
+        "sourceUrl": "https://developers.openai.com/api/docs/pricing",
+        "platform": "OpenAI 标准 API",
+        "platformEn": "OpenAI Standard API",
+        "conditions": "标准全量定价（2026-11-19生效）",
+        "conditionsEn": "Standard list pricing (effective 2026-11-19)",
+        "checkedAt": "2026-11-19",
+        "validFrom": null,
+        "validUntil": null,
+        "verification": "confirmed"
       }
     }
   },
@@ -1227,8 +1299,12 @@
     "gpt-4o-mini",
     "gpt-oss-120b",
     "gemini-2.5-flash-lite",
-    "gemini-3.5-flash-lite"
+    "gemini-3.5-flash-lite",
+    "gpt-6.2-astra",
+    "gpt-6.2-sol",
+    "gpt-6-astra",
+    "gpt-6.1-sol"
   ],
-  "pricingVersion": "2026-11-19",
-  "pricingUpdatedAt": "2026-11-19T00:00:00Z"
+  "pricingVersion": "2026-11-19-r2",
+  "pricingUpdatedAt": "2026-11-19T09:58:17Z"
 }
