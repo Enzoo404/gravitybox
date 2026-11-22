@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { execSqlite } from './sqlite-helper.mjs';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
@@ -297,14 +298,12 @@ test('已下架历史模型从价格基准过滤后，历史 SQLite 用量费用
     return ProtobufWriter.encodeLengthDelimited(1, wrapped).toString('hex');
   };
 
-  await execFileAsync('/usr/bin/sqlite3', [
-    dbPath,
+  execSqlite(dbPath,
     `CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER, metadata BLOB, status INTEGER, step_payload BLOB);
      CREATE TABLE gen_metadata (idx INTEGER PRIMARY KEY, data BLOB);
      INSERT INTO gen_metadata (idx, data) VALUES (1, X'${mkBlob('gpt-4o', 1_000_000, 0, 0, octSec)}');
      INSERT INTO gen_metadata (idx, data) VALUES (2, X'${mkBlob('gemini-3.8-flash-n', 1_000_000, 0, 0, octSec)}');
-     INSERT INTO gen_metadata (idx, data) VALUES (3, X'${mkBlob('gemini-4-hydrogen-xhigh', 1_000_000, 0, 0, novSec)}');`,
-  ]);
+     INSERT INTO gen_metadata (idx, data) VALUES (3, X'${mkBlob('gemini-4-hydrogen-xhigh', 1_000_000, 0, 0, novSec)}');`,);
 
   const manager = new UsageStatsManager({ geminiDir: temp, stateDir: temp });
   // 模拟 Antigravity 当前仅保留 gemini-4-hydrogen，gpt-4o 与 gemini-3.8-flash-n 已下架
@@ -363,15 +362,13 @@ test('Orchestrator 双阶段模型识别与合并计费（Argon / Carbon + 执�
     return ProtobufWriter.encodeLengthDelimited(1, wrapped).toString('hex');
   };
 
-  await execFileAsync('/usr/bin/sqlite3', [
-    dbPath,
+  execSqlite(dbPath,
     `CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER, metadata BLOB, status INTEGER, step_payload BLOB);
      CREATE TABLE gen_metadata (idx INTEGER PRIMARY KEY, data BLOB);
      INSERT INTO gen_metadata (idx, data) VALUES (1, X'${mkGenBlob(1668, 'gemini-pro-orchestrator-g1-pro', 'Orchestrator (Argon)', 1_000_000, 100_000, 0, novSec)}');
      INSERT INTO gen_metadata (idx, data) VALUES (2, X'${mkGenBlob(1667, 'gemini-pro-orchestrator-g1-pro', 'Orchestrator (Carbon)', 500_000, 50_000, 0, novSec)}');
      INSERT INTO gen_metadata (idx, data) VALUES (3, X'${mkGenBlob(1669, 'gemini-flash-worker-agy', 'Gemini Flash', 1_000_000, 100_000, 0, novSec)}');
-     INSERT INTO gen_metadata (idx, data) VALUES (4, X'${mkGenBlob(1528, 'gemini-4-argon', 'Gemini 4 Argon (High)', 500_000, 0, 0, novSec)}');`,
-  ]);
+     INSERT INTO gen_metadata (idx, data) VALUES (4, X'${mkGenBlob(1528, 'gemini-4-argon', 'Gemini 4 Argon (High)', 500_000, 0, 0, novSec)}');`,);
 
   const manager = new UsageStatsManager({ geminiDir: temp, stateDir: temp });
   const summary = await manager.getUsageSummary(true);

@@ -14,6 +14,7 @@ export function includeSourceDigestPath(relativePath) {
   const normalized = relativePath.replaceAll('\\', '/');
   const parts = normalized.split('/');
   if (parts.includes('.DS_Store')) return false;
+  if (parts.includes('__pycache__') || normalized.endsWith('.pyc')) return false;
   if (normalized === 'assets/screenshots' || normalized.startsWith('assets/screenshots/')) return false;
   return includeDictionaryPath(normalized);
 }
@@ -34,6 +35,7 @@ export async function sourceDigest(root) {
     }
   }
   for (const directory of ['src','runtime','native','tools','test','dict','ui-strings','assets','licenses']) await walk(directory);
+  if (await exists(join(root, 'linux'))) await walk('linux');
   if (await exists(join(root, 'vendor'))) await walk('vendor');
   files.push('package.json','package-lock.json','tsconfig.json','README.md','THIRD_PARTY_NOTICES.md');
   for (const doc of [

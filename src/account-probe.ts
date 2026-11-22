@@ -1,10 +1,12 @@
 import { existsSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import * as https from 'node:https';
 import * as http from 'node:http';
 import { applicationTarget, matchingTargetForLanguageServerCommand, type ApplicationTarget } from './application-target.js';
 import { resolveVerifiedLanguageServerPorts } from './discovery.js';
+import { bundleLanguageServerPath, isLinux, resolveLsofBinary, resolvePsBinary } from './platform.js';
 import { SqliteReadSnapshot } from './sqlite-read.js';
 import {
   applyFamilyWindows,
@@ -105,15 +107,35 @@ export function parseLoopbackListenPorts(lsofOut: string): number[] {
   return Array.from(new Set(ports));
 }
 
+/** Extract `ANTIGRAVITY_SERVER_CSRF_TOKEN` (>= 2.34.0) from Linux `/proc/<pid>/environ` NUL-delimited bytes. */
+export function extractCsrfTokenFromProcEnviron(raw: Buffer | string): string | null {
+  const text = Buffer.isBuffer(raw) ? raw.toString('utf8') : raw;
+  for (const entry of text.split('\0')) {
+    if (entry.startsWith('ANTIGRAVITY_SERVER_CSRF_TOKEN=')) {
+      const value = entry.slice('ANTIGRAVITY_SERVER_CSRF_TOKEN='.length).trim();
+      if (value) return value;
+    }
+  }
+  return null;
+}
+
 async function resolveCandidateCsrfToken(
   candidate: LanguageServerCandidate,
-  execFileFn: ExecFileLike
+  execFileFn: ExecFileLike,
+  useNativeLinuxProc = false
 ): Promise<string | null> {
   const cliToken = extractCsrfTokenFromCommand(candidate.cmd);
   if (cliToken) return cliToken;
+  if (useNativeLinuxProc) {
+    try {
+      const rawEnv = await readFile(`/proc/${candidate.pid}/environ`);
+      const token = extractCsrfTokenFromProcEnviron(rawEnv);
+      if (token) return token;
+    } catch {}
+  }
   try {
     const { stdout: psEnvOut } = await execFileFn(
-      '/bin/ps',
+      resolvePsBinary(),
       ['-E', '-p', String(candidate.pid), '-ww', '-o', 'args='],
       { timeout: 3000 }
     );
@@ -134,7 +156,7 @@ async function resolveCandidatePorts(
   }
   try {
     const { stdout: lsofOut } = await execFileFn(
-      '/usr/sbin/lsof',
+      resolveLsofBinary(),
       ['-nP', '-a', '-p', String(candidate.pid), '-iTCP', '-sTCP:LISTEN', '-Fn'],
       { timeout: 3000 }
     );
@@ -148,7 +170,7 @@ export type CloudProviderContext = { origin: string; userAgent: string; appVersi
 const CLOUD_ORIGINS = new Set(['https://cloudcode-pa.googleapis.com', 'https://daily-cloudcode-pa.googleapis.com', 'https://daily-cloudcode-pa.sandbox.googleapis.com']);
 
 export function cloudOriginFromCommand(command: string, target = applicationTarget()): string | null {
-  if (!command.startsWith(target.appPath + '/Contents/Resources/bin/language_server ')) return null;
+  if (!command.startsWith(bundleLanguageServerPath(target.appPath) + ' ')) return null;
   const dataDirectory = command.match(/(?:^|\s)--app_data_dir(?:=|\s+)([^\s"]+)/)?.[1];
   if (dataDirectory && dataDirectory !== target.dataDirectoryName) return null;
   const value = command.match(/(?:^|\s)--cloud_code_endpoint(?:=|\s+)([^\s"]+)/)?.[1];
@@ -177,7 +199,7 @@ export function validCachedCloudProviderContext(value: any, appVersion: string, 
   if (!value || value.identityVersion !== 2 || !CLOUD_ORIGINS.has(value.origin)
     || typeof value.clientSubType !== 'string'
     || (value.clientSubType !== '' && !/^[a-z][a-z0-9_-]{0,31}$/.test(value.clientSubType))) return false;
-  const expected = cloudProviderContextFromCommand(target.appPath + '/Contents/Resources/bin/language_server --cloud_code_endpoint '
+  const expected = cloudProviderContextFromCommand(bundleLanguageServerPath(target.appPath) + ' --cloud_code_endpoint '
     + value.origin + (value.clientSubType ? ' --subclient_type ' + value.clientSubType : ''), appVersion, target);
   return !!expected && value.appVersion === expected.appVersion && value.userAgent === expected.userAgent;
 }
@@ -602,11 +624,11 @@ export async function probeLiveLanguageServerOnce(
 
     const execFileFn = options?.execFileImpl ?? defaultExecFile;
     const useVerifiedBundlePorts = fetchImpl === globalThis.fetch;
-    const { stdout: psOut } = await execFileFn('/bin/ps', ['-ax', '-ww', '-o', 'pid=,args='], { timeout: 3000 });
+    const { stdout: psOut } = await execFileFn(resolvePsBinary(), ['-ax', '-ww', '-o', 'pid=,args='], { timeout: 3000 });
     const candidates = collectLanguageServerCandidates(psOut, target);
 
     for (const candidate of candidates) {
-      const csrfToken = await resolveCandidateCsrfToken(candidate, execFileFn);
+      const csrfToken = await resolveCandidateCsrfToken(candidate, execFileFn, isLinux && !options?.execFileImpl);
       if (!csrfToken) continue;
 
       const ports = await resolveCandidatePorts(candidate, useVerifiedBundlePorts, execFileFn);

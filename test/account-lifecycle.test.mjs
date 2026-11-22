@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { execSqlite, querySqliteJson } from './sqlite-helper.mjs';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, writeFile, rm, stat, copyFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -17,7 +18,7 @@ async function fixture(t) {
   const stateDir = join(root, 'state'), profile = join(root, 'profile');
   await mkdir(join(profile, 'User', 'globalStorage'), { recursive: true });
   const db = join(profile, 'User', 'globalStorage', 'state.vscdb');
-  await run('/usr/bin/sqlite3', [db, "CREATE TABLE ItemTable(key TEXT PRIMARY KEY,value TEXT); INSERT INTO ItemTable VALUES('unrelated','keep'),('jetskiStateSync.agentManagerInitState','old-state');"]);
+  execSqlite(db, "CREATE TABLE ItemTable(key TEXT PRIMARY KEY,value TEXT); INSERT INTO ItemTable VALUES('unrelated','keep'),('jetskiStateSync.agentManagerInitState','old-state');");
   const manager = new AccountsManager(stateDir);
   manager.probeLiveLanguageServer = async () => null;
   const a = await manager.upsertAccount({ email: 'a@example.test', refreshToken: 'synthetic-a', accessToken: 'synthetic-access-a', expiresIn: 3600 });
@@ -25,7 +26,7 @@ async function fixture(t) {
   const keychain = new MockKeychainAdapter(); await keychain.writePassword('gemini', 'antigravity', 'old-keychain');
   return { root, stateDir, profile, db, manager, a, b, keychain };
 }
-const rows = async f => JSON.parse((await run('/usr/bin/sqlite3', ['-json', f.db, 'SELECT key,value FROM ItemTable ORDER BY key;'])).stdout);
+const rows = async f => querySqliteJson(f.db, 'SELECT key,value FROM ItemTable ORDER BY key;');
 
 test('备用号刷新使用本账号凭据与账号范围；项目元信息可保存，失败保留旧记录', async t => {
   const f = await fixture(t), before = quota(62); f.b.quota = before; f.b.token.access_token = 'pending_refresh'; await f.manager.saveAccount(f.b);
@@ -74,7 +75,7 @@ test('切号事务同步SQLite、钥匙串与本机索引，保留其他数据�
   const f = await fixture(t), before = await rows(f);
   const original = { index: await readFile(join(f.stateDir, 'accounts.json'), 'utf8') };
   const unrelatedTopic = replaceTopicRow(undefined, 'other-sentinel', Writer.encodeString(1, 'keep-row'));
-  await run('/usr/bin/sqlite3', [f.db, `INSERT INTO ItemTable VALUES('antigravityUnifiedStateSync.oauthToken','${unrelatedTopic}');`]);
+  execSqlite(f.db, `INSERT INTO ItemTable VALUES('antigravityUnifiedStateSync.oauthToken','${unrelatedTopic}');`);
   const service = new AccountSwitchService(f.manager, { ...f, isRunning: async () => false });
   await service.switchAccount(f.b.id);
   const written = Object.fromEntries((await rows(f)).map(r => [r.key, r.value]));

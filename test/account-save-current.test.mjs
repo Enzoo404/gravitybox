@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { execSqlite } from './sqlite-helper.mjs';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
@@ -72,7 +73,7 @@ async function createStateVscdb(vscdbPath, {
     'CREATE TABLE ItemTable(key TEXT PRIMARY KEY, value TEXT);',
     ...rows.map(([k, v]) => `INSERT INTO ItemTable(key, value) VALUES('${k.replaceAll("'", "''")}', '${v.replaceAll("'", "''")}');`),
   ].join('\n');
-  await execFileAsync('/usr/bin/sqlite3', [vscdbPath, sql]);
+  execSqlite(vscdbPath, sql);
 }
 
 function makeLiveStatus(email, pct = 82) {

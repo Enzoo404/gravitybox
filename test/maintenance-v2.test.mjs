@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { execSqlite } from './sqlite-helper.mjs';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm, lstat, utimes, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -35,7 +36,7 @@ async function createUsageDb(dbPath, { model = 'gemini-3.8-flash', input = 1500,
     CREATE TABLE gen_metadata (idx INTEGER PRIMARY KEY, data BLOB);
     INSERT INTO gen_metadata (idx, data) VALUES (1, X'${hexBlob}');
   `;
-  await execFileAsync('/usr/bin/sqlite3', [dbPath, sql]);
+  execSqlite(dbPath, sql);
 }
 
 async function createSummariesDb(dbPath, summaries, archivedIds = []) {
@@ -51,7 +52,7 @@ async function createSummariesDb(dbPath, summaries, archivedIds = []) {
   for (const cid of archivedIds) {
     lines.push(`INSERT INTO conversations_fts (conversation_id, title, archived) VALUES ('${cid}', 'archived chat', 1);`);
   }
-  await execFileAsync('/usr/bin/sqlite3', [dbPath, lines.join('\n')]);
+  execSqlite(dbPath, lines.join('\n'));
 }
 
 test('v2 存储治理: PartitionsCache 与 AgentBrowserCache 精确剥离无状态缓存，保护登录态且绝不触碰 Insiders', async () => {

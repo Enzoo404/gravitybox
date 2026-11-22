@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { execSqlite } from './sqlite-helper.mjs';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { createConnection } from 'node:net';
@@ -147,9 +148,7 @@ async function createStateVscdb(vscdbPath, { accessToken, refreshToken, expirySe
     'CREATE TABLE IF NOT EXISTS ItemTable (key TEXT PRIMARY KEY, value TEXT);',
     ...rows.map(r => `INSERT OR REPLACE INTO ItemTable(key, value) VALUES('${r.key}', '${r.value}');`),
   ].join('\n');
-  const { execFile } = await import('node:child_process');
-  const { promisify } = await import('node:util');
-  await promisify(execFile)('/usr/bin/sqlite3', [vscdbPath, sql]);
+  execSqlite(vscdbPath, sql);
 }
 
 const pause = ms => new Promise(r => setTimeout(r, ms));

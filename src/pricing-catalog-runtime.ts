@@ -2,6 +2,8 @@ import { lstat, readFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { join } from 'node:path';
+import { probeBundleCapabilities } from './application-target.js';
+import { isMacAppBundlePath } from './platform.js';
 import { readOptionalJson } from './files.js';
 import type { AccountsManager, LiveLanguageServerStatus } from './accounts.js';
 import type { UsageStatsManager } from './usage.js';
@@ -103,6 +105,15 @@ export function registerObservedModelsFromSource(
 
 export async function readInstalledAppBundleVersion(appPath: string): Promise<string> {
   if (!appPath) return '';
+  if (!isMacAppBundlePath(appPath)) {
+    const caps = probeBundleCapabilities(appPath);
+    if (caps.version) return caps.version;
+    try {
+      const raw = (await readFile(join(appPath, 'version'), 'utf8')).trim();
+      if (raw) return raw;
+    } catch {}
+    return '';
+  }
   const plistPath = join(appPath, 'Contents/Info.plist');
   try {
     const raw = await readFile(plistPath, 'utf8');

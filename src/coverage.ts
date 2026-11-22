@@ -1,4 +1,3 @@
-import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { openAsarArchive, parseAsarHeaderPrefix, resolveAsarEntryRange, type AsarFileEntry } from './asar.js';
 import { extractUiStrings, extractedKind, fetchBuffer, foldDictionaryKey, isEnglishSource, normalizeText as normalize } from './bundle.js';
@@ -6,6 +5,7 @@ import { decodeScopedKey } from './candidates.js';
 import type { Dictionary } from './dictionary.js';
 import type { DeepReport } from './deep-scan.js';
 import { bt, getActiveLocale } from './i18n.js';
+import { bundleAsarPath } from './platform.js';
 
 export type CoverageSource = { id: string; scope: 'renderer' | 'native'; source: string };
 export type CoverageEntry = { key: string; translation?: string; status: string; sources: string[]; confidence: 'ui' | 'literal'; kind?: string; observed?: 'verified' | 'untranslated'; observations?: number; scoped?: boolean };
@@ -288,7 +288,7 @@ export function asarSources(buffer: Buffer): CoverageSource[] {
 }
 
 export async function nativeSources(appPath: string): Promise<CoverageSource[]> {
-  const archive = await openAsarArchive(join(appPath, 'Contents/Resources/app.asar'), 8_000_000);
+  const archive = await openAsarArchive(bundleAsarPath(appPath), 8_000_000);
   try {
     const result: CoverageSource[] = [];
     for (const { path, entry } of collectNativeAsarEntries(archive.header.files)) {

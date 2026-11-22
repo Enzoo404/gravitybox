@@ -40,6 +40,13 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DictionaryStore, loadDictionary, dictionaryFromEntries, validateEntries, validateTemplateRules, resolveDictionaryForLocale } from './dictionary.js';
 import { bt, getActiveLocale, setActiveLocale, resolveInitialRuntimeLanguage, resolveLocale } from './i18n.js';
+import {
+  bundleProcessPrefix,
+  defaultAppSupportDir,
+  defaultGravityBoxStateDir,
+  defaultTrashDir,
+  resolvePsBinary,
+} from './platform.js';
 import { Controller, type AssistantStatus } from './controller.js';
 import { coverageMetricSnapshot } from './coverage.js';
 import { atomicJson, readOptionalJson, sanitizeError } from './files.js';
@@ -358,7 +365,7 @@ export async function buildDashboardAggregate(deps: DashboardAggregateDeps): Pro
 
 export async function request(command: string): Promise<any> {
   const argv = process.argv.slice(2);
-  const targetStateDir = resolve(cliOption(argv, '--state-dir', join(homedir(), 'Library', 'Application Support', 'GravityBox'))!);
+  const targetStateDir = resolve(cliOption(argv, '--state-dir', defaultGravityBoxStateDir(homedir()))!);
   const targetSocketPath = join(targetStateDir, 'control.sock');
   const sockInfo = await lstat(targetSocketPath).catch((err: NodeJS.ErrnoException) => {
     if (err?.code === 'ENOENT') throw new Error(bt('main.assistant_not_running'));
@@ -398,7 +405,7 @@ async function run() {
   const command = option('--command');
   if (command) { console.log(JSON.stringify(await request(command))); return; }
   if (args.includes('--heal')) throw new Error(bt('main.heal_unsupported'));
-  const stateDir = resolve(option('--state-dir', join(homedir(), 'Library', 'Application Support', 'GravityBox'))!);
+  const stateDir = resolve(option('--state-dir', defaultGravityBoxStateDir(homedir()))!);
   await mkdir(stateDir, { recursive: true, mode: 0o700 });
   const stateInfo = await lstat(stateDir);
   if (!stateInfo.isDirectory() || stateInfo.isSymbolicLink() || stateInfo.uid !== process.getuid?.()) throw new Error(bt('main.state_dir_mismatch'));
@@ -451,7 +458,7 @@ async function run() {
     console.log(JSON.stringify(endpoint ? { found: true, pid: endpoint.pid, appVersion: endpoint.appVersion, legacyPatch: endpoint.legacyPatch, loopback: true } : { found: false })); return;
   }
   const geminiDir = option('--gemini-dir', process.env.GRAVITYBOX_GEMINI_DIR || process.env.GEMINI_DIR || join(homedir(), '.gemini'))!;
-  const cacheMaintenance = new CacheMaintenance(profile, join(homedir(), '.Trash'), undefined, { stateDir: channelStateDir, geminiDir, appPath });
+  const cacheMaintenance = new CacheMaintenance(profile, defaultTrashDir(homedir()), undefined, { stateDir: channelStateDir, geminiDir, appPath });
   const accountsManager = new AccountsManager(stateDir, { target });
   const liveIdeModelsPath = join(stateDir, 'live-ide-models.json');
   let liveSnapshotWriteChain = Promise.resolve();
@@ -482,7 +489,7 @@ async function run() {
   }
   const accountLogin = new GoogleAccountLogin((token, signal) => accountsManager.addAccountFromOAuth(token, signal));
   const homeDir = option('--home-dir', process.env.GRAVITYBOX_HOME_DIR || homedir())!;
-  const appSupportDir = option('--app-support-dir', process.env.GRAVITYBOX_APP_SUPPORT_DIR || join(homedir(), 'Library', 'Application Support'))!;
+  const appSupportDir = option('--app-support-dir', process.env.GRAVITYBOX_APP_SUPPORT_DIR || defaultAppSupportDir(homedir()))!;
   const switchService = new AccountSwitchService(accountsManager, { stateDir, profile, channel, homeDir, geminiDir });
   const usageManager = new UsageStatsManager({ stateDir, geminiDir });
   cacheMaintenance.setHooks({
@@ -1066,9 +1073,9 @@ async function run() {
           let taskReason = '';
           let maxLsCpu = 0;
           const insidersPrefix = '/Applications/Antigravity - Insiders.app/Contents/';
-          const stablePrefix = `${target.appPath}/Contents/`;
+          const stablePrefix = bundleProcessPrefix(target.appPath);
           try {
-            const { stdout: psOut } = await execFileAsync('/bin/ps', ['-ax', '-ww', '-o', 'pid=,pcpu=,args='], { timeout: 3000 });
+            const { stdout: psOut } = await execFileAsync(resolvePsBinary(), ['-ax', '-ww', '-o', 'pid=,pcpu=,args='], { timeout: 3000 });
             for (const line of psOut.split('\n')) {
               const m = line.trim().match(/^(\d+)\s+([\d.]+)\s+(.*)$/);
               if (!m) continue;

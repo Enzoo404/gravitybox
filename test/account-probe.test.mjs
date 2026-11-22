@@ -13,7 +13,7 @@ import {
 
 const LS_BIN = '/Applications/Antigravity.app/Contents/Resources/bin/language_server';
 const INSIDERS_LS_BIN = '/Applications/Antigravity - Insiders.app/Contents/Resources/bin/language_server';
-const testTarget = () => applicationTarget('stable', '/Users/test');
+const testTarget = () => applicationTarget('stable', '/Users/test', { appPath: '/Applications/Antigravity.app' });
 const testMappers = { modelQuotaFromNormalized, groupToQuotaGroup };
 
 function makeFetchMock({
@@ -115,7 +115,7 @@ test('Antigravity <= 2.33.0：直接从 CLI --csrf_token 提取凭据并完成�
     if (file === '/bin/ps' && args[0] === '-ax') {
       return { stdout: `  3301 ${legacyCmd}\n` };
     }
-    if (file === '/usr/sbin/lsof') {
+    if (file.endsWith('/lsof') || file === 'lsof') {
       assert.ok(args.includes('3301'));
       return { stdout: 'p3301\nn127.0.0.1:43301\n' };
     }
@@ -166,7 +166,7 @@ test('Antigravity >= 2.34.0：回退仅针对已核验 PID 调用 ps -E -p <pid>
         stdout: `${modernCmd} ${leakedEnvMarker} HOME=/Users/test ANTIGRAVITY_CSRF_TOKEN=${sidecarToken} ANTIGRAVITY_SERVER_CSRF_TOKEN=${envToken} SHELL=/bin/zsh\n`,
       };
     }
-    if (file === '/usr/sbin/lsof') {
+    if (file.endsWith('/lsof') || file === 'lsof') {
       assert.ok(args.includes('4340'));
       return { stdout: 'p4340\nn127.0.0.1:43401\n' };
     }
@@ -225,7 +225,7 @@ test('多候选回退：首个 language_server 无监听端口或 RPC 失败时�
         return { stdout: `${cmdHealthy} PATH=/Users/test/Application Support/Antigravity/bin ANTIGRAVITY_SERVER_CSRF_TOKEN=${tokenHealthy}\n` };
       }
     }
-    if (file === '/usr/sbin/lsof') {
+    if (file.endsWith('/lsof') || file === 'lsof') {
       const pid = args[3];
       if (pid === '5001') {
         // 模拟无监听端口时 lsof 返回非零退出码

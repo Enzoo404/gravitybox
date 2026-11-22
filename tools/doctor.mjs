@@ -17,9 +17,13 @@ for(const [,supportedVersion] of bundleBlock.matchAll(/\['(\d+\.\d+\.\d+)'\s*,/g
   if(!existsSync(join(root,dictFile))){ready=false;process.stderr.write(`缺少已收录版本词典：${dictFile}\n`);}
 }
 if(!skipNative){
-  try{execFileSync('/usr/bin/xcrun',['--find','swiftc'],{stdio:'pipe'});}catch{ready=false;process.stderr.write('缺少 Apple 命令行开发工具。\n');}
+  if(process.platform==='darwin'){
+    try{execFileSync('/usr/bin/xcrun',['--find','swiftc'],{stdio:'pipe'});}catch{ready=false;process.stderr.write('缺少 Apple 命令行开发工具。\n');}
+  } else if(process.platform==='linux'){
+    try{execFileSync('/usr/bin/python3',['-c','import PyQt5.QtWidgets'],{stdio:'pipe'});}catch{ready=false;process.stderr.write('缺少 Python3 PyQt5 运行环境（python3-pyqt5）。\n');}
+  }
 }
-if(!ready){process.stderr.write('先运行 npm run setup:dev 准备依赖；缺少系统开发工具时按 macOS 提示安装。\n');process.exit(1);}
+if(!ready){process.stderr.write(process.platform==='linux'?'先运行 npm run setup:dev 准备依赖；缺少 Linux 依赖时请安装 python3-pyqt5 python3-pyqt5.qtsvg python3-gi gir1.2-secret-1。\n':'先运行 npm run setup:dev 准备依赖；缺少系统开发工具时按 macOS 提示安装。\n');process.exit(1);}
 
 // Git pre-commit / pre-push hook 门禁配置
 let hooksConfigured = false;

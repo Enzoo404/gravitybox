@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { execSqlite } from './sqlite-helper.mjs';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -36,11 +37,9 @@ test('N08: 趋势日期采用本地时区、连续 30 天自然日补齐并与 K
 
   try {
     await execFileAsync('/bin/mkdir', ['-p', convDir]);
-    await execFileAsync('/usr/bin/sqlite3', [
-      dbPath,
+    execSqlite(dbPath,
       `CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER, metadata BLOB);
-       CREATE TABLE gen_metadata (idx INTEGER PRIMARY KEY, data BLOB);`,
-    ]);
+       CREATE TABLE gen_metadata (idx INTEGER PRIMARY KEY, data BLOB);`,);
 
     const now = new Date();
     const todaySec = Math.floor(now.getTime() / 1000);
@@ -65,13 +64,11 @@ test('N08: 趋势日期采用本地时区、连续 30 天自然日补齐并与 K
     const blob2 = buildEventBlob(300, todaySec - 3 * 86400); // 3 天前
     const blob3 = buildEventBlob(200, todaySec - 8 * 86400); // 8 天前
 
-    await execFileAsync('/usr/bin/sqlite3', [
-      dbPath,
+    execSqlite(dbPath,
       `INSERT INTO gen_metadata (idx, data) VALUES 
        (1, x'${blob1.toString('hex')}'), 
        (2, x'${blob2.toString('hex')}'),
-       (3, x'${blob3.toString('hex')}');`,
-    ]);
+       (3, x'${blob3.toString('hex')}');`,);
 
     const uMgr = new UsageStatsManager({ stateDir: sandbox, geminiDir });
     const summary = await uMgr.getUsageSummary(true);

@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { join, relative, resolve, sep } from 'node:path';
 import { bt } from './i18n.js';
+import { bundleLanguageServerPath, bundleProcessPrefix, defaultAntigravityAppPath, isMacAppBundlePath } from './platform.js';
 
 export type CacheCategory = 'safe' | 'stateful';
 export type CacheSection = 'runtime' | 'history';
@@ -261,14 +262,16 @@ export async function readProcessCommands(): Promise<string[] | null> {
   }
 }
 
-export function hasAntigravityCommand(commands: string[], appPath = '/Applications/Antigravity.app'): boolean {
+export function hasAntigravityCommand(commands: string[], appPath = defaultAntigravityAppPath()): boolean {
   const appRoots = Array.from(new Set([appPath, '/Applications/Antigravity.app']));
-  const macOsPrefixes = appRoots.map(p => p + '/Contents/MacOS/');
-  const frameworkPrefixes = appRoots.map(p => p + '/Contents/Frameworks/');
-  const lsPrefixes = appRoots.map(p => p + '/Contents/Resources/bin/language_server');
+  const macOsPrefixes = appRoots.filter(isMacAppBundlePath).map(p => p + '/Contents/MacOS/');
+  const frameworkPrefixes = appRoots.filter(isMacAppBundlePath).map(p => p + '/Contents/Frameworks/');
+  const linuxPrefixes = appRoots.filter(p => !isMacAppBundlePath(p)).map(bundleProcessPrefix);
+  const lsPrefixes = appRoots.map(bundleLanguageServerPath);
   return commands.some(trimmed =>
     macOsPrefixes.some(prefix => trimmed.startsWith(prefix)) ||
     frameworkPrefixes.some(prefix => trimmed.startsWith(prefix)) ||
+    linuxPrefixes.some(prefix => trimmed.startsWith(prefix)) ||
     lsPrefixes.some(prefix => trimmed.startsWith(prefix) || trimmed.includes(prefix))
   );
 }
@@ -278,7 +281,7 @@ export function hasBrowserProfileCommand(commands: string[], browserProfileDir: 
   return commands.some(trimmed => trimmed.includes(browserProfileDir) && !trimmed.includes('/bin/ps'));
 }
 
-export async function antigravityRunning(appPath = '/Applications/Antigravity.app') {
+export async function antigravityRunning(appPath = defaultAntigravityAppPath()) {
   const commands = await readProcessCommands();
   return commands ? hasAntigravityCommand(commands, appPath) : false;
 }

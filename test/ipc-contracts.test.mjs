@@ -1,4 +1,5 @@
 import test from "node:test";
+import { execSqlite } from './sqlite-helper.mjs';
 import { describe as describeContractGroup } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, execFile } from "node:child_process";
@@ -240,12 +241,10 @@ test('Main IPC 集成测试: 0.9.0 账号管理、额度策略、Token 用量与
   const f9 = ProtobufWriter.encodeLengthDelimited(9, tInner);
   const genBlob = ProtobufWriter.encodeLengthDelimited(1, Buffer.concat([f19, f4, f9]));
 
-  await execFileAsync('/usr/bin/sqlite3', [
-    mockDbPath,
+  execSqlite(mockDbPath,
     `CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER, metadata BLOB, status INTEGER, step_payload BLOB);
      CREATE TABLE gen_metadata (idx INTEGER PRIMARY KEY, data BLOB);
-     INSERT INTO gen_metadata (idx, data) VALUES (1, X'${genBlob.toString('hex')}');`,
-  ]);
+     INSERT INTO gen_metadata (idx, data) VALUES (1, X'${genBlob.toString('hex')}');`,);
 
   // 2. 注入沙箱独立凭据，供 account_save_current 提取
   const standaloneDir = join(mockHomeDir, '.gemini');

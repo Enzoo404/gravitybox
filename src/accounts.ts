@@ -1,5 +1,6 @@
 import { applicationTarget, type ApplicationTarget } from './application-target.js';
 import { bt } from './i18n.js';
+import { defaultAppSupportDir, defaultGravityBoxStateDir, resolvePsBinary } from './platform.js';
 import { inspectBundle } from './discovery.js';
 import { readFileSync, statSync } from 'node:fs';
 import { lstat, mkdir, readFile, readdir, unlink } from 'node:fs/promises';
@@ -268,7 +269,7 @@ export class AccountsManager {
     if(this.inFlightProviderContext)return await this.inFlightProviderContext;
     const task=(async():Promise<CloudProviderContext>=>{
       const candidate = this.target;
-      const text=(await execFileAsync('/bin/ps',['-ax','-ww','-o','args='],{timeout:3000})).stdout;
+      const text=(await execFileAsync(resolvePsBinary(),['-ax','-ww','-o','args='],{timeout:3000})).stdout;
       let version = '';
       try {
         version = (await inspectBundle(candidate.appPath)).version;
@@ -1767,9 +1768,9 @@ export class AccountsManager {
     expectedEmail?: string;
     strictSandboxGuard?: boolean;
   }): Promise<{ token: TokenData | null; email: string | null }> {
-    const defaultStateDir = join(homedir(), 'Library', 'Application Support', 'GravityBox');
+    const defaultStateDir = defaultGravityBoxStateDir(homedir());
     const isDefaultStateDir = this.stateDir === defaultStateDir;
-    const defaultProfileDir = join(homedir(), 'Library', 'Application Support', this.target.name);
+    const defaultProfileDir = join(defaultAppSupportDir(homedir()), this.target.name);
     const hasCustomTargetProfile = resolve(this.target.profile) !== resolve(defaultProfileDir);
     if (
       options?.strictSandboxGuard
@@ -1784,7 +1785,7 @@ export class AccountsManager {
     }
 
     const homeDir = options?.homeDir ?? homedir();
-    const appSupportDir = options?.appSupportDir ?? join(homedir(), 'Library', 'Application Support');
+    const appSupportDir = options?.appSupportDir ?? defaultAppSupportDir(homedir());
     const isSandboxHome = homeDir !== homedir();
     const allowHostSessionFiles = options?.homeDir !== undefined || isDefaultStateDir;
     const allowHostKeychain = Boolean(options?.keychain) || (!isSandboxHome && isDefaultStateDir);
@@ -2527,7 +2528,7 @@ export class AccountsManager {
       const ls = await this.probeLiveLanguageServer().catch(() => null);
       if (ls?.email) return ls.email;
     }
-    const isDefaultStateDir = this.stateDir === join(homedir(), 'Library', 'Application Support', 'GravityBox');
+    const isDefaultStateDir = this.stateDir === defaultGravityBoxStateDir(homedir());
     if (!isDefaultStateDir) return null;
     const now = Date.now();
     if (this.desktopEmailCache && now < this.desktopEmailCache.expiresAt) {

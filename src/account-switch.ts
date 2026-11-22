@@ -1,10 +1,12 @@
 import { type ApplicationChannel, type ApplicationTarget, applicationTarget } from './application-target.js';
 import { spawn, execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { promisify } from 'node:util';
 import { readFile, mkdir, lstat, unlink, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID, createHash } from 'node:crypto';
+import type { DatabaseSync as NodeDatabaseSync } from 'node:sqlite';
 import { atomicJson, atomicText, sanitizeError } from './files.js';
 import { withProcessLease } from './process-lock.js';
 import { AccountsManager, SystemKeychainAdapter, buildGoOauthPayload, syncAccountToKeychain, type KeychainAdapter, type Account } from './accounts.js';
@@ -12,6 +14,7 @@ import { ProtobufWriter as Writer } from './protobuf.js';
 import { replaceTopicRow } from './account-state.js';
 export { replaceTopicRow } from './account-state.js';
 import { bt } from './i18n.js';
+import { bundleProcessPrefix, defaultGravityBoxStateDir, isLinux, resolvePsBinary } from './platform.js';
 
 const run = promisify(execFile);
 const TOKEN = 'antigravityUnifiedStateSync.oauthToken';
@@ -54,22 +57,31 @@ function rowsDigest(rows: Rows): string {
   return sha256(JSON.stringify(Object.entries(rows || {}).sort()));
 }
 
-// sqlite3 stays in BEGIN IMMEDIATE while the other resources are committed. SQL goes through
-// stdin, so neither tokens nor database values appear in command arguments or diagnostics.
+// Keeps BEGIN IMMEDIATE held while the other resources are committed.
+// On macOS with `/usr/bin/sqlite3`, SQL goes through stdin so tokens never appear in argv.
+// On Linux (or whenever `/usr/bin/sqlite3` is absent), uses Node 22's built-in `node:sqlite` DatabaseSync in-process.
 export class DatabaseTransaction {
-  private child;
+  private child?: ReturnType<typeof spawn>;
+  private nativeDb?: NodeDatabaseSync;
+  private nativePath?: string;
+  private nativeTxActive = false;
   private output = '';
   private pending?: { marker: string; resolve: (s: string) => void; reject: (e: Error) => void };
   private failed = false;
   private exited: Promise<void>;
   constructor(path: string) {
+    if (isLinux || !existsSync('/usr/bin/sqlite3')) {
+      this.exited = Promise.resolve();
+      this.nativePath = path;
+      return;
+    }
     this.child = spawn('/usr/bin/sqlite3', ['-batch', '-bail', path], { stdio: ['pipe', 'pipe', 'pipe'] });
-    this.exited = new Promise(resolve => this.child.once('close', () => resolve()));
-    this.child.stdin.on('error', () => this.fail());
-    this.child.stderr.on('data', () => this.fail());
+    this.exited = new Promise(resolve => this.child!.once('close', () => resolve()));
+    this.child.stdin!.on('error', () => this.fail());
+    this.child.stderr!.on('data', () => this.fail());
     this.child.on('error', () => this.fail());
     this.child.on('exit', () => this.fail());
-    this.child.stdout.on('data', chunk => {
+    this.child.stdout!.on('data', chunk => {
       this.output += chunk.toString();
       if (this.output.length > 4_000_000) return this.fail();
       const marker = this.pending?.marker;
@@ -80,28 +92,119 @@ export class DatabaseTransaction {
       }
     });
   }
+  private async ensureNativeDb(): Promise<NodeDatabaseSync> {
+    if (this.nativeDb) return this.nativeDb;
+    if (!this.nativePath) throw new Error(bt('switch.err.db_closed'));
+    const { DatabaseSync } = await import('node:sqlite');
+    const db = new DatabaseSync(this.nativePath);
+    db.exec('PRAGMA busy_timeout = 3000;');
+    this.nativeDb = db;
+    return db;
+  }
   private fail() { this.failed = true; this.pending?.reject(new Error(bt('switch.err.db_tx_failed'))); this.pending = undefined; }
   async sql(sql: string): Promise<string> {
     if (this.failed) throw new Error(bt('switch.err.db_closed'));
+    if (this.nativePath !== undefined) {
+      try {
+        const db = await this.ensureNativeDb();
+        db.exec(sql);
+        return '';
+      } catch {
+        this.failed = true;
+        throw new Error(bt('switch.err.db_tx_failed'));
+      }
+    }
     const marker = `GB_${randomUUID()}`;
     const response = new Promise<string>((resolve, reject) => { this.pending = { marker, resolve, reject }; });
-    this.child.stdin.write(`${sql}\n.print ${marker}\n`);
+    this.child!.stdin!.write(`${sql}\n.print ${marker}\n`);
     let timer: ReturnType<typeof setTimeout> | undefined;
-    try { return await Promise.race([response, new Promise<never>((_, reject) => { timer = setTimeout(() => { this.child.kill(); reject(new Error(bt('switch.err.db_busy'))); }, 6000); })]); }
+    try { return await Promise.race([response, new Promise<never>((_, reject) => { timer = setTimeout(() => { this.child!.kill(); reject(new Error(bt('switch.err.db_busy'))); }, 6000); })]); }
     finally { clearTimeout(timer); }
   }
-  async begin() { await this.sql('.timeout 3000\n.mode json\nBEGIN IMMEDIATE;'); }
+  async begin() {
+    if (this.nativePath !== undefined) {
+      if (this.failed) throw new Error(bt('switch.err.db_closed'));
+      try {
+        const db = await this.ensureNativeDb();
+        db.exec('BEGIN IMMEDIATE;');
+        this.nativeTxActive = true;
+      } catch (err) {
+        this.failed = true;
+        const msg = err instanceof Error ? err.message : '';
+        throw new Error(/locked|busy/i.test(msg) ? bt('switch.err.db_busy') : bt('switch.err.db_tx_failed'));
+      }
+      return;
+    }
+    await this.sql('.timeout 3000\n.mode json\nBEGIN IMMEDIATE;');
+  }
   async rows(): Promise<Rows> {
+    if (this.nativePath !== undefined) {
+      if (this.failed) throw new Error(bt('switch.err.db_closed'));
+      try {
+        const db = await this.ensureNativeDb();
+        const placeholders = KEYS.map(() => '?').join(',');
+        const stmt = db.prepare(`SELECT key, value FROM ItemTable WHERE key IN (${placeholders});`);
+        const found = stmt.all(...KEYS) as Array<{ key: string; value: string }>;
+        return Object.fromEntries(found.map(r => [r.key, String(r.value)]));
+      } catch {
+        this.failed = true;
+        throw new Error(bt('switch.err.db_tx_failed'));
+      }
+    }
     const raw = await this.sql(`SELECT key,value FROM ItemTable WHERE key IN (${KEYS.map(quote).join(',')});`);
     return Object.fromEntries((JSON.parse(raw || '[]') as { key: string; value: string }[]).map(r => [r.key, r.value]));
   }
   async replace(rows: Rows) {
+    if (this.nativePath !== undefined) {
+      if (this.failed) throw new Error(bt('switch.err.db_closed'));
+      try {
+        const db = await this.ensureNativeDb();
+        const placeholders = KEYS.map(() => '?').join(',');
+        db.prepare(`DELETE FROM ItemTable WHERE key IN (${placeholders});`).run(...KEYS);
+        const insert = db.prepare('INSERT INTO ItemTable(key, value) VALUES(?, ?);');
+        for (const [k, v] of Object.entries(rows)) {
+          insert.run(k, v);
+        }
+      } catch {
+        this.failed = true;
+        throw new Error(bt('switch.err.db_tx_failed'));
+      }
+      return;
+    }
     await this.sql(`DELETE FROM ItemTable WHERE key IN (${KEYS.map(quote).join(',')});\n${Object.entries(rows).map(([k, v]) => `INSERT INTO ItemTable(key,value) VALUES(${quote(k)},${quote(v)});`).join('\n')}`);
   }
-  async finish(commit: boolean) { try { await this.sql(commit ? 'COMMIT;' : 'ROLLBACK;'); } finally { this.child.stdin.end(); } }
+  async finish(commit: boolean) {
+    if (this.nativePath !== undefined) {
+      try {
+        if (this.nativeDb && this.nativeTxActive) {
+          this.nativeTxActive = false;
+          this.nativeDb.exec(commit ? 'COMMIT;' : 'ROLLBACK;');
+        }
+      } catch {
+        this.failed = true;
+        throw new Error(bt('switch.err.db_tx_failed'));
+      } finally {
+        try { this.nativeDb?.close(); } catch {}
+        this.nativeDb = undefined;
+      }
+      return;
+    }
+    try { await this.sql(commit ? 'COMMIT;' : 'ROLLBACK;'); } finally { this.child?.stdin?.end(); }
+  }
   async close() {
-    this.child.stdin.end();
-    const timer = setTimeout(() => this.child.kill(), 1500);
+    if (this.nativePath !== undefined) {
+      try {
+        if (this.nativeDb && this.nativeTxActive) {
+          this.nativeTxActive = false;
+          this.nativeDb.exec('ROLLBACK;');
+        }
+      } catch {}
+      try { this.nativeDb?.close(); } catch {}
+      this.nativeDb = undefined;
+      return;
+    }
+    this.child?.stdin?.end();
+    const timer = setTimeout(() => this.child?.kill(), 1500);
     try { await this.exited; } finally { clearTimeout(timer); }
   }
 }
@@ -183,7 +286,7 @@ export class AccountSwitchService {
   private getCliCredentialPaths(): string[] {
     const baseGeminiDir = this.options.geminiDir
       ?? (this.options.homeDir ? join(this.options.homeDir, '.gemini') : undefined)
-      ?? (this.options.stateDir === join(homedir(), 'Library', 'Application Support', 'GravityBox') ? join(homedir(), '.gemini') : undefined);
+      ?? (this.options.stateDir === defaultGravityBoxStateDir(homedir()) ? join(homedir(), '.gemini') : undefined);
     if (!baseGeminiDir) return [];
     return [
       join(baseGeminiDir, 'antigravity-cli', 'antigravity-oauth-token'),
@@ -318,10 +421,14 @@ export class AccountSwitchService {
   private async guardStopped() {
     const candidatePrefixes = Array.from(
       // Insiders shares official credentials: block switching while it runs, without managing it.
-      new Set([this.target.appPath, '/Applications/Antigravity.app', '/Applications/Antigravity - Insiders.app']),
-    ).map(p => p + '/Contents/');
+      new Set([
+        bundleProcessPrefix(this.target.appPath),
+        '/Applications/Antigravity.app/Contents/',
+        '/Applications/Antigravity - Insiders.app/Contents/',
+      ]),
+    );
     const running = this.options.isRunning ? await this.options.isRunning() :
-      (await run('/bin/ps', ['-ax', '-ww', '-o', 'args='], { timeout: 3000 })).stdout.split('\n').some(line => {
+      (await run(resolvePsBinary(), ['-ax', '-ww', '-o', 'args='], { timeout: 3000 })).stdout.split('\n').some(line => {
         const trimmed = line.trim();
         return candidatePrefixes.some(prefix => trimmed.startsWith(prefix));
       });

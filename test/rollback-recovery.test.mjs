@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { sqliteSync } from './sqlite-helper.mjs';
 import assert from 'node:assert/strict';
 import {mkdtemp, mkdir, readFile, writeFile, rm, stat} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
@@ -13,7 +14,7 @@ async function fixture(t, withDatabase = true) {
   const stateDir=join(root,'state'), profile=join(root,'profile');
   await mkdir(join(profile,'User/globalStorage'),{recursive:true});
   const db=join(profile,'User/globalStorage/state.vscdb');
-  const sql=s=>execFileSync('/usr/bin/sqlite3',[db,s],{encoding:'utf8'}).trim();
+  const sql=s=>sqliteSync(db,s);
   if(withDatabase) sql('CREATE TABLE ItemTable(key TEXT PRIMARY KEY,value TEXT);');
   const manager=new AccountsManager(stateDir), keychain=new MockKeychainAdapter();
   await keychain.writePassword('gemini','antigravity','synthetic-initial');

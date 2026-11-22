@@ -3,6 +3,14 @@ import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import { openAsarSync } from './asar.js';
 import { bt } from './i18n.js';
+import {
+  bundleAsarPath,
+  bundleLanguageServerPath,
+  defaultAntigravityAppPath,
+  defaultAppSupportDir,
+  isLinux,
+  linuxAntigravityAppCandidates,
+} from './platform.js';
 
 export type ApplicationChannel = 'stable';
 export type ApplicationArchitecture = 'legacy-hub' | 'wcv-hub';
@@ -45,7 +53,7 @@ export function probeBundleCapabilities(
     supportsAccountSwitch: true,
   };
 
-  const asarPath = join(appPath, 'Contents', 'Resources', 'app.asar');
+  const asarPath = bundleAsarPath(appPath);
   let archive: ReturnType<typeof openAsarSync> | undefined;
   try {
     if (!existsSync(asarPath)) return fallback;
@@ -108,11 +116,20 @@ function assertStablePaths(appPath: string, profile?: string): void {
 
 export function detectInstalledChannels(
   preferredChannel: ApplicationChannel = 'stable',
-  applicationsDir = '/Applications',
+  applicationsDir?: string,
 ): InstalledChannelsInfo {
   applicationChannel(preferredChannel);
+  let installed = false;
+  if (applicationsDir !== undefined) {
+    installed = existsSync(join(applicationsDir, 'Antigravity.app'))
+      || (isLinux && existsSync(join(applicationsDir, 'antigravity', 'resources', 'app.asar')));
+  } else if (isLinux) {
+    installed = linuxAntigravityAppCandidates().some(dir => existsSync(join(dir, 'resources', 'app.asar')));
+  } else {
+    installed = existsSync(join('/Applications', 'Antigravity.app'));
+  }
   return {
-    channels: existsSync(join(applicationsDir, 'Antigravity.app')) ? ['stable'] : [],
+    channels: installed ? ['stable'] : [],
     bothInstalled: false,
     effectiveChannel: 'stable',
   };
@@ -126,8 +143,13 @@ export function applicationTarget(
 ) {
   applicationChannel(channel);
   const name = 'Antigravity';
-  const applicationsDir = options?.applicationsDir ?? '/Applications';
-  const appPath = options?.appPath ?? join(applicationsDir, `${name}.app`);
+  const appPath = options?.appPath ?? (
+    options?.applicationsDir
+      ? (isLinux && existsSync(join(options.applicationsDir, 'antigravity', 'resources', 'app.asar'))
+        ? join(options.applicationsDir, 'antigravity')
+        : join(options.applicationsDir, `${name}.app`))
+      : defaultAntigravityAppPath(home)
+  );
   assertStablePaths(appPath, options?.profile);
   const capabilities = probeBundleCapabilities(appPath, channel);
   return {
@@ -137,7 +159,7 @@ export function applicationTarget(
     bundleId: 'com.google.antigravity',
     appPath,
     executable: name,
-    profile: options?.profile ?? join(home, 'Library', 'Application Support', name),
+    profile: options?.profile ?? join(defaultAppSupportDir(home), name),
     dataDirectoryName: capabilities.dataDirectoryName,
     architecture: capabilities.architecture,
     supportsAccountSwitch: true,
@@ -146,9 +168,9 @@ export function applicationTarget(
 
 export type ApplicationTarget = ReturnType<typeof applicationTarget>;
 
-export function allApplicationTargets(home = homedir(), applicationsDir = '/Applications'): ApplicationTarget[] {
+export function allApplicationTargets(home = homedir(), applicationsDir?: string): ApplicationTarget[] {
   return [
-    applicationTarget('stable', home, { applicationsDir }),
+    applicationTarget('stable', home, applicationsDir ? { applicationsDir } : undefined),
   ];
 }
 
@@ -165,7 +187,8 @@ export function matchingTargetForLanguageServerCommand(
     ? [preferredTarget, ...allApplicationTargets(home).filter(t => t.appPath !== preferredTarget.appPath)]
     : allApplicationTargets(home);
   for (const candidate of candidates) {
-    if (!command.startsWith(candidate.appPath + '/Contents/Resources/bin/language_server ')) continue;
+    const lsPrefix = bundleLanguageServerPath(candidate.appPath) + ' ';
+    if (!command.startsWith(lsPrefix)) continue;
     const dataDirectory = command.match(/(?:^|\s)--app_data_dir(?:=|\s+)([^\s"]+)/)?.[1];
     if (dataDirectory && dataDirectory !== candidate.dataDirectoryName) continue;
     return candidate;

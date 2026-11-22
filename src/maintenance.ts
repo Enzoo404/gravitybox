@@ -27,6 +27,7 @@ import {
   type SubTargetSpec,
 } from './maintenance-catalog.js';
 import { bt } from './i18n.js';
+import { defaultGravityBoxCacheDir, defaultTrashDir } from './platform.js';
 import {
   checkRunningConversation,
   collectAgentConversationTargets,
@@ -78,7 +79,7 @@ export class CacheMaintenance {
 
   constructor(
     private profile: string,
-    private trash = join(homedir(), '.Trash'),
+    private trash = defaultTrashDir(homedir()),
     private running = antigravityRunning,
     private options: CacheMaintenanceOptions = {},
   ) {
@@ -104,7 +105,7 @@ export class CacheMaintenance {
     if (this.options.stateDir) {
       return join(resolve(this.options.stateDir), 'maintenance-trash');
     }
-    return join(homedir(), 'Library', 'Caches', 'GravityBox', 'maintenance-trash');
+    return join(defaultGravityBoxCacheDir(homedir()), 'maintenance-trash');
   }
 
   private candidateTrashDirs(): string[] {

@@ -45,7 +45,10 @@ test('仅正式版可作为运行目标，旧持久配置可迁移而显式 Insi
   assert.throws(() => applicationTarget('stable', undefined, { profile: '/tmp/Antigravity - Insiders' }), /仅支持/);
   const stable = applicationTarget('stable', '/synthetic-home');
   assert.equal(stable.bundleId, 'com.google.antigravity');
-  assert.equal(stable.profile, '/synthetic-home/Library/Application Support/Antigravity');
+  const expectedProfile = process.platform === 'linux'
+    ? '/synthetic-home/.config/Antigravity'
+    : '/synthetic-home/Library/Application Support/Antigravity';
+  assert.equal(stable.profile, expectedProfile);
   assert.equal(channelStateDirectory('/state', 'stable'), '/state');
   assert.equal(allApplicationTargets().length, 1);
 });
@@ -188,17 +191,17 @@ test('旧共享恢复记录原样保留，不能被正式版自动回滚', async
 });
 
 test('语言服务只匹配正式版并保留 WCV hub 身份，拒绝 Insiders 进程', () => {
-  const target = applicationTarget('stable');
+  const target = applicationTarget('stable', undefined, { appPath: '/Applications/Antigravity.app' });
   const version = '2.29.0';
   const command = target.appPath + '/Contents/Resources/bin/language_server --cloud_code_endpoint https://daily-cloudcode-pa.googleapis.com --subclient_type hub --override_ide_version ' + version;
-  assert.equal(matchingTargetForLanguageServerCommand(command)?.channel, 'stable');
+  assert.equal(matchingTargetForLanguageServerCommand(command, target)?.channel, 'stable');
   const context = cloudProviderContextFromCommand(command, version, target);
   assert.equal(cloudProviderContextFromCommand(command + ' --app_data_dir antigravity-insiders', version, target), null);
   assert.equal(context.userAgent, 'antigravity/hub/' + version);
   assert.equal(validCachedCloudProviderContext(context, version, target), true);
   const unsupported = command.replace('Antigravity.app', 'Antigravity - Insiders.app');
-  assert.equal(matchingTargetForLanguageServerCommand(unsupported), null);
-  assert.equal(cloudProviderContextFromCommand(unsupported, version), null);
+  assert.equal(matchingTargetForLanguageServerCommand(unsupported, target), null);
+  assert.equal(cloudProviderContextFromCommand(unsupported, version, target), null);
 });
 
 test('历史 Insiders 配额原样保留但不作为正式版配额展示', async t => {
