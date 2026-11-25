@@ -1,6 +1,7 @@
 import type { QuotaGroupView, QuotaWindowView } from '../lib/quota';
-import { formatBarTitle } from '../lib/quota';
+import { formatBarTitle, formatWeeklyAttributionInline } from '../lib/quota';
 import type { ResolvedLocale } from '../lib/i18n';
+import type { WeeklyPoolAttribution } from '../lib/types';
 import { BrandIcons } from './ModelIcon';
 
 function barTone(pct: number | null, stale: boolean): { fill: string; textColor: string } {
@@ -26,6 +27,9 @@ export function QuotaMeterRow({
   window: win,
   isDark,
   compact = false,
+  poolKey,
+  locale = 'zh-Hans',
+  weeklyAttributionByPool,
 }: {
   title: string;
   brands?: Array<'gemini' | 'claude' | 'openai'>;
@@ -33,10 +37,19 @@ export function QuotaMeterRow({
   window: QuotaWindowView;
   isDark: boolean;
   compact?: boolean;
+  poolKey?: string;
+  locale?: ResolvedLocale;
+  weeklyAttributionByPool?: ReadonlyMap<string, WeeklyPoolAttribution>;
 }) {
   const { fill, textColor } = barTone(win.percentage, win.stale);
   const pct = win.percentage;
   const fillWidth = pct === null ? 0 : pct === 0 ? 0 : Math.max(2, Math.min(100, pct));
+  const normalizedPoolKey = (poolKey ?? '').trim().toLowerCase();
+  const weeklyPool =
+    win.period.trim().toLowerCase() === 'weekly' && normalizedPoolKey && weeklyAttributionByPool
+      ? weeklyAttributionByPool.get(normalizedPoolKey)
+      : undefined;
+  const weeklyInline = weeklyPool ? formatWeeklyAttributionInline(weeklyPool, locale) : null;
 
   return (
     <div
@@ -136,6 +149,36 @@ export function QuotaMeterRow({
           />
         )}
       </div>
+
+      {weeklyInline && (
+        <div
+          className="tabular"
+          title={weeklyInline.tooltip}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 6,
+            fontSize: 10.5,
+            lineHeight: 1.25,
+            color: 'var(--text-secondary)',
+            minWidth: 0,
+          }}
+        >
+          <span
+            style={{
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              minWidth: 0,
+              color: weeklyInline.state === 'calibrating' ? 'var(--warning)' : 'var(--text-secondary)',
+            }}
+          >
+            {weeklyInline.left}
+          </span>
+          <span style={{ flexShrink: 0, whiteSpace: 'nowrap' }}>{weeklyInline.right}</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -146,12 +189,14 @@ export function QuotaGroupsGrid({
   locale,
   isDark,
   compact = false,
+  weeklyAttributionByPool,
 }: {
   coreGroups: QuotaGroupView[];
   standaloneGroups: QuotaGroupView[];
   locale: ResolvedLocale;
   isDark: boolean;
   compact?: boolean;
+  weeklyAttributionByPool?: ReadonlyMap<string, WeeklyPoolAttribution>;
 }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: compact ? 9 : 11 }}>
@@ -172,6 +217,9 @@ export function QuotaGroupsGrid({
               window={win}
               isDark={isDark}
               compact={compact}
+              poolKey={group.key}
+              locale={locale}
+              weeklyAttributionByPool={weeklyAttributionByPool}
             />
           ))}
         </div>
@@ -196,6 +244,9 @@ export function QuotaGroupsGrid({
                   window={win}
                   isDark={isDark}
                   compact={compact}
+                  poolKey={group.key}
+                  locale={locale}
+                  weeklyAttributionByPool={weeklyAttributionByPool}
                 />
               )),
             )}

@@ -4,13 +4,18 @@ import { join } from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import { withProcessLease } from './process-lock.js';
 import type { GenerationEvent, SyncReceipt, TokenUsageSummary } from './usage-types.js';
-import type { ApiPricingEntry } from './pricing.js';
+import type { ApiPricing, ApiPricingEntry } from './pricing.js';
 import type { AggregateOptions, LedgerSnapshot } from './usage-aggregate.js';
 import { bt, getActiveLocale } from './i18n.js';
 export type LedgerEvent = GenerationEvent & {
     db_file?: string;
     ingested_at?: string;
 };
+export interface LedgerRangeEntry {
+    event: LedgerEvent;
+    usd: number | null;
+    unitPrice?: ApiPricing | null;
+}
 /** The legacy JSON is a read-only recovery baseline; only changed rows enter the indexed store. */
 const LEDGER_IDLE_TTL_MS = 30_000;
 
@@ -107,7 +112,7 @@ export class UsageLedger {
             }
         };
         const execute = async (): Promise<T> => {
-            if (!['load', 'review', 'locks', 'receipts', 'version'].includes(operation)) {
+            if (!['load', 'review', 'locks', 'receipts', 'version', 'range'].includes(operation)) {
                 await mkdir(this.stateDir, { recursive: true, mode: 0o700 });
                 return withProcessLease(this.path + '.lock', runWithTerminateBarrier);
             }
@@ -147,6 +152,7 @@ export class UsageLedger {
         });
     }
     load(): Promise<LedgerEvent[]> { return this.request('load'); }
+    range(options: { startSec: number; endSec: number }): Promise<LedgerRangeEntry[]> { return this.request('range', undefined, options); }
     async prune(): Promise<void> { await this.request('prune'); }
     review(): Promise<Record<string, any>> { return this.request('review'); }
     locks(): Promise<Record<string, {

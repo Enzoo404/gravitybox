@@ -1,5 +1,13 @@
 import { translate, type ResolvedLocale } from './i18n';
-import { inferredBrands, localizeCountdown, modelDisplayName } from './format';
+import {
+  formatCompactTokens,
+  formatInteger,
+  formatShortDateTime,
+  inferredBrands,
+  localizeCountdown,
+  modelDisplayName,
+} from './format';
+import type { AccountWeeklyAttribution, WeeklyPoolAttribution } from './types';
 
 export interface QuotaWindowView {
   id: string;
@@ -489,4 +497,114 @@ export function monitoredScopeSubtitle(key: string, locale: ResolvedLocale): str
   if (k === 'claude') return translate(locale, 'policy.row.monitored.sub.claude');
   if (k === 'argon') return translate(locale, 'policy.row.monitored.sub.pro_argon');
   return translate(locale, 'policy.row.monitored.sub.standalone', { model: modelDisplayName(key) });
+}
+
+export function formatPctNumber(value: number): string {
+  const clamped = Math.max(0, Math.min(100, Number.isFinite(value) ? value : 0));
+  const rounded = Math.round(clamped * 10) / 10;
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+}
+
+export function indexWeeklyAttributionByPool(
+  attr?: AccountWeeklyAttribution | null,
+): Map<string, WeeklyPoolAttribution> {
+  const map = new Map<string, WeeklyPoolAttribution>();
+  if (!attr || !Array.isArray(attr.pools)) return map;
+  for (const pool of attr.pools) {
+    const key = String(pool?.poolKey ?? '').trim().toLowerCase();
+    if (key) {
+      map.set(key, pool);
+    }
+  }
+  return map;
+}
+
+export function resolveWeeklyAttributionForAccount(
+  direct: AccountWeeklyAttribution | null | undefined,
+  list: AccountWeeklyAttribution[],
+  identity: { accountId?: string | null; email?: string | null },
+): AccountWeeklyAttribution | null {
+  if (direct && Array.isArray(direct.pools)) return direct;
+  const id = (identity.accountId ?? '').trim();
+  const email = (identity.email ?? '').trim().toLowerCase();
+  if (!id && !email) return null;
+  const found = list.find(
+    (item) =>
+      (id && item.accountId && item.accountId === id) ||
+      (email && item.email && item.email.trim().toLowerCase() === email),
+  );
+  return found ?? null;
+}
+
+export interface WeeklyAttributionInlineView {
+  left: string;
+  right: string;
+  tooltip: string;
+  state: 'attributed' | 'calibrating' | 'unused';
+}
+
+export function formatWeeklyAttributionInline(
+  pool: WeeklyPoolAttribution,
+  locale: ResolvedLocale,
+  t: (key: string, params?: Record<string, string | number>, fallback?: string) => string = (
+    key,
+    params,
+    fallback,
+  ) => translate(locale, key, params, fallback),
+): WeeklyAttributionInlineView {
+  let left: string;
+  let right: string;
+  let state: WeeklyAttributionInlineView['state'];
+
+  if (pool.localRequests <= 0) {
+    state = 'unused';
+    left = t('weekly_attribution.inline.local_unused');
+    right =
+      pool.totalUsedPct > 0
+        ? t('weekly_attribution.inline.others_exact', { pct: formatPctNumber(pool.totalUsedPct) })
+        : t('weekly_attribution.inline.pool_unused');
+  } else if (pool.localEstimatedUsedPct !== null) {
+    state = 'attributed';
+    const otherPct =
+      pool.otherEstimatedUsedPct ?? Math.max(0, pool.totalUsedPct - pool.localEstimatedUsedPct);
+    left = t('weekly_attribution.inline.local_used', {
+      pct: formatPctNumber(pool.localEstimatedUsedPct),
+    });
+    right = t('weekly_attribution.inline.others_used', {
+      pct: formatPctNumber(otherPct),
+    });
+  } else {
+    state = 'calibrating';
+    left = t('weekly_attribution.inline.local_calibrating');
+    right = t('weekly_attribution.inline.pool_used', {
+      pct: formatPctNumber(pool.totalUsedPct),
+    });
+  }
+
+  const startStr = formatShortDateTime(pool.cycleStartSec) || '--';
+  const endStr = formatShortDateTime(pool.resetTimeSec) || pool.resetTimeIso || '--';
+  const sshPart =
+    pool.sshRequests > 0
+      ? t('weekly_attribution.tooltip.ssh_part', {
+          requests: formatInteger(pool.sshRequests, locale),
+          tokens: formatCompactTokens(pool.sshTokens, locale, true),
+        })
+      : '';
+  const confidenceLabel = t(`weekly_attribution.confidence.${pool.confidence}`);
+  const tooltip = [
+    t('weekly_attribution.tooltip.cycle', { start: startStr, end: endStr }),
+    t('weekly_attribution.tooltip.local_usage', {
+      tokens: formatCompactTokens(pool.localTokens, locale, true),
+      requests: formatInteger(pool.localRequests, locale),
+      sshPart,
+    }),
+    t('weekly_attribution.tooltip.confidence', {
+      confidence: confidenceLabel,
+      samples: pool.calibrationSamples,
+      snapshots: pool.snapshotCount,
+    }),
+    t('weekly_attribution.tooltip.passive_note'),
+  ].join('\n');
+
+  return { left, right, tooltip, state };
 }

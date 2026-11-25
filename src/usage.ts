@@ -11,7 +11,7 @@ import {
   defaultGravityBoxStateDir,
   pathsEqual,
 } from './platform/index.js';
-import { createModelQueryMatcher, formatLocalDate, isUnpricedZeroSentinel, type LedgerSnapshot } from './usage-aggregate.js';
+import { calculateLockedEventUsd, createModelQueryMatcher, formatLocalDate, isUnpricedZeroSentinel, type LedgerSnapshot } from './usage-aggregate.js';
 import { UsageLedger, type LedgerEvent } from './usage-ledger.js';
 import {
   DEFAULT_PRICING_FEED_URLS,
@@ -76,6 +76,11 @@ export {
   type TokenUsagePeriod,
   type TokenUsageSummary,
   type TokenUsageTotals,
+};
+
+export type UsageRangeCostEvent = LedgerEvent & {
+  estimated_usd: number | null;
+  priced: boolean;
 };
 
 export class UsageStatsManager {
@@ -1763,6 +1768,153 @@ export class UsageStatsManager {
       await this.saveRateLocks().catch(() => {});
     }
     return { rows, total: events.length, offset: safeOffset, limit: safeLimit, generated_at: summary.generated_at, snapshot_id: summary.snapshot_id, availability: summary.availability, scope: summary.scan_scope_description };
+  }
+
+  async getEventsWithCostsInRange(startSec: number, endSec: number): Promise<UsageRangeCostEvent[]> {
+    if (!Number.isFinite(startSec) || !Number.isFinite(endSec) || endSec < startSec) {
+      return [];
+    }
+    const safeStart = Math.floor(startSec);
+    const safeEnd = Math.ceil(endSec);
+    await this.loadUsageLedger();
+    const rawPricing = await this.getBillingPricingTable();
+    if (!this.largeLedger) {
+      await this.loadRateLocks();
+    }
+
+    const merged = new Map<string, { event: LedgerEvent; lockedUsd: number | null; lockedPrice: ApiPricing | null }>();
+    let ledgerRangeFailed = false;
+    if (!this.ledgerUnavailable && !this.ledgerCorrupt) {
+      try {
+        const rangeRows = await this.ledger.range({ startSec: safeStart, endSec: safeEnd });
+        for (const row of rangeRows) {
+          if (!row?.event?.event_key) continue;
+          if (row.event.db_file === 'recovered_session.db' || row.event.db_file === 'recovered_enterprise_session.db') {
+            continue;
+          }
+          if (row.event.timestamp_seconds < safeStart || row.event.timestamp_seconds > safeEnd) continue;
+          merged.set(row.event.event_key, {
+            event: { ...row.event },
+            lockedUsd: row.usd ?? null,
+            lockedPrice: row.unitPrice ?? null,
+          });
+        }
+      } catch {
+        ledgerRangeFailed = true;
+      }
+    } else {
+      ledgerRangeFailed = true;
+    }
+
+    const mergeInMemoryEvent = (ev: LedgerEvent) => {
+      if (!ev?.event_key) return;
+      if (ev.db_file === 'recovered_session.db' || ev.db_file === 'recovered_enterprise_session.db') return;
+      if (ev.timestamp_seconds < safeStart || ev.timestamp_seconds > safeEnd) return;
+      const existing = merged.get(ev.event_key);
+      if (!existing) {
+        merged.set(ev.event_key, { event: { ...ev }, lockedUsd: null, lockedPrice: null });
+        return;
+      }
+      if ((existing.event.source_observed_at ?? 0) > (ev.source_observed_at ?? 0)) {
+        return;
+      }
+      existing.event = this.mergeLedgerEventRecord(existing.event, ev);
+    };
+
+    if (!this.largeLedger || ledgerRangeFailed) {
+      for (const ev of this.usageLedgerEvents.values()) {
+        mergeInMemoryEvent(ev);
+      }
+    }
+    for (const ev of this.pendingLedgerEvents.values()) {
+      mergeInMemoryEvent(ev);
+    }
+    if (ledgerRangeFailed) {
+      await this.loadArchivedEvents();
+      for (const [archKey, arch] of this.archivedByDb.entries()) {
+        const dbFile = basename(archKey);
+        for (const ev of arch.events) {
+          mergeInMemoryEvent({ ...ev, db_file: dbFile });
+        }
+      }
+      for (const entry of this.fileCache.values()) {
+        if (!entry || entry.hasError) continue;
+        for (const ev of entry.events) {
+          mergeInMemoryEvent(ev);
+        }
+      }
+    }
+
+    const dedupByDbLegacy = new Map<string, string>();
+    for (const [key, item] of merged.entries()) {
+      const ev = item.event;
+      if (!ev.legacy_event_key) continue;
+      const sig = `${ev.db_file ?? ''}:${ev.legacy_event_key}`;
+      const prevKey = dedupByDbLegacy.get(sig);
+      if (!prevKey || prevKey === key) {
+        dedupByDbLegacy.set(sig, key);
+        continue;
+      }
+      const prevItem = merged.get(prevKey);
+      const replacePrev = prevItem
+        ? ((Boolean(ev.source_id) && !prevItem.event.source_id) || ((ev.source_observed_at ?? 0) > (prevItem.event.source_observed_at ?? 0)))
+        : true;
+      if (replacePrev) {
+        merged.delete(prevKey);
+        dedupByDbLegacy.set(sig, key);
+      } else {
+        merged.delete(key);
+      }
+    }
+
+    const readOnlyCost = (item: { event: LedgerEvent; lockedUsd: number | null; lockedPrice: ApiPricing | null }, resolvedModel: string): number | null => {
+      const ev = item.event;
+      if (ev.timestamp_seconds <= 0) return null;
+      const cw = ev.cache_write_tokens ?? 0;
+
+      let lockedPrice = item.lockedPrice;
+      let lockedUsd = item.lockedUsd;
+      if (!lockedPrice && !this.largeLedger && !this.rateLocksUnavailable && ev.event_key) {
+        const memLock = this.rateLocks[ev.event_key]
+          ?? (ev.legacy_event_key && this.usageLedgerEvents.get(ev.legacy_event_key)?.timestamp_seconds === ev.timestamp_seconds
+            ? this.rateLocks[ev.legacy_event_key]
+            : undefined);
+        if (memLock && !this.isUnpricedRateLock(memLock)) {
+          lockedPrice = memLock.price;
+          if (this.rateLocks[ev.event_key]) {
+            lockedUsd = memLock.usd;
+          }
+        }
+      }
+
+      if (lockedPrice && !isUnpricedZeroSentinel(lockedPrice)) {
+        const effectiveLocked = resolveContextTierPricing(lockedPrice, ev.input_tokens + ev.cached_tokens + cw);
+        const lockedMissingCw = cw > 0 && (!Number.isFinite(effectiveLocked.cacheWrite) || effectiveLocked.cacheWrite! < 0);
+        if (!lockedMissingCw) {
+          if (!ev.source_id && lockedUsd !== null && Number.isFinite(lockedUsd) && lockedUsd >= 0) {
+            return lockedUsd;
+          }
+          return calculateEstimatedUsd(ev.input_tokens, ev.output_tokens, ev.cached_tokens, lockedPrice, cw);
+        }
+      }
+
+      return calculateLockedEventUsd(ev, this.resolvePricing(rawPricing, resolvedModel, ev.timestamp_seconds));
+    };
+
+    const rows: UsageRangeCostEvent[] = [];
+    for (const item of merged.values()) {
+      const ev = item.event;
+      const resolvedModel = resolveDatabaseModelFullName(ev.model, null);
+      const cost = readOnlyCost(item, resolvedModel);
+      rows.push({
+        ...ev,
+        model: resolvedModel,
+        estimated_usd: cost,
+        priced: cost !== null,
+      });
+    }
+    rows.sort((a, b) => a.timestamp_seconds - b.timestamp_seconds || (a.event_key ?? '').localeCompare(b.event_key ?? ''));
+    return rows;
   }
 
   releaseSnapshot(id: string) {

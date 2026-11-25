@@ -35,6 +35,7 @@ import {
 import type {
   AccountRecord,
   AccountsListReply,
+  AccountWeeklyAttribution,
   AppInfo,
   AutoSwitchConfig,
   AutoSwitchPreview,
@@ -51,6 +52,7 @@ import type {
   UiConfig,
   UsagePeriodKey,
   UsageSummaryReply,
+  WeeklyQuotaUsageReply,
 } from '../lib/types';
 import type { ToastMessage } from '../components/Toast';
 
@@ -114,6 +116,8 @@ interface AppContextValue {
   usageByPeriod: Partial<Record<UsagePeriodKey, UsageSummaryReply>>;
   usageLoading: Partial<Record<UsagePeriodKey, boolean>>;
   usageErrors: Partial<Record<UsagePeriodKey, string>>;
+  weeklyAttributionList: AccountWeeklyAttribution[];
+  weeklyAttributionLoading: boolean;
   maintenanceScan: MaintenanceScanReply | null;
   proxyInfo: ProxyInfo | null;
   environments: EnvironmentNode[];
@@ -132,6 +136,7 @@ interface AppContextValue {
   fetchAccounts: () => Promise<void>;
   fetchAutoSwitch: () => Promise<void>;
   fetchUsage: (period: UsagePeriodKey, force?: boolean, environmentId?: string, accountId?: string) => Promise<UsageSummaryReply | null>;
+  fetchWeeklyAttribution: (accountId?: string) => Promise<AccountWeeklyAttribution[]>;
   fetchMaintenanceScan: (retentionDays?: number, force?: boolean) => Promise<MaintenanceScanReply | null>;
   fetchProxy: (force?: boolean) => Promise<ProxyInfo | null>;
   applyProxy: (mode: ProxyMode, manualUrl?: string) => Promise<ProxyInfo>;
@@ -186,6 +191,9 @@ export function AppProvider({
   const [usageByPeriod, setUsageByPeriod] = useState<Partial<Record<UsagePeriodKey, UsageSummaryReply>>>({});
   const [usageLoading, setUsageLoading] = useState<Partial<Record<UsagePeriodKey, boolean>>>({});
   const [usageErrors, setUsageErrors] = useState<Partial<Record<UsagePeriodKey, string>>>({});
+  const [weeklyAttributionList, setWeeklyAttributionList] = useState<AccountWeeklyAttribution[]>([]);
+  const [weeklyAttributionLoading, setWeeklyAttributionLoading] = useState<boolean>(false);
+  const weeklyAttrFetchSeqRef = useRef(0);
   const [maintenanceScan, setMaintenanceScan] = useState<MaintenanceScanReply | null>(null);
   const [proxyInfo, setProxyInfo] = useState<ProxyInfo | null>(null);
   const [remoteSyncing, setRemoteSyncing] = useState(false);
@@ -402,6 +410,50 @@ export function AppProvider({
         return null;
       } finally {
         setUsageLoading((prev) => ({ ...prev, [period]: false }));
+      }
+    },
+    [],
+  );
+
+  const fetchWeeklyAttribution = useCallback(
+    async (accountId?: string): Promise<AccountWeeklyAttribution[]> => {
+      const seq = ++weeklyAttrFetchSeqRef.current;
+      const scopedId = accountId && accountId !== 'all' ? accountId : undefined;
+      setWeeklyAttributionLoading(true);
+      try {
+        const res = await backendRequest<WeeklyQuotaUsageReply>({
+          command: 'weekly_quota_usage',
+          ...(scopedId ? { accountId: scopedId } : {}),
+        });
+        const list = Array.isArray(res?.accounts) ? res.accounts : [];
+        if (weeklyAttrFetchSeqRef.current === seq) {
+          if (!scopedId) {
+            setWeeklyAttributionList(list);
+          } else {
+            setWeeklyAttributionList((prev) => {
+              const remaining = prev.filter((item) => item.accountId !== scopedId);
+              const merged = [...remaining];
+              for (const nextItem of list) {
+                const idx = merged.findIndex(
+                  (cur) =>
+                    (nextItem.accountId && cur.accountId === nextItem.accountId) ||
+                    (nextItem.email && cur.email.toLowerCase() === nextItem.email.toLowerCase()),
+                );
+                if (idx >= 0) merged[idx] = nextItem;
+                else merged.push(nextItem);
+              }
+              return merged;
+            });
+          }
+        }
+        return list;
+      } catch {
+        // Silently degrade if backend command is unavailable or fails transiently
+        return [];
+      } finally {
+        if (weeklyAttrFetchSeqRef.current === seq) {
+          setWeeklyAttributionLoading(false);
+        }
       }
     },
     [],
@@ -1073,6 +1125,8 @@ export function AppProvider({
     usageByPeriod,
     usageLoading,
     usageErrors,
+    weeklyAttributionList,
+    weeklyAttributionLoading,
     maintenanceScan,
     proxyInfo,
     environments,
@@ -1089,6 +1143,7 @@ export function AppProvider({
     fetchAccounts,
     fetchAutoSwitch,
     fetchUsage,
+    fetchWeeklyAttribution,
     fetchMaintenanceScan,
     fetchProxy,
     applyProxy,

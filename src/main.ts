@@ -5,6 +5,12 @@ import { AccountSwitchService } from './account-switch.js';
 import { AccountsManager, accountCredentialReadiness, accountErrorCode, cleanAndLocalizeRefreshError, computeStandbyRefreshStatus, getGoogleClientId, getGoogleClientSecret, hasExpiredQuotaWindow, type Account, type QuotaData } from './accounts.js';
 import { UsageStatsManager } from './usage.js';
 import {
+  WeeklyQuotaSnapshotStore,
+  computeAccountWeeklyAttribution,
+  computeWeeklyEventQueryRange,
+  type AccountWeeklyAttribution,
+} from './weekly-quota-attribution.js';
+import {
   buildPricingCatalogPayloadSnapshot,
   readInstalledAppBundleVersion,
   readValidLiveIdeModelsSnapshot,
@@ -519,6 +525,31 @@ async function run() {
   const geminiDir = option('--gemini-dir', process.env.GRAVITYBOX_GEMINI_DIR || process.env.GEMINI_DIR || join(homedir(), '.gemini'))!;
   const cacheMaintenance = new CacheMaintenance(profile, isWindows() ? undefined : join(homedir(), '.Trash'), undefined, { stateDir: channelStateDir, geminiDir, appPath });
   const accountsManager = new AccountsManager(stateDir, { target });
+  const weeklySnapshotStore = new WeeklyQuotaSnapshotStore(stateDir);
+  const recordWeeklySnapshotSafe = (params: {
+    email?: string | null;
+    quota?: QuotaData | null;
+    source?: string;
+    observedAtSec?: number | null;
+    tier?: string | null;
+  }): void => {
+    try {
+      if (!params.email || !params.quota || params.quota.is_forbidden) return;
+      const observedAtSec =
+        typeof params.observedAtSec === 'number' && Number.isFinite(params.observedAtSec) && params.observedAtSec > 0
+          ? Math.floor(params.observedAtSec)
+          : (typeof params.quota.last_updated === 'number' && params.quota.last_updated > 0
+              ? Math.floor(params.quota.last_updated)
+              : Math.floor(Date.now() / 1000));
+      weeklySnapshotStore.recordQuotaSnapshot({
+        email: params.email,
+        quota: params.quota,
+        source: params.source ?? params.quota.source ?? 'cloud',
+        observedAtSec,
+        tier: params.tier ?? params.quota.subscription_tier ?? undefined,
+      });
+    } catch {}
+  };
   const liveIdeModelsPath = join(stateDir, 'live-ide-models.json');
   let liveSnapshotWriteChain = Promise.resolve();
   let lastLiveSnapshotDedupKey = '';
@@ -544,6 +575,15 @@ async function run() {
   async function probeLiveCached() {
     const live = await accountsManager.probeLiveLanguageServer();
     await persistLiveIdeModelsIfPresent(live);
+    if (live?.email && live.quota) {
+      recordWeeklySnapshotSafe({
+        email: live.email,
+        quota: live.quota,
+        source: 'live',
+        observedAtSec: live.quota.last_updated,
+        tier: live.tier || live.quota.subscription_tier,
+      });
+    }
     return live;
   }
   const accountLogin = new GoogleAccountLogin((token, signal) => accountsManager.addAccountFromOAuth(token, signal));
@@ -880,6 +920,15 @@ async function run() {
       if (info.live.quota?.models?.length) {
         registerObservedModelsFromSource(info.live.quota.models);
       }
+      if (info.live.email && info.live.quota) {
+        recordWeeklySnapshotSafe({
+          email: info.live.email,
+          quota: info.live.quota,
+          source: 'ssh',
+          observedAtSec: info.live.quota.last_updated ?? Math.floor(info.observedAtMs / 1000),
+          tier: info.live.tier || info.live.quota.subscription_tier,
+        });
+      }
       controller.applyObservedRemoteIdentity({
         environmentId: info.environmentId,
         remoteKey: info.remoteKey,
@@ -1123,6 +1172,15 @@ async function run() {
           getQuotaOverview,
         }).then(probed => {
           for (const s of probed) {
+            if (s.state === 'connected' && s.quota && s.email) {
+              recordWeeklySnapshotSafe({
+                email: s.email,
+                quota: s.quota,
+                source: 'ssh',
+                observedAtSec: s.quota.last_updated ?? (s.observedAt ? Math.floor(s.observedAt / 1000) : null),
+                tier: s.tier || s.quota.subscription_tier,
+              });
+            }
             if (s.state === 'connected' && s.quota?.models?.length && s.matchedLocalAccountId) {
               void accountsManager.syncRemoteObservedQuota(s.matchedLocalAccountId, s.quota, s.tier).catch(() => null);
             }
@@ -1138,6 +1196,15 @@ async function run() {
         getQuotaOverview,
       });
       for (const s of sessions) {
+        if (s.state === 'connected' && s.quota && s.email) {
+          recordWeeklySnapshotSafe({
+            email: s.email,
+            quota: s.quota,
+            source: 'ssh',
+            observedAtSec: s.quota.last_updated ?? (s.observedAt ? Math.floor(s.observedAt / 1000) : null),
+            tier: s.tier || s.quota.subscription_tier,
+          });
+        }
         if (s.state === 'connected' && s.quota?.models?.length && s.matchedLocalAccountId) {
           await accountsManager.syncRemoteObservedQuota(s.matchedLocalAccountId, s.quota, s.tier).catch(() => null);
         }
@@ -1193,6 +1260,15 @@ async function run() {
         onAccountUpdated: (account, done, total) => {
           if (account?.quota?.models?.length) {
             registerObservedModelsFromSource(account.quota.models);
+          }
+          if (account?.email && account.quota) {
+            recordWeeklySnapshotSafe({
+              email: account.email,
+              quota: account.quota,
+              source: account.quota.source ?? 'cloud',
+              observedAtSec: account.quota.last_updated,
+              tier: account.quota.subscription_tier,
+            });
           }
           progress(done, total);
         },
@@ -1460,6 +1536,51 @@ async function run() {
         const dashAvailEnvs = Array.isArray(aggregate.usage?.availableEnvironments)
           ? aggregate.usage.availableEnvironments as AvailableEnvironmentUsageOption[]
           : undefined;
+        if (aggregate.accounts && typeof aggregate.accounts === 'object' && aggregate.accounts.activeEmail) {
+          try {
+            const dashNowMs = Date.now();
+            const dashNowSec = Math.floor(dashNowMs / 1000);
+            const activeEmail = String(aggregate.accounts.activeEmail);
+            const activeId = typeof aggregate.accounts.currentAccountId === 'string' && aggregate.accounts.currentAccountId
+              ? aggregate.accounts.currentAccountId
+              : null;
+            const [savedAcc, liveForWeekly] = await Promise.all([
+              activeId ? accountsManager.getAccount(activeId).catch(() => null) : Promise.resolve(null),
+              livePromise,
+            ]);
+            const liveMatched = liveForWeekly?.email && liveForWeekly.email.trim().toLowerCase() === activeEmail.trim().toLowerCase()
+              ? liveForWeekly
+              : null;
+            const fusedForWeekly = fuseAccountQuotaAcrossEnvironments({
+              email: activeEmail,
+              savedQuota: savedAcc?.quota ?? null,
+              liveLocalQuota: liveMatched?.quota ?? null,
+              remoteSessions: toRemoteQuotaCandidates(controller.getRemoteSessionsSnapshot(dashNowMs)),
+              nowMs: dashNowMs,
+            });
+            const queryRange = computeWeeklyEventQueryRange({
+              accounts: [{ email: activeEmail, quota: fusedForWeekly.quota }],
+              snapshotStore: weeklySnapshotStore,
+              nowSec: dashNowSec,
+            });
+            const rangeEvents = queryRange
+              ? await usageManager.getEventsWithCostsInRange(queryRange.startSec, queryRange.endSec).catch(() => [])
+              : [];
+            const attr = computeAccountWeeklyAttribution({
+              accountId: activeId,
+              email: activeEmail,
+              name: aggregate.accounts.activeName ?? savedAcc?.name ?? null,
+              tier: aggregate.accounts.activeTier ?? undefined,
+              quota: fusedForWeekly.quota,
+              snapshotStore: weeklySnapshotStore,
+              events: rangeEvents,
+              nowSec: dashNowSec,
+            });
+            aggregate.accounts.weeklyAttribution = attr.pools.length > 0 ? attr : null;
+          } catch {
+            aggregate.accounts.weeklyAttribution = null;
+          }
+        }
         const envSnapshot = buildUnifiedEnvironmentSnapshot({ availableEnvironments: dashAvailEnvs });
         const snap = controller.snapshot();
         if (aggregate.usage && typeof aggregate.usage === 'object') {
@@ -1523,6 +1644,7 @@ async function run() {
               const matched = index.accounts.find(a => a.email.toLowerCase() === detectedEmail.toLowerCase());
               effectiveActiveId = matched?.id ?? null;
             }
+            const weeklyMetaById = new Map<string, { accountId: string; email: string; name?: string | null; quota: QuotaData | null }>();
             const accountsWithQuota = await Promise.all(index.accounts.map(async (summary): Promise<Record<string, unknown> & { id: string }> => {
               let saved;
               try { saved = await accountsManager.getAccount(summary.id); }
@@ -1542,6 +1664,12 @@ async function run() {
                 liveLocalQuota: isLiveMatched ? live.quota : null,
                 remoteSessions: remoteCandidates,
                 nowMs: listNowMs,
+              });
+              weeklyMetaById.set(saved.id, {
+                accountId: saved.id,
+                email: saved.email,
+                name: saved.name ?? null,
+                quota: fused.quota,
               });
               const acc: Account = {
                 ...saved,
@@ -1565,6 +1693,42 @@ async function run() {
               const bActive = b.id === effectiveActiveId ? 1 : 0;
               return bActive - aActive;
             });
+            try {
+              const listNowSec = Math.floor(listNowMs / 1000);
+              const queryRange = computeWeeklyEventQueryRange({
+                accounts: [...weeklyMetaById.values()],
+                snapshotStore: weeklySnapshotStore,
+                nowSec: listNowSec,
+              });
+              const sharedEvents = queryRange
+                ? await usageManager.getEventsWithCostsInRange(queryRange.startSec, queryRange.endSec).catch(() => [])
+                : [];
+              for (const item of accountsWithQuota) {
+                const meta = weeklyMetaById.get(item.id);
+                if (!meta) {
+                  item.weeklyAttribution = null;
+                  continue;
+                }
+                try {
+                  const attr = computeAccountWeeklyAttribution({
+                    accountId: meta.accountId,
+                    email: meta.email,
+                    name: meta.name ?? null,
+                    quota: meta.quota,
+                    snapshotStore: weeklySnapshotStore,
+                    events: sharedEvents,
+                    nowSec: listNowSec,
+                  });
+                  item.weeklyAttribution = attr.pools.length > 0 ? attr : null;
+                } catch {
+                  item.weeklyAttribution = null;
+                }
+              }
+            } catch {
+              for (const item of accountsWithQuota) {
+                item.weeklyAttribution = null;
+              }
+            }
             const recovery = await switchService.recoveryInfo().catch(() => ({ available: true, pending: true, status: 'unreadable' }));
             const pendingSwitch = 'pending' in recovery && recovery.pending === true;
             reply({
@@ -1706,7 +1870,7 @@ async function run() {
       }
       // 只读及自管理锁的配额刷新命令直接并发响应，不阻塞在全局写锁 commandChain 队列后
       const isReadOnlyAutoSwitch = command === 'auto_switch_best' && parsed.execute !== true;
-      if (['proxy_get', 'maintenance_scan', 'maintenance_history', 'account_recovery_info', 'auto_switch_get', 'usage_snapshot_release', 'usage_events', 'usage_summary', 'usage_ledger_review', 'api_pricing_get', 'pricing_sync_status', 'quota_refresh', 'quota_refresh_start', 'remote_quota_refresh'].includes(command) || isReadOnlyAutoSwitch) {
+      if (['proxy_get', 'maintenance_scan', 'maintenance_history', 'account_recovery_info', 'auto_switch_get', 'usage_snapshot_release', 'usage_events', 'usage_summary', 'usage_ledger_review', 'api_pricing_get', 'pricing_sync_status', 'quota_refresh', 'quota_refresh_start', 'remote_quota_refresh', 'weekly_quota_usage'].includes(command) || isReadOnlyAutoSwitch) {
         (async () => {
           if (command === 'proxy_get') {
             const resolved = await resolveEffectiveProxy({ forceRefreshSystem: parsed.force === true });
@@ -1784,6 +1948,15 @@ async function run() {
               const acc = await accountsManager.refreshQuota(parsed.id);
               if (acc.quota?.models?.length) {
                 registerObservedModelsFromSource(acc.quota.models);
+              }
+              if (acc.email && acc.quota) {
+                recordWeeklySnapshotSafe({
+                  email: acc.email,
+                  quota: acc.quota,
+                  source: acc.quota.source ?? 'cloud',
+                  observedAtSec: acc.quota.last_updated,
+                  tier: acc.quota.subscription_tier,
+                });
               }
               const overview = accountsManager.getAccountQuotaOverview(acc, { nowMs: refreshNowMs });
               const projected = projectAccountForIpcNormalized(acc, {
@@ -1912,6 +2085,138 @@ async function run() {
               ok: true,
               ...catalogPayload,
               status: await usageManager.getPricingSyncStatus(),
+            });
+            return;
+          }
+          if (command === 'weekly_quota_usage') {
+            const targetAccountId = typeof parsed.accountId === 'string' && parsed.accountId.trim()
+              ? parsed.accountId.trim()
+              : undefined;
+            await syncActiveAccountToUsageManager().catch(() => {});
+            await usageManager.getUsageSummary(false).catch(() => {});
+            const nowMs = Date.now();
+            const nowSec = Math.floor(nowMs / 1000);
+            const [index, live] = await Promise.all([
+              accountsManager.loadIndex().catch(() => null),
+              probeLiveCached().catch(() => null),
+            ]);
+            const detectedEmail = live?.email ?? await accountsManager.detectCurrentAntigravityEmail({ liveEmailHint: null }).catch(() => null);
+            const detectedEmailLower = detectedEmail ? detectedEmail.trim().toLowerCase() : null;
+            const remoteCandidates = toRemoteQuotaCandidates(controller.getRemoteSessionsSnapshot(nowMs));
+            const isAll = !targetAccountId || targetAccountId === 'all';
+            const targetLower = targetAccountId ? targetAccountId.toLowerCase() : '';
+
+            interface WeeklyCandidateAccount {
+              accountId: string | null;
+              email: string;
+              name?: string | null;
+              quota: QuotaData | null;
+              isActive: boolean;
+            }
+            const candidates: WeeklyCandidateAccount[] = [];
+            const coveredEmails = new Set<string>();
+
+            for (const summary of index?.accounts ?? []) {
+              const saved = await accountsManager.getAccount(summary.id).catch(() => null);
+              if (!saved) continue;
+              const emailLower = saved.email.trim().toLowerCase();
+              const isActive = detectedEmailLower
+                ? emailLower === detectedEmailLower
+                : saved.id === index?.current_account_id;
+              if (!isAll && saved.id !== targetAccountId && emailLower !== targetLower) {
+                continue;
+              }
+              const isLiveMatched = Boolean(live?.email && live.email.trim().toLowerCase() === emailLower && live.quota);
+              const fused = fuseAccountQuotaAcrossEnvironments({
+                email: saved.email,
+                savedQuota: saved.quota,
+                liveLocalQuota: isLiveMatched ? live!.quota : null,
+                remoteSessions: remoteCandidates,
+                nowMs,
+              });
+              coveredEmails.add(emailLower);
+              candidates.push({
+                accountId: saved.id,
+                email: saved.email,
+                name: saved.name ?? null,
+                quota: fused.quota,
+                isActive,
+              });
+            }
+
+            if (live?.email) {
+              const liveLower = live.email.trim().toLowerCase();
+              if (!coveredEmails.has(liveLower) && (isAll || liveLower === targetLower)) {
+                const fused = fuseAccountQuotaAcrossEnvironments({
+                  email: live.email,
+                  savedQuota: null,
+                  liveLocalQuota: live.quota,
+                  remoteSessions: remoteCandidates,
+                  nowMs,
+                });
+                coveredEmails.add(liveLower);
+                candidates.push({
+                  accountId: null,
+                  email: live.email,
+                  name: live.name ?? null,
+                  quota: fused.quota,
+                  isActive: true,
+                });
+              }
+            }
+
+            for (const snapEmail of weeklySnapshotStore.listEmails()) {
+              const snapLower = snapEmail.trim().toLowerCase();
+              if (!snapLower || coveredEmails.has(snapLower)) continue;
+              if (!isAll && snapLower !== targetLower) continue;
+              const fused = fuseAccountQuotaAcrossEnvironments({
+                email: snapEmail,
+                savedQuota: null,
+                liveLocalQuota: null,
+                remoteSessions: remoteCandidates,
+                nowMs,
+              });
+              coveredEmails.add(snapLower);
+              candidates.push({
+                accountId: null,
+                email: snapEmail,
+                name: null,
+                quota: fused.quota,
+                isActive: Boolean(detectedEmailLower && snapLower === detectedEmailLower),
+              });
+            }
+
+            candidates.sort((a, b) => (b.isActive ? 1 : 0) - (a.isActive ? 1 : 0));
+
+            const queryRange = computeWeeklyEventQueryRange({
+              accounts: candidates,
+              snapshotStore: weeklySnapshotStore,
+              nowSec,
+            });
+            const rangeEvents = queryRange
+              ? await usageManager.getEventsWithCostsInRange(queryRange.startSec, queryRange.endSec).catch(() => [])
+              : [];
+
+            const accounts: AccountWeeklyAttribution[] = [];
+            for (const cand of candidates) {
+              const attr = computeAccountWeeklyAttribution({
+                accountId: cand.accountId,
+                email: cand.email,
+                name: cand.name ?? null,
+                quota: cand.quota,
+                snapshotStore: weeklySnapshotStore,
+                events: rangeEvents,
+                nowSec,
+              });
+              if (attr.pools.length > 0) {
+                accounts.push(attr);
+              }
+            }
+
+            reply({
+              ok: true,
+              generatedAtSec: nowSec,
+              accounts,
             });
             return;
           }
@@ -2110,6 +2415,15 @@ async function run() {
               if (refreshed.quota?.models?.length) {
                 registerObservedModelsFromSource(refreshed.quota.models);
               }
+              if (refreshed.email && refreshed.quota) {
+                recordWeeklySnapshotSafe({
+                  email: refreshed.email,
+                  quota: refreshed.quota,
+                  source: refreshed.quota.source ?? 'cloud',
+                  observedAtSec: refreshed.quota.last_updated,
+                  tier: refreshed.quota.subscription_tier,
+                });
+              }
             }
             const identity = await resolveActiveIdentityForIpc();
             const hasLocalOAuthClient = hasLocalOAuthClientConfigured();
@@ -2173,6 +2487,7 @@ async function run() {
               await tasks.stop().catch(() => {});
               try { store.close(); } catch {}
               await controller.stop().catch(() => {});
+              await weeklySnapshotStore.flush().catch(() => {});
               await writeChain.catch(() => {});
               await cacheChain.catch(() => {});
               reply({ ok: true, status: controller.snapshot() });
@@ -2267,6 +2582,15 @@ async function run() {
           for (const list of refreshed) {
             for (const s of list) {
               if (s.quota?.models?.length) registerObservedModelsFromSource(s.quota.models);
+              if (s.state === 'connected' && s.quota && s.email) {
+                recordWeeklySnapshotSafe({
+                  email: s.email,
+                  quota: s.quota,
+                  source: 'ssh',
+                  observedAtSec: s.quota.last_updated ?? (s.observedAt ? Math.floor(s.observedAt / 1000) : null),
+                  tier: s.tier || s.quota.subscription_tier,
+                });
+              }
             }
           }
           syncRemoteTargetStateAndMaybeTriggerSync();
@@ -2374,6 +2698,7 @@ async function run() {
       await tasks.stop().catch(() => {});
       try { store.close(); } catch {}
       await controller.stop().catch(() => {});
+      await weeklySnapshotStore.flush().catch(() => {});
       await writeChain.catch(() => {});
       await cacheChain.catch(() => {});
     } finally {
@@ -2388,6 +2713,7 @@ async function run() {
   process.on('uncaughtException', error => { console.error(`[GravityBox] ${sanitizeError(error?.stack ?? error?.message ?? bt('main.uncaught_exception'))}`); if (stopping) { backendLease?.releaseSync(); process.exit(1); } });
   process.on('unhandledRejection', reason => { console.error(`[GravityBox] ${reason instanceof Error ? sanitizeError(reason.message) : bt('main.unhandled_rejection')}`); });
   await Promise.all([
+    weeklySnapshotStore.load().catch(() => {}),
     remoteSyncCoordinator.observationStore.load().catch(() => {}),
     usageManager.getSyncReceipts().then(receipts => {
       for (const rec of Object.values(receipts ?? {})) {

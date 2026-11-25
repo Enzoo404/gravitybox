@@ -3,7 +3,7 @@ import { parentPort, workerData } from 'node:worker_threads';
 import { existsSync, lstatSync, readFileSync, writeFileSync, chmodSync, mkdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join, dirname } from 'node:path';
-import type { LedgerEvent } from './usage-ledger.js';
+import type { LedgerEvent, LedgerRangeEntry } from './usage-ledger.js';
 import { isOwnedByCurrentUser } from './platform/index.js';
 import {
     aggregateLedger,
@@ -624,6 +624,31 @@ function runRequest(payload: {
         throw Error(bt('ledger.err.snapshot_unavailable'));
     if (!existsSync(path) && operation === 'load')
         return [...result.values()];
+    if (!existsSync(path) && operation === 'range') {
+        const startSec = Number.isFinite(options?.startSec) ? Number(options.startSec) : 0;
+        const endSec = Number.isFinite(options?.endSec) ? Number(options.endSec) : Number.MAX_SAFE_INTEGER;
+        if (endSec < startSec) return [];
+        const entries: LedgerRangeEntry[] = [];
+        const seen = new Set<string>();
+        for (const event of legacyEvents) {
+            if (isSyntheticRecoveredDb(event.db_file)) continue;
+            if (event.timestamp_seconds < startSec || event.timestamp_seconds > endSec) continue;
+            if (event.event_key && seen.has(event.event_key)) continue;
+            if (event.event_key) seen.add(event.event_key);
+            entries.push({
+                event: {
+                    ...event,
+                    account_id: undefined,
+                    account_email: undefined,
+                    account_confidence: 'legacy',
+                },
+                usd: null,
+                unitPrice: null,
+            });
+        }
+        entries.sort((a, b) => a.event.timestamp_seconds - b.event.timestamp_seconds || (a.event.event_key ?? '').localeCompare(b.event.event_key ?? ''));
+        return entries;
+    }
     if (!existsSync(path) && operation === 'purge-forked-clones')
         return { deleted: 0 };
     if (existsSync(path))
@@ -631,9 +656,145 @@ function runRequest(payload: {
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     if (!existsSync(path))
         writeFileSync(path, '', { flag: 'wx', mode: 0o600 });
-    const db = new DatabaseSync(path, { readOnly: ['load', 'locks', 'receipts', 'version'].includes(operation) });
+    const db = new DatabaseSync(path, { readOnly: ['load', 'locks', 'receipts', 'version', 'range'].includes(operation) });
     try {
         db.exec('PRAGMA busy_timeout=3000;');
+        if (operation === 'range') {
+            const startSec = Number.isFinite(options?.startSec) ? Math.floor(Number(options.startSec)) : 0;
+            const endSec = Number.isFinite(options?.endSec) ? Math.ceil(Number(options.endSec)) : Number.MAX_SAFE_INTEGER;
+            if (endSec < startSec) return [];
+            const version = Number(db.prepare('PRAGMA user_version').get()?.user_version ?? 0);
+            const tableCount = Number(db.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").get()?.n ?? 0);
+            const collectLegacyRange = (aliasedSet?: Set<string>): LedgerRangeEntry[] => {
+                const map = new Map<string, LedgerRangeEntry>();
+                for (const event of legacyEvents) {
+                    if (isSyntheticRecoveredDb(event.db_file)) continue;
+                    if (event.timestamp_seconds < startSec || event.timestamp_seconds > endSec) continue;
+                    if (event.event_key && aliasedSet?.has(event.event_key)) continue;
+                    const key = event.event_key!;
+                    if (!map.has(key)) {
+                        map.set(key, {
+                            event: {
+                                ...event,
+                                account_id: undefined,
+                                account_email: undefined,
+                                account_confidence: 'legacy',
+                            },
+                            usd: null,
+                            unitPrice: null,
+                        });
+                    }
+                }
+                return [...map.values()].sort((a, b) => a.event.timestamp_seconds - b.event.timestamp_seconds || (a.event.event_key ?? '').localeCompare(b.event.event_key ?? ''));
+            };
+            if (version === 0 && tableCount === 0) {
+                return collectLegacyRange();
+            }
+            if (version !== 2)
+                throw Error(bt('ledger.err.unsupported_version'));
+            const hasEvents = Boolean(db.prepare("SELECT 1 AS ok FROM sqlite_master WHERE type='table' AND name='events'").get()?.ok);
+            if (!hasEvents) {
+                return collectLegacyRange();
+            }
+            const hasAliases = Boolean(db.prepare("SELECT 1 AS ok FROM sqlite_master WHERE type='table' AND name='event_aliases'").get()?.ok);
+            const hasRateLocks = Boolean(db.prepare("SELECT 1 AS ok FROM sqlite_master WHERE type='table' AND name='rate_locks'").get()?.ok);
+            const hasObservedAt = (db.prepare('PRAGMA table_info(events)').all() as Array<{ name?: string }>).some(col => col.name === 'observed_at');
+            const rangeSql = [
+                `SELECT e.payload, ${hasObservedAt ? 'e.observed_at' : '0 AS observed_at'}${hasRateLocks ? ', l.usd AS locked_usd, l.unit_price AS locked_unit_price' : ', NULL AS locked_usd, NULL AS locked_unit_price'}`,
+                'FROM events e',
+                hasRateLocks ? 'LEFT JOIN rate_locks l ON l.event_key = e.event_key' : '',
+                hasAliases ? 'LEFT JOIN event_aliases a ON a.legacy_key = e.event_key' : '',
+                'WHERE e.timestamp >= ? AND e.timestamp <= ?',
+                hasAliases ? 'AND a.legacy_key IS NULL' : '',
+                'ORDER BY e.timestamp ASC, e.event_key ASC',
+            ].filter(Boolean).join(' ');
+
+            const selectLegacyLock = hasRateLocks ? db.prepare('SELECT unit_price, usd FROM rate_locks WHERE event_key=?') : null;
+            const selectAlias = hasAliases ? db.prepare('SELECT 1 AS ok FROM event_aliases WHERE legacy_key=?') : null;
+            const priceJsonCache = new Map<string, ApiPricing>();
+            const parseLockedPrice = (raw: unknown): ApiPricing | null => {
+                if (typeof raw !== 'string' || !raw) return null;
+                const cached = priceJsonCache.get(raw);
+                if (cached) return cached;
+                try {
+                    const parsed = JSON.parse(raw) as ApiPricing;
+                    if (parsed && typeof parsed === 'object') {
+                        priceJsonCache.set(raw, parsed);
+                        return parsed;
+                    }
+                } catch {}
+                return null;
+            };
+
+            const byKey = new Map<string, LedgerRangeEntry>();
+            const aliasedLegacyKeys = new Set<string>();
+            if (selectAlias && legacyEvents.length > 0) {
+                for (const ev of legacyEvents) {
+                    if (ev.timestamp_seconds < startSec || ev.timestamp_seconds > endSec) continue;
+                    if (ev.event_key && selectAlias.get(ev.event_key)?.ok) {
+                        aliasedLegacyKeys.add(ev.event_key);
+                    }
+                }
+            }
+            for (const entry of collectLegacyRange(aliasedLegacyKeys)) {
+                byKey.set(entry.event.event_key!, entry);
+            }
+
+            const seenDbLegacy = new Map<string, string>();
+            for (const row of db.prepare(rangeSql).iterate(startSec, endSec) as Iterable<any>) {
+                let event: LedgerEvent;
+                try {
+                    event = JSON.parse(String(row.payload)) as LedgerEvent;
+                } catch {
+                    continue;
+                }
+                if (!validLedgerEvent(event))
+                    throw Error(bt('ledger.err.corrupt_event_stop'));
+                if (isSyntheticRecoveredDb(event.db_file)) continue;
+                if (Number(row.observed_at) > 0) event.source_observed_at = Number(row.observed_at);
+
+                let lockedPrice = parseLockedPrice(row.locked_unit_price);
+                let lockedUsd = row.locked_usd !== null && row.locked_usd !== undefined && Number.isFinite(Number(row.locked_usd)) && Number(row.locked_usd) >= 0
+                    ? Number(row.locked_usd)
+                    : null;
+                if (!lockedPrice && selectLegacyLock && event.legacy_event_key) {
+                    const legLock = selectLegacyLock.get(event.legacy_event_key) as { unit_price?: unknown; usd?: unknown } | undefined;
+                    if (legLock) {
+                        lockedPrice = parseLockedPrice(legLock.unit_price);
+                        if (lockedUsd === null && legLock.usd !== null && legLock.usd !== undefined && Number.isFinite(Number(legLock.usd)) && Number(legLock.usd) >= 0) {
+                            lockedUsd = Number(legLock.usd);
+                        }
+                    }
+                }
+                if (lockedPrice && isUnpricedZeroSentinel(lockedPrice)) {
+                    lockedPrice = null;
+                    lockedUsd = null;
+                }
+                const cw = event.cache_write_tokens ?? 0;
+                if (lockedPrice && cw > 0) {
+                    const eff = resolveContextTierPricing(lockedPrice, event.input_tokens + event.cached_tokens + cw);
+                    if (!Number.isFinite(eff.cacheWrite) || eff.cacheWrite! < 0) {
+                        lockedPrice = null;
+                        lockedUsd = null;
+                    }
+                }
+                if (event.legacy_event_key) {
+                    const legSig = `${event.db_file ?? ''}:${event.legacy_event_key}`;
+                    const existingKey = seenDbLegacy.get(legSig);
+                    if (existingKey && existingKey !== event.event_key) {
+                        const existingEntry = byKey.get(existingKey);
+                        const replaceExisting = existingEntry
+                            ? ((Boolean(event.source_id) && !existingEntry.event.source_id) || ((event.source_observed_at ?? 0) > (existingEntry.event.source_observed_at ?? 0)))
+                            : true;
+                        if (!replaceExisting) continue;
+                        byKey.delete(existingKey);
+                    }
+                    seenDbLegacy.set(legSig, event.event_key!);
+                }
+                byKey.set(event.event_key!, { event, usd: lockedUsd, unitPrice: lockedPrice });
+            }
+            return [...byKey.values()].sort((a, b) => a.event.timestamp_seconds - b.event.timestamp_seconds || (a.event.event_key ?? '').localeCompare(b.event.event_key ?? ''));
+        }
         if (operation === 'load') {
             if (Number(db.prepare('PRAGMA user_version').get()?.user_version) !== 2)
                 throw Error(bt('ledger.err.unsupported_version'));

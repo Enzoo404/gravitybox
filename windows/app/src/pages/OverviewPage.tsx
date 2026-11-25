@@ -31,7 +31,11 @@ import {
   parseHourIndex,
   sortModelsByUsage,
 } from '../lib/format';
-import { parseQuotaContract } from '../lib/quota';
+import {
+  indexWeeklyAttributionByPool,
+  parseQuotaContract,
+  resolveWeeklyAttributionForAccount,
+} from '../lib/quota';
 import {
   normalizeSshEnvironment,
   sshStateI18nKey,
@@ -48,6 +52,8 @@ export function OverviewPage() {
     reachable,
     status,
     dashboard,
+    activeAccountId,
+    weeklyAttributionList,
     usageByPeriod,
     maintenanceScan,
     sshEnvironments,
@@ -94,6 +100,27 @@ export function OverviewPage() {
     () => parseQuotaContract(dashAccounts as Record<string, unknown> | null, locale, { compact: true }),
     [dashAccounts, locale],
   );
+
+  const activeWeeklyAttributionByPool = useMemo(() => {
+    const attr = resolveWeeklyAttributionForAccount(
+      dashAccounts?.weeklyAttribution,
+      weeklyAttributionList,
+      {
+        accountId: dashAccounts?.currentAccountId ?? dashAccounts?.id ?? activeAccountId,
+        email: dashAccounts?.activeEmail ?? dashAccounts?.email ?? status.activeAccountEmail,
+      },
+    );
+    return indexWeeklyAttributionByPool(attr);
+  }, [
+    activeAccountId,
+    dashAccounts?.activeEmail,
+    dashAccounts?.currentAccountId,
+    dashAccounts?.email,
+    dashAccounts?.id,
+    dashAccounts?.weeklyAttribution,
+    status.activeAccountEmail,
+    weeklyAttributionList,
+  ]);
 
   const quotaUpdatedTs = Number(dashAccounts?.quotaLastUpdated ?? dashAccounts?.lastUpdated ?? 0);
 
@@ -372,6 +399,7 @@ export function OverviewPage() {
             locale={locale}
             isDark={isDark}
             compact
+            weeklyAttributionByPool={activeWeeklyAttributionByPool}
           />
         ) : (
           <div style={{ fontSize: 12, color: 'var(--text-secondary)', padding: '6px 0' }}>
